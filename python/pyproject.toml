@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ponk"
+version = "0.1.0"
+description = "Thin Python client for the ponk public API: Solana DLMM liquidity agents."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+keywords = ["solana", "dlmm", "liquidity", "meteora", "orca", "ponk"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
+  "Intended Audience :: Developers",
+  "Typing :: Typed",
+]
+# No runtime dependencies on purpose. Standard library only.
+dependencies = []
+
+[project.urls]
+Homepage = "https://ponk.exchange"
+Documentation = "https://ponk.exchange/docs/developers/agents-api"
+
+[tool.setuptools]
+packages = ["ponk"]
