@@ -1,0 +1,30 @@
+[package]
+name = "ponk"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Thin Rust client for the ponk public API: Solana DLMM liquidity agents."
+readme = "README.md"
+publish = false
+
+# Its own workspace on purpose. This client depends on nothing in the ponk
+# workspace (it talks to the deployed API over HTTP like any other consumer),
+# so it stays out of the root member list and keeps its own lockfile.
+[workspace]
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = ["rustls-tls"]
+# TLS is a choice, not a default this crate makes for you: rustls needs no
+# system library, native-tls uses the platform's own.
+rustls-tls = ["reqwest/rustls-tls"]
+native-tls = ["reqwest/native-tls"]
