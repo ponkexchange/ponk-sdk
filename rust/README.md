@@ -12,7 +12,9 @@ The crate is not on crates.io. Depend on it by path from this repository:
 
 ```toml
 [dependencies]
-ponk = { path = "../ponk/packages/sdk-rust" }
+ponk = { git = "https://github.com/ponkexchange/ponk-sdk" }
+# or, from a local clone:
+# ponk = { path = "../ponk-sdk/rust" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

@@ -11,10 +11,11 @@ endpoint. It never computes a number the server did not send.
 The package is not on PyPI. Use it from this repository:
 
 ```bash
-pip install /path/to/ponk/packages/sdk-python
+git clone https://github.com/ponkexchange/ponk-sdk
+pip install ./ponk-sdk/python
 ```
 
-or put the `packages/sdk-python` directory on `PYTHONPATH` and `import ponk`.
+or put the `python` directory on `PYTHONPATH` and `import ponk`.
 
 Python 3.8 or newer.
 
