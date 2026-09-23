@@ -19,6 +19,42 @@ or put the `python` directory on `PYTHONPATH` and `import ponk`.
 
 Python 3.8 or newer.
 
+## Webhooks
+
+ponk POSTs a signed JSON body to a URL you register. Verify it before you
+act on it:
+
+```python
+from ponk import verify, InvalidSignature
+
+@app.post("/ponk")
+def receive(request):
+    try:
+        event = verify(
+            raw_body=request.get_data(),               # BYTES, as received
+            signature_header=request.headers["X-Ponk-Signature"],
+            secret=MY_WEBHOOK_SECRET,
+        )
+    except InvalidSignature:
+        return "", 400
+    if event.event == "agent_out_of_range":
+        page_someone(event.agent_id)
+    return "", 200        # anything but 2xx is a failure, and ponk retries
+```
+
+Verify the **raw bytes you received**. The signature covers the exact body on
+the wire, and `json.dumps(json.loads(body))` is not guaranteed to reproduce
+it, so verifying a re-serialized dict fails for reasons that look like a ponk
+bug and are not.
+
+`verify` checks the HMAC and the age of the delivery, and raises
+`InvalidSignature` with a message saying which of the two failed. The
+timestamp is inside the MAC, so a captured delivery cannot be aged forward.
+
+Registering endpoints is not in this client, and that is deliberate: the API
+scopes it to a signed-in session rather than to an API key, exactly as it does
+for minting keys. Register them in the app, under Settings, then verify here.
+
 ## Get a key
 
 Open [Settings, API keys](https://ponk.exchange/settings) in the app with your
@@ -132,6 +168,14 @@ key can move your funds home. It cannot move them anywhere else.
 | `compound(id)` | `POST /v1/agents/{id}/compound` | `trade` |
 | `withdraw(id, lamports)` | `POST /v1/agents/{id}/withdraw` | `trade` |
 | `exit_agent(id)` | `POST /v1/agents/{id}/exit` | `trade` |
+
+Receiver-side, needing no key and no network:
+
+| Function | Purpose |
+| --- | --- |
+| `verify(raw_body, signature_header, secret)` | Check a webhook delivery and parse it |
+| `parse_signature_header(header)` | Split `t=`/`v1=` out of the header |
+| `EVENT_KINDS` | Every kind ponk sends, for recognition, never for rejection |
 
 The first three need no key at all. `PonkClient()` with no `api_key` reaches
 them and nothing else. `health()` returns its report even when the API answers

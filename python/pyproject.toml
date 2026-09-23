@@ -4,14 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ponk"
-version = "0.1.0"
-description = "Thin Python client for the ponk public API: Solana DLMM liquidity agents."
+dynamic = ["version"]
+description = "Python client for the ponk API: Solana DLMM liquidity agents, and webhook verification."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
-keywords = ["solana", "dlmm", "liquidity", "meteora", "orca", "ponk"]
+keywords = ["solana", "dlmm", "liquidity", "meteora", "orca", "ponk", "webhooks"]
 classifiers = [
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent",
+  "Development Status :: 4 - Beta",
   "License :: OSI Approved :: Apache Software License",
   "Intended Audience :: Developers",
   "Typing :: Typed",
@@ -22,6 +26,20 @@ dependencies = []
 [project.urls]
 Homepage = "https://ponk.exchange"
 Documentation = "https://ponk.exchange/docs/developers/agents-api"
+Source = "https://github.com/ponkexchange/ponk-sdk"
+Issues = "https://github.com/ponkexchange/ponk-sdk/issues"
 
 [tool.setuptools]
 packages = ["ponk"]
+
+# Single source of truth. The wheel shipped 0.2.0 in its metadata while
+# `ponk.__version__` still said 0.1.0, because the number lived in two files
+# and only one was bumped. Now setuptools reads the package's own attribute.
+[tool.setuptools.dynamic]
+version = { attr = "ponk.__version__" }
+
+# The Typing :: Typed classifier is only true if the marker is IN the wheel.
+# Without this, a type checker ignores every annotation in the package and
+# the classifier is a promise the artifact does not keep.
+[tool.setuptools.package-data]
+ponk = ["py.typed"]

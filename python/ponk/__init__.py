@@ -15,6 +15,13 @@ from .client import (
     DEFAULT_TIMEOUT,
     PonkClient,
 )
+from .webhooks import (
+    EVENT_KINDS,
+    InvalidSignature,
+    WebhookEvent,
+    parse_signature_header,
+    verify,
+)
 from .errors import (
     PonkAPIError,
     PonkAuthError,
@@ -51,9 +58,14 @@ from .models import (
     Withdrawal,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
+    "EVENT_KINDS",
+    "InvalidSignature",
+    "WebhookEvent",
+    "parse_signature_header",
+    "verify",
     "__version__",
     "DEFAULT_BASE_URL",
     "DEFAULT_FUND_TIMEOUT",
