@@ -159,6 +159,23 @@ rebalances on every wobble loses to one that holds. `list_logs` returns the
 declines as well as the actions, which is the half most automation never shows
 you.
 
+## Security
+
+The API these clients call was assessed by **zauth (Vector)** on 29 September
+2026, alongside the web application and the MCP server: a deep scan over 51
+endpoints and 58 input vectors, 389 turns. **12 findings: 3 high, 5 medium,
+1 low, 3 informational. No critical.** Three high-severity findings are open as
+of the report date and are named on the audits page rather than summarised away.
+
+- [Report (PDF)](https://ponk.exchange/audits/zauth-ponk-exchange-2026-09-29.pdf)
+- [Audits](https://ponk.exchange/docs/audits), with scope, coverage and open
+  findings
+
+The assessment covers the API surface. It does not cover the Ponk Clouds
+on-chain program or the agent decision engine, neither of which has had a
+third-party review. To report something, see
+[SECURITY.md](https://github.com/ponkexchange/ponkexchange/blob/main/SECURITY.md).
+
 ## Versioning
 
 Both clients are `0.1.0` and track the deployed API. The API is versioned at
