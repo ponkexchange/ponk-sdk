@@ -169,9 +169,7 @@ endpoints and 58 input vectors, 389 turns. **12 findings: 3 high, 5 medium,
 - [Report (PDF)](https://ponk.exchange/audits/zauth-ponk-exchange-2026-09-29.pdf)
 - [Audits](https://ponk.exchange/docs/audits), with the scope and coverage tables
 
-The assessment covers the API surface. It does not cover the Ponk Clouds
-on-chain program or the agent decision engine, neither of which has had a
-third-party review. To report something, see
+To report something, see
 [SECURITY.md](https://github.com/ponkexchange/ponkexchange/blob/main/SECURITY.md).
 
 ## Versioning
