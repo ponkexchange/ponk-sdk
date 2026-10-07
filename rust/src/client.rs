@@ -46,10 +46,12 @@ impl Client {
     }
 
     /// Construct without a key, for the endpoints that need none: [`health`],
-    /// [`pool`] and [`ponk_perks`]. Every other method will get a 401.
+    /// [`pool`], [`range_cost`] and [`ponk_perks`]. Every other method will
+    /// get a 401.
     ///
     /// [`health`]: Client::health
     /// [`pool`]: Client::pool
+    /// [`range_cost`]: Client::range_cost
     /// [`ponk_perks`]: Client::ponk_perks
     pub fn public(base_url: impl Into<String>) -> Result<Self> {
         Self::builder(base_url).build()
@@ -92,11 +94,35 @@ impl Client {
 
     /// `GET /pools/{dex}/{address}`. One pool, decoded from chain.
     ///
-    /// `dex` is `meteora_dlmm`, `orca` or `ponk_clouds`. This route is rate
-    /// limited per IP: it spends the same RPC budget the live agents use.
+    /// `dex` is `meteora_dlmm`, `orca`, `ponk_clouds` or `raydium`. This
+    /// route is rate limited per IP (a 429 past the limit): it spends the same
+    /// RPC budget the live agents use.
     pub async fn pool(&self, dex: &str, address: &str) -> Result<PoolSnapshot> {
         self.get(&format!("/pools/{}/{}", seg(dex), seg(address)))
             .await
+    }
+
+    /// `GET /pools/{dex}/{address}/range-cost?bins={total_bins}`. What a range
+    /// of `total_bins` bins, centred on the active bin, costs to open.
+    ///
+    /// Meteora DLMM only: any other `dex` answers 422, because its account
+    /// model would make this arithmetic a fabricated number. `total_bins` of 0
+    /// answers 400. A width past the venue's ceiling is clamped rather than
+    /// refused, and `clamped` says so. Rate limited per IP, like [`pool`].
+    ///
+    /// [`pool`]: Client::pool
+    pub async fn range_cost(
+        &self,
+        dex: &str,
+        address: &str,
+        total_bins: u32,
+    ) -> Result<RangeCostQuote> {
+        self.get(&format!(
+            "/pools/{}/{}/range-cost?bins={total_bins}",
+            seg(dex),
+            seg(address)
+        ))
+        .await
     }
 
     /// `GET /public/ponk/perks/{address}`. What fees a wallet pays.
@@ -147,6 +173,26 @@ impl Client {
             .await
     }
 
+    /// `GET /v1/agents/{id}/mandate`. The custody mandate the agent is
+    /// signing under: what ponk may do for it, the caps, and when the
+    /// authority runs out.
+    ///
+    /// The expiry is the thing to watch. A lapsed mandate produces no error
+    /// anywhere: the agent keeps ticking and every signature it asks for is
+    /// denied. `status == "expired"` or a negative `seconds_remaining` is how
+    /// you find out. A 404 means the agent has no active grant, which reads
+    /// as "not autonomous".
+    ///
+    /// For an older agent with no wallet of its own this reads the legacy
+    /// per-user shared wallet's mandate. [`set_autonomous`] never uses that
+    /// one: enabling needs a mandate on the agent's OWN wallet.
+    ///
+    /// [`set_autonomous`]: Client::set_autonomous
+    pub async fn agent_mandate(&self, agent_id: &str) -> Result<Mandate> {
+        self.get(&format!("/v1/agents/{}/mandate", seg(agent_id)))
+            .await
+    }
+
     /// `GET /v1/positions`. Every LP position the wallet holds, agent-managed
     /// or not, re-read from chain on each call.
     pub async fn list_positions(&self) -> Result<Vec<Position>> {
@@ -173,11 +219,46 @@ impl Client {
 
     /// `POST /v1/agents`. Create an agent.
     ///
+    /// Left unset, [`NewAgent::dry_run`] makes a LIVE agent here; the `/v1`
+    /// default is `false`. Set it to `true` to simulate first.
+    ///
     /// An agent created here is stamped `origin='api'` and pays the API
     /// performance rate for its whole life, including after autonomous mode is
     /// enabled for it in the app. [`PonkPerks::api_agent_fee`] is that rate.
     pub async fn create_agent(&self, agent: &NewAgent) -> Result<Agent> {
         self.post("/v1/agents", Some(agent), self.timeout).await
+    }
+
+    /// `POST /v1/agents/{id}/autonomous`. Turn autonomous signing on or off,
+    /// USING a custody mandate the owner already signed in the app.
+    ///
+    /// A key cannot mint a mandate, and this method sends no grant (the server
+    /// answers 422 to a body that carries one). So:
+    ///
+    /// * `true` works only when the agent has its OWN agent wallet holding an
+    ///   active mandate that has not expired and still pays out to this
+    ///   account's wallet. Anything else is a 422 whose message says which.
+    ///   On success the agent is `managed`, `auto` and live (`dry_run` false).
+    ///   Check the returned `status`: an agent a previous exit left `stopped`
+    ///   still needs [`resume_agent`].
+    /// * `false` is always allowed, so a leaked key can never make the off
+    ///   switch harder to reach than the on switch. It turns signing off; it
+    ///   does NOT revoke the mandate, which stays on record until it expires
+    ///   or is revoked in the app, so a later `true` can re-arm the agent
+    ///   while it is unexpired. It closes nothing and moves nothing: funds
+    ///   and any open position stay in the agent's wallet.
+    ///
+    /// The owner is notified either way, and an enable names the API key as
+    /// the credential that did it.
+    ///
+    /// [`resume_agent`]: Client::resume_agent
+    pub async fn set_autonomous(&self, agent_id: &str, enabled: bool) -> Result<AutonomousView> {
+        self.post(
+            &format!("/v1/agents/{}/autonomous", seg(agent_id)),
+            Some(&serde_json::json!({ "enabled": enabled })),
+            self.timeout,
+        )
+        .await
     }
 
     /// `POST /v1/agents/{id}/pause`. Stop the loop.
@@ -228,6 +309,26 @@ impl Client {
     ///
     /// Meteora DLMM autonomous agents only. The range is read from chain, so
     /// the re-deposit cannot be redirected.
+    ///
+    /// # `Ok` is not success
+    ///
+    /// A refusal at signing time, most commonly an expired custody mandate but
+    /// also a risk halt or an exhausted daily cap, is recorded on the action
+    /// rather than returned as an error: the call answers 200 and this method
+    /// returns `Ok` with a receipt whose `status` is failed, whose `signature`
+    /// is `None`, and whose `error_message` says why. So read the receipt.
+    ///
+    /// ```no_run
+    /// # async fn demo(ponk: &ponk::Client, id: &str) -> Result<(), ponk::Error> {
+    /// let r = ponk.compound(id).await?;
+    /// if r.signature.is_none() {
+    ///     // Nothing reached the chain. error_message says why, and
+    ///     // risk_failed_checks is populated when the risk engine refused.
+    ///     eprintln!("compound did not land: {:?}", r.error_message);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn compound(&self, agent_id: &str) -> Result<ActionReceipt> {
         self.post(
             &format!("/v1/agents/{}/compound", seg(agent_id)),
@@ -421,6 +522,21 @@ mod tests {
         assert_eq!(
             seg("018f0000-0000-7000-8000-000000000000"),
             "018f0000-0000-7000-8000-000000000000"
+        );
+    }
+
+    #[test]
+    fn a_range_cost_path_keeps_the_query_outside_the_segments() {
+        let c = Client::public("https://ponk.exchange/api").unwrap();
+        let path = format!(
+            "/pools/{}/{}/range-cost?bins={}",
+            seg("meteora_dlmm"),
+            seg("a?bins=1"),
+            70
+        );
+        assert_eq!(
+            c.url(&path),
+            "https://ponk.exchange/api/pools/meteora_dlmm/a%3Fbins%3D1/range-cost?bins=70"
         );
     }
 

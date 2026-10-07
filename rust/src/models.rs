@@ -147,7 +147,7 @@ pub struct Agent {
     pub id: Option<String>,
     pub name: Option<String>,
     pub wallet_address: Option<String>,
-    /// `meteora_dlmm`, `orca` or `ponk_clouds`.
+    /// `meteora_dlmm`, `orca`, `ponk_clouds` or `raydium`.
     pub dex: Option<String>,
     /// `None` for an entry agent that has not yet screened and bound a pool.
     pub pool_address: Option<String>,
@@ -480,6 +480,113 @@ pub struct Withdrawal {
     pub pnl: Option<ExitSnapshot>,
 }
 
+/// The custody mandate an autonomous agent is signing under.
+///
+/// Read from the stored, signed scope, so it is what the owner actually
+/// signed, not a default. The mandate expires on a clock and nothing on chain
+/// records the moment it lapses: an agent whose mandate expired keeps ticking
+/// but every signature it asks for is denied, which looks exactly like an
+/// agent with nothing to do. `status` and `seconds_remaining` are how you tell
+/// the two apart.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Mandate {
+    pub mandate_id: Option<String>,
+    /// `active` while it can still sign, `expired` once the clock has passed
+    /// `expires_at`. Computed by the server at request time.
+    pub status: Option<String>,
+    /// RFC 3339.
+    pub expires_at: Option<String>,
+    /// RFC 3339.
+    pub granted_at: Option<String>,
+    /// Signed: negative once the mandate has lapsed.
+    pub seconds_remaining: Option<i64>,
+    /// The signed scope, verbatim, for example `claim_fees`.
+    pub actions: Vec<String>,
+    /// `None` means no per-action USD ceiling, not a ceiling of zero.
+    pub max_action_value_usd: Option<u64>,
+    pub max_daily_transactions: Option<u32>,
+    pub max_slippage_bps: Option<u16>,
+    pub pool_allowlist: Vec<String>,
+    /// The address every withdrawal is locked to.
+    pub withdrawal_address: Option<String>,
+}
+
+/// The agent's custody state after a `set_autonomous` call, read back from
+/// its row rather than assumed.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AutonomousView {
+    pub agent_id: Option<String>,
+    /// `managed` once autonomous, `external` once turned off.
+    pub wallet_source: Option<String>,
+    /// `auto` or `manual`.
+    pub mode: Option<String>,
+    pub managed_wallet: Option<String>,
+    pub mandate_id: Option<String>,
+    /// The address every withdrawal is locked to.
+    pub withdrawal_locked_to: Option<String>,
+    /// The agent's lifecycle status after the call. `managed` plus `auto` does
+    /// not by itself mean a loop is running: an agent a previous exit left
+    /// `stopped` is autonomous and still needs [`resume_agent`].
+    ///
+    /// [`resume_agent`]: crate::Client::resume_agent
+    pub status: Option<String>,
+    /// Whether the agent simulates instead of executing after the call.
+    /// Enabling autonomy through `/v1` always sets this to `false`.
+    pub dry_run: Option<bool>,
+}
+
+/// What opening a Meteora DLMM range of a given width costs up front.
+///
+/// Rent for the position account comes back when the position closes. Rent
+/// for bin arrays this wallet would have to create does not, because closing
+/// one requires every LP in it to have left. Bin arrays that already exist on
+/// chain cost nothing, which is why an established pool quotes lower than a
+/// cold one.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct RangeCostQuote {
+    pub pool_address: Option<String>,
+    pub dex: Option<String>,
+    pub bin_step: Option<u16>,
+    pub active_bin_id: Option<i32>,
+    /// What was asked for, before the venue clamp.
+    pub requested_bins: Option<u32>,
+    /// What one position will actually hold.
+    pub total_bins: Option<u32>,
+    /// The venue's ceiling on one position.
+    pub max_total_bins: Option<u32>,
+    /// True when `total_bins < requested_bins`.
+    pub clamped: Option<bool>,
+    pub lower_bin_id: Option<i32>,
+    pub upper_bin_id: Option<i32>,
+    /// Distance of the lower edge from the current price, in percent.
+    /// Negative.
+    pub down_pct: Option<f64>,
+    /// Distance of the upper edge from the current price, in percent.
+    pub up_pct: Option<f64>,
+    /// Refundable on close.
+    pub position_rent_lamports: Option<u64>,
+    pub bin_arrays_total: Option<u32>,
+    pub bin_arrays_existing: Option<u32>,
+    pub bin_arrays_missing: Option<u32>,
+    /// Treat as not refundable.
+    pub bin_array_rent_lamports: Option<u64>,
+    /// `probed` when every bin array was read on chain. `unavailable` when
+    /// the read failed, in which case `bin_arrays_existing` is 0 by assumption
+    /// and the figures are the cold-pool worst case.
+    pub bin_array_probe: Option<String>,
+    /// `increase_position_length` transactions needed to reach `total_bins`.
+    pub resize_tx_count: Option<u32>,
+    /// Signature fees for the open plus every resize.
+    pub tx_fee_lamports: Option<u64>,
+    /// Everything the wallet must hold before the open can start.
+    pub total_upfront_lamports: Option<u64>,
+    pub refundable_lamports: Option<u64>,
+    pub non_refundable_lamports: Option<u64>,
+}
+
 /// The body of `POST /v1/agents`.
 ///
 /// `wallet_address` must be the key's own wallet; anything else is rejected as
@@ -490,20 +597,26 @@ pub struct Withdrawal {
 pub struct NewAgent {
     pub name: String,
     pub wallet_address: String,
-    /// `meteora_dlmm`, `orca` or `ponk_clouds`.
+    /// `meteora_dlmm`, `orca`, `ponk_clouds` or `raydium`. An `entry_agent`
+    /// (Degen Mode in the app) discovers its pool by screening, which works
+    /// only on `meteora_dlmm`.
     pub dex: String,
     pub strategy: String,
     /// Strategy-specific configuration, matching the declared `strategy`.
     pub config: serde_json::Value,
-    /// Required by every managing strategy. An entry agent may start without
-    /// one and bind a pool by screening.
+    /// Required by every managing strategy. An `entry_agent` starts poolless
+    /// and binds a pool by screening, so for it this and `position_address`
+    /// are ignored.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position_address: Option<String>,
-    /// Left unset, the server's own default applies, which is `true`. A
-    /// dry-run agent runs its whole strategy loop and logs every decision
-    /// without sending a transaction.
+    /// Left unset, `/v1` creates a LIVE agent (`dry_run = false`). Set
+    /// `Some(true)` to simulate: a dry-run agent runs its whole strategy loop
+    /// and logs every decision without sending a transaction. This is the
+    /// opposite of the session route `POST /agents`, which defaults to dry
+    /// run; `/v1` defaults to live on purpose, and refuses a non-boolean
+    /// `dry_run` with a 400.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
 }
@@ -607,6 +720,50 @@ mod tests {
         assert_eq!(json["pool_address"], "POOL");
         assert!(json.get("dry_run").is_none());
         assert!(json.get("position_address").is_none());
+    }
+
+    #[test]
+    fn an_unlimited_mandate_ceiling_stays_none() {
+        let m: Mandate = serde_json::from_str(
+            r#"{"mandate_id":"m","status":"expired","expires_at":"2026-10-01T00:00:00Z",
+                "granted_at":"2026-09-01T00:00:00Z","seconds_remaining":-3600,
+                "actions":["claim_fees","compound"],"max_action_value_usd":null,
+                "max_daily_transactions":50,"max_slippage_bps":100,
+                "pool_allowlist":[],"withdrawal_address":"W"}"#,
+        )
+        .unwrap();
+        assert_eq!(m.status.as_deref(), Some("expired"));
+        assert_eq!(m.seconds_remaining, Some(-3600));
+        assert!(m.max_action_value_usd.is_none());
+        assert_eq!(m.actions, vec!["claim_fees", "compound"]);
+    }
+
+    #[test]
+    fn an_autonomous_view_reports_status_and_dry_run() {
+        let v: AutonomousView = serde_json::from_str(
+            r#"{"agent_id":"a","wallet_source":"managed","mode":"auto","managed_wallet":"M",
+                "mandate_id":"m","withdrawal_locked_to":"W","status":"stopped","dry_run":false}"#,
+        )
+        .unwrap();
+        assert_eq!(v.status.as_deref(), Some("stopped"));
+        assert_eq!(v.dry_run, Some(false));
+    }
+
+    #[test]
+    fn a_range_cost_quote_decodes() {
+        let q: RangeCostQuote = serde_json::from_str(
+            r#"{"pool_address":"P","dex":"meteora_dlmm","bin_step":10,"active_bin_id":5,
+                "requested_bins":2000,"total_bins":1400,"max_total_bins":1400,"clamped":true,
+                "lower_bin_id":-695,"upper_bin_id":704,"down_pct":-50.1,"up_pct":101.2,
+                "position_rent_lamports":1,"bin_arrays_total":21,"bin_arrays_existing":3,
+                "bin_arrays_missing":18,"bin_array_rent_lamports":2,"bin_array_probe":"probed",
+                "resize_tx_count":20,"tx_fee_lamports":3,"total_upfront_lamports":6,
+                "refundable_lamports":1,"non_refundable_lamports":5}"#,
+        )
+        .unwrap();
+        assert_eq!(q.clamped, Some(true));
+        assert_eq!(q.bin_array_probe.as_deref(), Some("probed"));
+        assert_eq!(q.total_bins, Some(1400));
     }
 
     #[test]

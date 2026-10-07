@@ -61,6 +61,26 @@ async fn main() -> Result<(), Error> {
             perf.pnl_source.as_deref().unwrap_or("-")
         );
 
+        // An autonomous agent signs under a mandate that expires on a clock.
+        // A lapsed one produces no error, only an agent that stopped acting,
+        // so read it rather than assume it.
+        if agent.wallet_source.as_deref() == Some("managed") {
+            match ponk.agent_mandate(id).await {
+                Ok(m) => println!(
+                    "  mandate {}  expires {}  seconds left {}",
+                    m.status.as_deref().unwrap_or("-"),
+                    m.expires_at.as_deref().unwrap_or("-"),
+                    m.seconds_remaining
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "-".into())
+                ),
+                Err(e) if e.api().map(|a| a.kind()) == Some(ErrorKind::NotFound) => {
+                    println!("  no active mandate: not autonomous")
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
         let pos = ponk.agent_position(id).await?;
         if pos.position_address.is_some() {
             println!(

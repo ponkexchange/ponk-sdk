@@ -9,6 +9,7 @@ See `README.md` for the quickstart and `ponk.client.PonkClient` for the method
 list. Standard library only.
 """
 
+from ._version import __version__
 from .client import (
     DEFAULT_BASE_URL,
     DEFAULT_FUND_TIMEOUT,
@@ -42,6 +43,7 @@ from .models import (
     AgentPerformance,
     AgentPosition,
     AgentWallet,
+    AutonomousState,
     BinShare,
     ClaimPayout,
     ClaimPayoutToken,
@@ -50,15 +52,16 @@ from .models import (
     FeeRates,
     Health,
     HealthChecks,
+    Mandate,
     PonkPerks,
     PoolSnapshot,
     Position,
+    RangeCost,
     TokenAmount,
     WhoAmI,
     Withdrawal,
 )
 
-__version__ = "0.2.0"
 
 __all__ = [
     "EVENT_KINDS",
@@ -88,6 +91,7 @@ __all__ = [
     "AgentPerformance",
     "AgentPosition",
     "AgentWallet",
+    "AutonomousState",
     "BinShare",
     "ClaimPayout",
     "ClaimPayoutToken",
@@ -96,9 +100,11 @@ __all__ = [
     "FeeRates",
     "Health",
     "HealthChecks",
+    "Mandate",
     "PonkPerks",
     "PoolSnapshot",
     "Position",
+    "RangeCost",
     "TokenAmount",
     "WhoAmI",
     "Withdrawal",

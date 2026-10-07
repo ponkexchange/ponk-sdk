@@ -30,6 +30,7 @@ __all__ = [
     "AgentPerformance",
     "AgentPosition",
     "AgentWallet",
+    "AutonomousState",
     "BinShare",
     "ClaimPayout",
     "ClaimPayoutToken",
@@ -38,9 +39,11 @@ __all__ = [
     "FeeRates",
     "Health",
     "HealthChecks",
+    "Mandate",
     "PonkPerks",
     "PoolSnapshot",
     "Position",
+    "RangeCost",
     "TokenAmount",
     "WhoAmI",
     "Withdrawal",
@@ -168,6 +171,50 @@ class PoolSnapshot(Model):
             return None
         scale = Decimal(10) ** (int(self.token_x_decimals) - int(self.token_y_decimals))
         return Decimal(self.current_price) * scale
+
+
+@dataclass
+class RangeCost(Model):
+    """What a Meteora DLMM range of a given width costs to open, in lamports.
+
+    `requested_bins` is what you asked for and `total_bins` what one position
+    will actually hold; `clamped` is true when the venue ceiling
+    (`max_total_bins`) cut the request. The range is centred on the active
+    bin, so `lower_bin_id` / `upper_bin_id` are the exact edges and
+    `down_pct` / `up_pct` the geometric distance of each edge from the
+    current price (negative below, positive above).
+
+    `refundable_lamports` is the position rent, which `close_position`
+    returns. `non_refundable_lamports` is the rent for bin arrays this wallet
+    would have to create plus signature fees. `bin_array_probe` is `probed`
+    when every bin array was read on chain, or `unavailable` when that read
+    failed, in which case the quote assumes none exist and is the cold-pool
+    worst case.
+    """
+
+    pool_address: Optional[str] = None
+    dex: Optional[str] = None
+    bin_step: Optional[int] = None
+    active_bin_id: Optional[int] = None
+    requested_bins: Optional[int] = None
+    total_bins: Optional[int] = None
+    max_total_bins: Optional[int] = None
+    clamped: Optional[bool] = None
+    lower_bin_id: Optional[int] = None
+    upper_bin_id: Optional[int] = None
+    down_pct: Optional[float] = None
+    up_pct: Optional[float] = None
+    position_rent_lamports: Optional[int] = None
+    bin_arrays_total: Optional[int] = None
+    bin_arrays_existing: Optional[int] = None
+    bin_arrays_missing: Optional[int] = None
+    bin_array_rent_lamports: Optional[int] = None
+    bin_array_probe: Optional[str] = None
+    resize_tx_count: Optional[int] = None
+    tx_fee_lamports: Optional[int] = None
+    total_upfront_lamports: Optional[int] = None
+    refundable_lamports: Optional[int] = None
+    non_refundable_lamports: Optional[int] = None
 
 
 @dataclass
@@ -399,6 +446,61 @@ class AgentWallet(Model):
     min_open_lamports: Optional[int] = None
     recommended_open_lamports: Optional[int] = None
     scope: Optional[str] = None
+
+
+@dataclass
+class Mandate(Model):
+    """The custody mandate an autonomous agent is signing under.
+
+    Read from the stored, signed scope, so it is what the owner actually
+    signed rather than today's defaults.
+
+    `status` is `active` while it can still sign and `expired` once the
+    server's clock passed `expires_at`. `seconds_remaining` is signed: it goes
+    negative once the mandate has lapsed, and it is computed by the server, so
+    it does not depend on your clock agreeing with ponk's.
+
+    `actions` is the signed list of what ponk may do (for example
+    `claim_fees`). `max_action_value_usd` is `None` when there is no
+    per-action USD ceiling, which means unlimited, never zero.
+    `withdrawal_address` is the only address funds can be withdrawn to.
+    """
+
+    mandate_id: Optional[str] = None
+    status: Optional[str] = None
+    expires_at: Optional[str] = None
+    granted_at: Optional[str] = None
+    seconds_remaining: Optional[int] = None
+    actions: List[str] = field(default_factory=list)
+    max_action_value_usd: Optional[int] = None
+    max_daily_transactions: Optional[int] = None
+    max_slippage_bps: Optional[int] = None
+    pool_allowlist: List[str] = field(default_factory=list)
+    withdrawal_address: Optional[str] = None
+
+
+@dataclass
+class AutonomousState(Model):
+    """An agent's custody state right after autonomous mode was switched.
+
+    `wallet_source` is `managed` and `mode` is `auto` after enabling, or
+    `external` and `manual` after disabling. `managed_wallet`, `mandate_id`
+    and `withdrawal_locked_to` are set only when enabled.
+
+    `status` and `dry_run` are read back from the agent, not assumed. Enabling
+    does not start a stopped loop: an agent a previous exit left `stopped` is
+    autonomous and live but idle until you call `resume_agent`. Check `status`
+    rather than reading `mode == "auto"` as "running".
+    """
+
+    agent_id: Optional[str] = None
+    wallet_source: Optional[str] = None
+    mode: Optional[str] = None
+    managed_wallet: Optional[str] = None
+    mandate_id: Optional[str] = None
+    withdrawal_locked_to: Optional[str] = None
+    status: Optional[str] = None
+    dry_run: Optional[bool] = None
 
 
 # --------------------------------------------------------------------------

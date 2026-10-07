@@ -9,7 +9,9 @@ account-level act and the API scopes it to a signed-in SESSION, not to an API
 key: a key cannot mint keys and it cannot register a URL that will receive
 your account's activity either. So a key-holding client like this one cannot
 manage endpoints, and pretending otherwise would ship a method that answers
-401 forever. Register endpoints in the app, then verify here.
+401 forever. Register an endpoint from a signed-in session with
+`POST /me/webhooks`, keep the `whsec_...` signing secret its response
+carries, then verify here.
 
     from ponk.webhooks import verify, InvalidSignature
 

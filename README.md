@@ -35,7 +35,10 @@ drive that from your own code instead of the app.
 ## Install
 
 ```bash
-# Python
+# Python, from PyPI (0.2.0 today)
+pip install ponk
+
+# Python, this repository (0.3.0, not yet on PyPI)
 pip install "git+https://github.com/ponkexchange/ponk-sdk#subdirectory=python"
 ```
 
@@ -138,12 +141,20 @@ retrying an authentication failure forever.
 
 | | |
 |---|---|
-| **Read** | `whoami` · `list_agents` · `get_agent` · `agent_performance` · `agent_position` · `agent_wallet` · `list_positions` · `list_logs` |
-| **Act** (`trade` scope) | `create_agent` · `pause_agent` · `resume_agent` · `set_dry_run` · `set_mode` · `compound` · `withdraw` · `exit_agent` |
-| **Public** (no key) | `health` · `pool` · `ponk_perks` |
+| **Read** | `whoami` · `list_agents` · `get_agent` · `agent_performance` · `agent_position` · `agent_wallet` · `agent_mandate` · `list_positions` · `list_logs` |
+| **Act** (`trade` scope) | `create_agent` · `pause_agent` · `resume_agent` · `set_dry_run` · `set_mode` · `set_autonomous` · `compound` · `withdraw` · `exit_agent` |
+| **Public** (no key) | `health` · `pool` · `range_cost` · `ponk_perks` |
 
 `create_agent` accepts `dry_run=True`, which runs the whole decision loop and
 records what it *would* have done without sending a transaction. Start there.
+Say so explicitly: on `POST /v1/agents` an omitted `dry_run` creates a LIVE
+agent, the opposite of the app's default, and the Python client requires the
+argument for that reason.
+
+`set_autonomous` switches autonomous signing on under a mandate you already
+signed in the app, or off. It cannot create a mandate. `agent_mandate` reads
+that mandate's expiry, which is the thing to watch: a lapsed mandate stops the
+agent signing without any error.
 
 ## Ranges are the whole game
 
@@ -161,7 +172,8 @@ you.
 
 ## Versioning
 
-Both clients are `0.1.0` and track the deployed API. The API is versioned at
+Each client carries its own version (`python/ponk/_version.py`,
+`rust/Cargo.toml`) and tracks the deployed API. The API is versioned at
 `/v1`; a breaking change there gets a new path, not a silent redefinition of an
 existing field.
 

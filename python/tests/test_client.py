@@ -4,7 +4,7 @@ They pin the three things a client can get wrong without anyone noticing: the
 method and path it sends, the fields it parses, and the exception it raises for
 each status of the shared error envelope.
 
-    cd packages/sdk-python && python3 -m unittest discover -s tests -v
+    cd python && python3 -m pytest        (or: python3 -m unittest discover -s tests -v)
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import urllib.error
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ponk import (  # noqa: E402
+    PonkBadRequestError,
     PonkAuthError,
     PonkClient,
     PonkConflictError,
@@ -144,12 +145,190 @@ class TestRequests(unittest.TestCase):
             strategy="bin_rebalancer",
             config={"kind": "bin_rebalancer"},
             pool_address="POOL",
+            dry_run=True,
         )
         body = opener.calls[0]["body"]
         self.assertEqual(opener.calls[0]["method"], "POST")
         self.assertEqual(body["pool_address"], "POOL")
-        self.assertNotIn("dry_run", body)
         self.assertNotIn("position_address", body)
+
+    def test_create_agent_always_sends_dry_run_explicitly(self):
+        # On /v1 an OMITTED dry_run means a LIVE agent (the app defaults to
+        # true, the API to false). The client never leaves it to the server.
+        for flag in (True, False):
+            c, opener = client(AGENT)
+            c.create_agent(
+                name="n",
+                wallet_address="GYdJ",
+                dex="meteora_dlmm",
+                strategy="bin_rebalancer",
+                config={"kind": "bin_rebalancer"},
+                pool_address="POOL",
+                dry_run=flag,
+            )
+            self.assertIs(opener.calls[0]["body"]["dry_run"], flag)
+
+    def test_create_agent_requires_dry_run(self):
+        c, opener = client(AGENT)
+        with self.assertRaises(TypeError):
+            c.create_agent(  # type: ignore[call-arg]
+                name="n",
+                wallet_address="GYdJ",
+                dex="meteora_dlmm",
+                strategy="bin_rebalancer",
+                config={"kind": "bin_rebalancer"},
+                pool_address="POOL",
+            )
+        self.assertEqual(opener.calls, [])
+
+    def test_create_agent_refuses_a_non_boolean_dry_run(self):
+        # "true", 1 and None are all refused before anything is sent, the way
+        # the server refuses them, rather than coerced into a live agent.
+        for weird in ("true", 1, 0, None):
+            c, opener = client(AGENT)
+            with self.assertRaises(TypeError):
+                c.create_agent(
+                    name="n",
+                    wallet_address="GYdJ",
+                    dex="meteora_dlmm",
+                    strategy="bin_rebalancer",
+                    config={"kind": "bin_rebalancer"},
+                    pool_address="POOL",
+                    dry_run=weird,  # type: ignore[arg-type]
+                )
+            self.assertEqual(opener.calls, [])
+
+    def test_agent_mandate(self):
+        payload = {
+            "mandate_id": "m-1",
+            "status": "expired",
+            "expires_at": "2026-09-01T00:00:00Z",
+            "granted_at": "2026-08-02T00:00:00Z",
+            "seconds_remaining": -86400,
+            "actions": ["claim_fees", "rebalance"],
+            "max_action_value_usd": None,
+            "max_daily_transactions": 50,
+            "max_slippage_bps": 100,
+            "pool_allowlist": ["POOL"],
+            "withdrawal_address": "GYdJ",
+        }
+        c, opener = client(payload)
+        m = c.agent_mandate("a")
+        self.assertEqual(opener.calls[0]["method"], "GET")
+        self.assertEqual(opener.calls[0]["url"], "https://example.test/api/v1/agents/a/mandate")
+        self.assertEqual(m.status, "expired")
+        self.assertEqual(m.seconds_remaining, -86400)
+        # null is "no per-action ceiling", and must stay None, never 0.
+        self.assertIsNone(m.max_action_value_usd)
+        self.assertEqual(m.actions, ["claim_fees", "rebalance"])
+        self.assertEqual(m.pool_allowlist, ["POOL"])
+        self.assertEqual(m.withdrawal_address, "GYdJ")
+
+    def test_agent_mandate_404_means_not_autonomous(self):
+        c, _ = client({"error": {"code": "not_found", "message": "not found"}}, status=404)
+        with self.assertRaises(PonkNotFoundError):
+            c.agent_mandate("a")
+
+    def test_set_autonomous_sends_only_enabled(self):
+        view = {
+            "agent_id": "a",
+            "wallet_source": "managed",
+            "mode": "auto",
+            "managed_wallet": "MW",
+            "mandate_id": "m-1",
+            "withdrawal_locked_to": "GYdJ",
+            "status": "stopped",
+            "dry_run": False,
+        }
+        c, opener = client(view)
+        out = c.set_autonomous("a", True)
+        call = opener.calls[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(call["url"], "https://example.test/api/v1/agents/a/autonomous")
+        # Never a grant: the server answers 422 to any body carrying one.
+        self.assertEqual(call["body"], {"enabled": True})
+        self.assertEqual(out.mode, "auto")
+        self.assertEqual(out.status, "stopped")
+        self.assertIs(out.dry_run, False)
+
+    def test_set_autonomous_disable(self):
+        c, opener = client({"agent_id": "a", "wallet_source": "external", "mode": "manual",
+                            "managed_wallet": None, "mandate_id": None,
+                            "withdrawal_locked_to": None, "status": "running", "dry_run": False})
+        out = c.set_autonomous("a", False)
+        self.assertEqual(opener.calls[0]["body"], {"enabled": False})
+        self.assertEqual(out.wallet_source, "external")
+        self.assertIsNone(out.mandate_id)
+
+    def test_set_autonomous_refuses_a_non_boolean(self):
+        c, opener = client({})
+        with self.assertRaises(TypeError):
+            c.set_autonomous("a", "true")  # type: ignore[arg-type]
+        self.assertEqual(opener.calls, [])
+
+    def test_set_autonomous_without_a_mandate_is_unprocessable(self):
+        c, _ = client(
+            {"error": {"code": "unprocessable", "message": "This agent's custody mandate expired"}},
+            status=422,
+        )
+        with self.assertRaises(PonkUnprocessableError):
+            c.set_autonomous("a", True)
+
+    def test_range_cost(self):
+        payload = {
+            "pool_address": "POOL",
+            "dex": "meteora_dlmm",
+            "bin_step": 4,
+            "active_bin_id": 100,
+            "requested_bins": 2000,
+            "total_bins": 1400,
+            "max_total_bins": 1400,
+            "clamped": True,
+            "lower_bin_id": -600,
+            "upper_bin_id": 799,
+            "down_pct": -24.4,
+            "up_pct": 32.3,
+            "position_rent_lamports": 100,
+            "bin_arrays_total": 21,
+            "bin_arrays_existing": 3,
+            "bin_arrays_missing": 18,
+            "bin_array_rent_lamports": 200,
+            "bin_array_probe": "probed",
+            "resize_tx_count": 15,
+            "tx_fee_lamports": 80000,
+            "total_upfront_lamports": 80300,
+            "refundable_lamports": 100,
+            "non_refundable_lamports": 80200,
+        }
+        c, opener = client(payload)
+        q = c.range_cost("meteora_dlmm", "POOL", 2000)
+        self.assertEqual(
+            opener.calls[0]["url"],
+            "https://example.test/api/pools/meteora_dlmm/POOL/range-cost?bins=2000",
+        )
+        self.assertTrue(q.clamped)
+        self.assertEqual(q.total_bins, 1400)
+        self.assertEqual(q.bin_array_probe, "probed")
+        self.assertEqual(q.non_refundable_lamports, 80200)
+
+    def test_range_cost_off_meteora_is_unprocessable(self):
+        c, _ = client({"error": {"code": "unprocessable", "message": "only Meteora"}}, status=422)
+        with self.assertRaises(PonkUnprocessableError):
+            c.range_cost("orca", "POOL", 70)
+
+    def test_range_cost_zero_bins_is_bad_request(self):
+        c, _ = client({"error": {"code": "bad_request", "message": "bins must be at least 1"}}, status=400)
+        with self.assertRaises(PonkBadRequestError):
+            c.range_cost("meteora_dlmm", "POOL", 0)
+
+    def test_user_agent_carries_the_package_version(self):
+        import ponk
+
+        c, opener = client({"wallet_address": "GYdJ", "scope": "read", "key_id": "k"})
+        c.whoami()
+        self.assertEqual(
+            opener.calls[0]["headers"]["User-agent"], "ponk-python/" + ponk.__version__
+        )
 
     def test_withdraw_sends_lamports_and_no_destination(self):
         c, opener = client({"signature": "sig", "lamports": 500000000, "destination": "GYdJ", "source": "AGENT"})

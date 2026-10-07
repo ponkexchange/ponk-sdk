@@ -34,9 +34,10 @@ packages = ["ponk"]
 
 # Single source of truth. The wheel shipped 0.2.0 in its metadata while
 # `ponk.__version__` still said 0.1.0, because the number lived in two files
-# and only one was bumped. Now setuptools reads the package's own attribute.
+# and only one was bumped. Now setuptools reads `ponk/_version.py`, which
+# `ponk.__version__` and the client's User-Agent both re-export.
 [tool.setuptools.dynamic]
-version = { attr = "ponk.__version__" }
+version = { attr = "ponk._version.__version__" }
 
 # The Typing :: Typed classifier is only true if the marker is IN the wheel.
 # Without this, a type checker ignores every annotation in the package and

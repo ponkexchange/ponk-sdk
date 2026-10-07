@@ -1,6 +1,6 @@
 [package]
 name = "ponk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -18,13 +18,20 @@ reqwest = { version = "0.12", default-features = false, features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+# Only for `ponk::webhooks`: verifying a delivery's HMAC-SHA256 signature in
+# constant time. Behind the default `webhooks` feature, so a client that never
+# receives a webhook can drop both.
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
-default = ["rustls-tls"]
+default = ["rustls-tls", "webhooks"]
 # TLS is a choice, not a default this crate makes for you: rustls needs no
 # system library, native-tls uses the platform's own.
 rustls-tls = ["reqwest/rustls-tls"]
 native-tls = ["reqwest/native-tls"]
+# Receiver-side verification of webhook deliveries (`ponk::webhooks`).
+webhooks = ["dep:hmac", "dep:sha2"]
