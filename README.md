@@ -170,6 +170,24 @@ rebalances on every wobble loses to one that holds. `list_logs` returns the
 declines as well as the actions, which is the half most automation never shows
 you.
 
+## Security
+
+The API these clients call was assessed by **zauth (Vector)** on 29 September
+2026, alongside the web application and the MCP server: a deep scan over 51
+endpoints and 58 input vectors, 389 turns. **12 findings: 3 high, 5 medium,
+1 low, 3 informational. No critical.**
+
+All 12 findings were remediated on 30 September 2026, each verified against the
+live site rather than from the diff. Eight are closed; the missing
+Content-Security-Policy is partially fixed, since the policy ships report-only
+with a violation collector and so does not block yet.
+
+- [Report (PDF)](https://ponk.exchange/audits/zauth-ponk-exchange-2026-09-29.pdf)
+- [Audits](https://ponk.exchange/docs/audits), with the per-finding remediation table
+
+To report something, see
+[SECURITY.md](https://github.com/ponkexchange/ponkexchange/blob/main/SECURITY.md).
+
 ## Versioning
 
 Each client carries its own version (`python/ponk/_version.py`,
