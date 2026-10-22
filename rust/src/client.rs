@@ -134,6 +134,61 @@ impl Client {
             .await
     }
 
+    /// `GET /public/agents-leaderboard?window=`. Top Ponkillionaires: every
+    /// agent its owner chose to share, ranked against holding.
+    ///
+    /// `window` is `24h`, `7d`, `30d` or `all` (`None` takes the server
+    /// default). No key needed; rate limited per IP. Each row carries `copy`,
+    /// so a row can be copied with [`AgentCopy::to_new_agent`] and
+    /// [`Client::create_agent`] without a second read.
+    pub async fn leaderboard(&self, window: Option<&str>) -> Result<Leaderboard> {
+        self.get(&with_query("/public/agents-leaderboard", &[("window", window.map(str::to_string))]))
+            .await
+    }
+
+    /// `GET /public/agents/{slug}`. A shared agent's public profile. 404 for
+    /// an unknown slug, 410 for one its owner stopped sharing.
+    pub async fn public_agent(&self, slug: &str) -> Result<PublicAgent> {
+        self.get(&format!("/public/agents/{}", seg(slug))).await
+    }
+
+    /// `GET /public/agents/{slug}/value-history?range=`. The profile's value
+    /// chart. A link that hides USD answers 404.
+    pub async fn public_agent_value_history(
+        &self,
+        slug: &str,
+        range: Option<&str>,
+    ) -> Result<ValueHistory> {
+        self.get(&with_query(
+            &format!("/public/agents/{}/value-history", seg(slug)),
+            &[("range", range.map(str::to_string))],
+        ))
+        .await
+    }
+
+    /// `GET /public/points/leaderboard?limit&offset`. The points season board,
+    /// signed out. Handles are referral codes, never wallets.
+    pub async fn public_points_leaderboard(
+        &self,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<PointsLeaderboard> {
+        self.get(&with_query(
+            "/public/points/leaderboard",
+            &[
+                ("limit", limit.map(|n| n.to_string())),
+                ("offset", offset.map(|n| n.to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /public/referral/{code}`. Whether a referral code or handle
+    /// exists (404 when it does not). Reveals no wallet and no figure.
+    pub async fn resolve_referral(&self, code: &str) -> Result<PublicReferral> {
+        self.get(&format!("/public/referral/{}", seg(code))).await
+    }
+
     // -- identity ----------------------------------------------------------
 
     /// `GET /v1/me`. The first call any integration should make.
@@ -205,6 +260,101 @@ impl Client {
             Some(n) => self.get(&format!("/v1/logs?limit={n}")).await,
             None => self.get("/v1/logs").await,
         }
+    }
+
+    /// `GET /v1/agents/{id}/value-history?range=`. The position's value per
+    /// bucket next to what its opening tokens would be worth held. `range` is
+    /// `24h`, `7d` (server default), `30d` or `all`.
+    pub async fn agent_value_history(
+        &self,
+        agent_id: &str,
+        range: Option<&str>,
+    ) -> Result<ValueHistory> {
+        self.get(&with_query(
+            &format!("/v1/agents/{}/value-history", seg(agent_id)),
+            &[("range", range.map(str::to_string))],
+        ))
+        .await
+    }
+
+    /// `GET /v1/agents/{id}/decisions?hours&limit`. Why the agent acted or
+    /// held: the server-computed state, what it evaluated and declined, and
+    /// which economics basis ran. Raw JSON. `hours` defaults to 24 (1 to 720).
+    pub async fn agent_decisions(
+        &self,
+        agent_id: &str,
+        hours: Option<i64>,
+        limit: Option<i64>,
+    ) -> Result<serde_json::Value> {
+        self.get(&with_query(
+            &format!("/v1/agents/{}/decisions", seg(agent_id)),
+            &[
+                ("hours", hours.map(|n| n.to_string())),
+                ("limit", limit.map(|n| n.to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /v1/agents/{id}/public-link`. The agent's live leaderboard link;
+    /// 404 when it is not shared.
+    pub async fn get_public_link(&self, agent_id: &str) -> Result<PublicLink> {
+        self.get(&format!("/v1/agents/{}/public-link", seg(agent_id)))
+            .await
+    }
+
+    /// `GET /v1/follows`. Slugs of the shared agents this account follows.
+    pub async fn list_follows(&self) -> Result<Follows> {
+        self.get("/v1/follows").await
+    }
+
+    /// `GET /v1/points`. This account's standing in the active season.
+    pub async fn points(&self) -> Result<MyPoints> {
+        self.get("/v1/points").await
+    }
+
+    /// `GET /v1/points/leaderboard?limit&offset`. The season board with this
+    /// account's row marked `is_me`.
+    pub async fn points_leaderboard(
+        &self,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<PointsLeaderboard> {
+        self.get(&with_query(
+            "/v1/points/leaderboard",
+            &[
+                ("limit", limit.map(|n| n.to_string())),
+                ("offset", offset.map(|n| n.to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /v1/referral`. Codes, handle, referred count and referral money
+    /// (earned, owed and unproven, never summed).
+    pub async fn referral(&self) -> Result<Referral> {
+        self.get("/v1/referral").await
+    }
+
+    /// `GET /v1/referral/creator?days=`. The Creator dashboard by UTC day
+    /// (`days` 7 to 90, default 30). 404 for an account without the tier;
+    /// claiming a handle grants it.
+    pub async fn creator_dashboard(&self, days: Option<i32>) -> Result<CreatorDashboard> {
+        self.get(&with_query(
+            "/v1/referral/creator",
+            &[("days", days.map(|n| n.to_string()))],
+        ))
+        .await
+    }
+
+    /// `GET /v1/referral/handle/check?handle=`. Can this account claim
+    /// `/r/<handle>`.
+    pub async fn check_handle(&self, handle: &str) -> Result<HandleCheck> {
+        self.get(&with_query(
+            "/v1/referral/handle/check",
+            &[("handle", Some(handle.to_string()))],
+        ))
+        .await
     }
 
     /// Any GET this crate does not name, decoded as raw JSON.
@@ -303,6 +453,151 @@ impl Client {
         .await
     }
 
+    /// `PATCH /v1/agents/{id}/config`. Change how an existing agent recenters
+    /// without exiting it.
+    ///
+    /// `patch` is a flat JSON object: a key with a value sets it, a key set to
+    /// `null` clears it back to its default, an absent key is unchanged. On a
+    /// bin rebalancer, conservative or volatility-aware agent the keys are
+    /// `recenter_mode` (`recenter`, `ping_pong` or `extend`),
+    /// `rebalance_direction`, `liquidity_shape`, `ping_pong_bid_bins`,
+    /// `ping_pong_ask_bins`, `ping_pong_spread_bins`, `shape_below`,
+    /// `shape_above`, `ratio_below_pct`, `rebalance_buffer`, `schedule_secs`,
+    /// `cooldown_sec` (60 to 86400) and `max_rebalances_per_day` (1 to 96).
+    /// `recenter_mode: "keep_side"` with `keep_side` (`token_x` or `token_y`)
+    /// keeps the position one-sided on that token. On Meteora, `reshape`
+    /// (`{shape, trigger_bins, buffer_bins?, alternate?}`, trigger 1 to 51)
+    /// re-deposits into the same position instead of closing and reopening;
+    /// `null` turns it off. Adaptive range recovery takes
+    /// `rebalance_cooldown_sec` and `max_rebalances_per_day`. Any other key,
+    /// the range width included, is a 422
+    /// naming it. Moves no funds; applies to the next recenter.
+    ///
+    /// ```no_run
+    /// # async fn demo(ponk: &ponk::Client, id: &str) -> Result<(), ponk::Error> {
+    /// let agent = ponk
+    ///     .update_config(id, &serde_json::json!({
+    ///         "recenter_mode": "extend",
+    ///         "ping_pong_bid_bins": null,
+    ///         "ping_pong_ask_bins": null
+    ///     }))
+    ///     .await?;
+    /// # let _ = agent;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn update_config(&self, agent_id: &str, patch: &serde_json::Value) -> Result<Agent> {
+        let path = format!("/v1/agents/{}/config", seg(agent_id));
+        let request = self.http.patch(self.url(&path)).timeout(self.timeout).json(patch);
+        self.send(request, &path, &[]).await
+    }
+
+    /// `POST /v1/agents/{id}/exits`. Change an existing agent's exits
+    /// (`tp_sl`) and fee handling (`automation`), each a partial patch with
+    /// the same null-clears rule as [`Client::update_config`]. A `None` block
+    /// is left out of the body and so left unchanged. Moves no funds.
+    ///
+    /// Besides `stop_loss_pct` and `take_profit_pct`, `tp_sl` takes
+    /// `take_profit_market_cap_usd`, `take_profit_position_value_usd` and
+    /// `take_profit_value_with_fees_usd`, each a positive USD figure.
+    pub async fn update_exits(
+        &self,
+        agent_id: &str,
+        tp_sl: Option<&serde_json::Value>,
+        automation: Option<&serde_json::Value>,
+    ) -> Result<Agent> {
+        self.post(
+            &format!("/v1/agents/{}/exits", seg(agent_id)),
+            Some(&exits_body(tp_sl, automation)),
+            self.timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/agents/{id}/auto-compound`. Turn auto-compound on or off.
+    ///
+    /// `min_claimable_base_units` is the pending-fee floor in base units
+    /// (`None` sends nothing, which the server reads as 0, the gas dust gate);
+    /// `min_claimable_usd` is the dollar floor (`None` leaves it off). Turning
+    /// it on while the agent accumulates fees is a 422. Moves no funds.
+    pub async fn set_auto_compound(
+        &self,
+        agent_id: &str,
+        auto_compound: bool,
+        min_claimable_base_units: Option<u64>,
+        min_claimable_usd: Option<f64>,
+    ) -> Result<Agent> {
+        self.post(
+            &format!("/v1/agents/{}/auto-compound", seg(agent_id)),
+            Some(&auto_compound_body(
+                auto_compound,
+                min_claimable_base_units,
+                min_claimable_usd,
+            )),
+            self.timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/agents/optimize-draft`. Rank settings for a draft agent, the
+    /// same answer the app's builder shows. Raw JSON. Needs a `trade` key;
+    /// moves no funds and creates nothing.
+    pub async fn optimize_draft(&self, draft: &serde_json::Value) -> Result<serde_json::Value> {
+        self.post("/v1/agents/optimize-draft", Some(draft), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/agents/{id}/public-link`. Publish an agent to the
+    /// leaderboard, or change the switches on its existing link (idempotent).
+    ///
+    /// `hide_usd` shares percentages only. `show_onchain` publishes the agent
+    /// wallet, position and signatures; `None` keeps what the link has (a new
+    /// link starts without it), and it is always off while `hide_usd` is set.
+    /// Ponk Clouds agents answer 422 while Clouds is parked.
+    pub async fn share_agent(
+        &self,
+        agent_id: &str,
+        hide_usd: bool,
+        show_onchain: Option<bool>,
+    ) -> Result<PublicLink> {
+        self.post(
+            &format!("/v1/agents/{}/public-link", seg(agent_id)),
+            Some(&share_body(hide_usd, show_onchain)),
+            self.timeout,
+        )
+        .await
+    }
+
+    /// `DELETE /v1/agents/{id}/public-link`. Stop sharing. The slug stays dead.
+    pub async fn unshare_agent(&self, agent_id: &str) -> Result<LinkRevoked> {
+        self.delete(&format!("/v1/agents/{}/public-link", seg(agent_id)))
+            .await
+    }
+
+    /// `POST /v1/follows/{slug}`. Be told when a shared agent opens,
+    /// rebalances or exits. Idempotent; your own agent is a 422.
+    pub async fn follow(&self, slug: &str) -> Result<Follow> {
+        self.post(&format!("/v1/follows/{}", seg(slug)), None::<&()>, self.timeout)
+            .await
+    }
+
+    /// `DELETE /v1/follows/{slug}`. Stop following. Idempotent.
+    pub async fn unfollow(&self, slug: &str) -> Result<Follow> {
+        self.delete(&format!("/v1/follows/{}", seg(slug))).await
+    }
+
+    /// `POST /v1/referral/handle`. Claim or change this account's
+    /// `/r/<handle>`. The old handle keeps working as a code, and a handle
+    /// makes the account a Creator. 409 when someone else owns it.
+    pub async fn claim_handle(&self, handle: &str) -> Result<Referral> {
+        self.post(
+            "/v1/referral/handle",
+            Some(&serde_json::json!({ "handle": handle })),
+            self.timeout,
+        )
+        .await
+    }
+
     // -- agents, fund moving (needs a `trade` key) -------------------------
 
     /// `POST /v1/agents/{id}/compound`. Claim fees and redeposit them now.
@@ -377,6 +672,11 @@ impl Client {
         self.send(request, path, &[]).await
     }
 
+    async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let request = self.http.delete(self.url(path)).timeout(self.timeout);
+        self.send(request, path, &[]).await
+    }
+
     async fn post<B: Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
@@ -424,6 +724,64 @@ impl Client {
 
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
+    }
+}
+
+/// The `/exits` body. An absent block is omitted rather than sent as null,
+/// because the server reads `null` there as "no patch" but a reader of the
+/// wire would not.
+fn exits_body(
+    tp_sl: Option<&serde_json::Value>,
+    automation: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    if let Some(t) = tp_sl {
+        body.insert("tp_sl".into(), t.clone());
+    }
+    if let Some(a) = automation {
+        body.insert("automation".into(), a.clone());
+    }
+    serde_json::Value::Object(body)
+}
+
+/// The `/auto-compound` body. Unset floors are omitted, never sent as 0.
+fn auto_compound_body(
+    auto_compound: bool,
+    min_claimable_base_units: Option<u64>,
+    min_claimable_usd: Option<f64>,
+) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    body.insert("auto_compound".into(), auto_compound.into());
+    if let Some(n) = min_claimable_base_units {
+        body.insert("compound_min_claimable_base_units".into(), n.into());
+    }
+    if let Some(u) = min_claimable_usd {
+        body.insert("compound_min_claimable_usd".into(), u.into());
+    }
+    serde_json::Value::Object(body)
+}
+
+/// The `/public-link` body. `show_onchain` is omitted when unset, so the link
+/// keeps what it has.
+fn share_body(hide_usd: bool, show_onchain: Option<bool>) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    body.insert("hide_usd".into(), hide_usd.into());
+    if let Some(on) = show_onchain {
+        body.insert("show_onchain".into(), on.into());
+    }
+    serde_json::Value::Object(body)
+}
+
+/// `path` plus the set query parameters, each value percent-encoded.
+fn with_query(path: &str, params: &[(&str, Option<String>)]) -> String {
+    let set: Vec<String> = params
+        .iter()
+        .filter_map(|(k, v)| v.as_ref().map(|v| format!("{k}={}", seg(v))))
+        .collect();
+    if set.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", set.join("&"))
     }
 }
 
@@ -544,5 +902,204 @@ mod tests {
     fn fund_calls_get_the_longer_timeout() {
         let c = Client::new("https://ponk.exchange/api", "k").unwrap();
         assert!(c.fund_timeout() > DEFAULT_TIMEOUT);
+    }
+
+    #[test]
+    fn the_exits_body_omits_an_absent_block() {
+        let tp = serde_json::json!({ "stop_loss_pct": 10.0, "take_profit_pct": null });
+        assert_eq!(
+            exits_body(Some(&tp), None),
+            serde_json::json!({ "tp_sl": { "stop_loss_pct": 10.0, "take_profit_pct": null } })
+        );
+        let auto = serde_json::json!({ "accumulate_fees": true });
+        assert_eq!(
+            exits_body(None, Some(&auto)),
+            serde_json::json!({ "automation": { "accumulate_fees": true } })
+        );
+    }
+
+    #[test]
+    fn the_auto_compound_body_omits_unset_floors() {
+        assert_eq!(
+            auto_compound_body(false, None, None),
+            serde_json::json!({ "auto_compound": false })
+        );
+        assert_eq!(
+            auto_compound_body(true, Some(1000), Some(0.5)),
+            serde_json::json!({
+                "auto_compound": true,
+                "compound_min_claimable_base_units": 1000,
+                "compound_min_claimable_usd": 0.5
+            })
+        );
+    }
+
+    /// One request against a throwaway local server: what goes on the wire
+    /// for a config edit is a PATCH to the agent's `/config` with the patch
+    /// verbatim, nulls included, and the bearer key.
+    #[tokio::test]
+    async fn update_config_patches_the_config_route_with_the_patch_verbatim() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut chunk).unwrap();
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Some(h) = text.find("\r\n\r\n") {
+                    let len = text[..h]
+                        .lines()
+                        .find_map(|l| {
+                            let l = l.to_ascii_lowercase();
+                            l.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= h + 4 + len {
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            let body = r#"{"id":"a1","recenter_mode":"extend"}"#;
+            write!(
+                sock,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+            String::from_utf8(buf).unwrap()
+        });
+        let c = Client::new(format!("http://{addr}"), "ponk_live_k").unwrap();
+        let patch = serde_json::json!({ "recenter_mode": "extend", "ping_pong_bid_bins": null });
+        let agent = c.update_config("a1", &patch).await.unwrap();
+        assert_eq!(agent.id.as_deref(), Some("a1"));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("PATCH /v1/agents/a1/config HTTP/1.1\r\n"), "{raw}");
+        assert!(raw.to_ascii_lowercase().contains("authorization: bearer ponk_live_k"), "{raw}");
+        let body = &raw[raw.find("\r\n\r\n").unwrap() + 4..];
+        let sent: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(sent, patch);
+    }
+
+    #[test]
+    fn a_query_carries_only_the_set_parameters_encoded() {
+        assert_eq!(with_query("/v1/points/leaderboard", &[("limit", None), ("offset", None)]), "/v1/points/leaderboard");
+        assert_eq!(
+            with_query("/v1/referral/handle/check", &[("handle", Some("a b&c".into()))]),
+            "/v1/referral/handle/check?handle=a%20b%26c"
+        );
+        assert_eq!(
+            with_query("/x", &[("limit", Some("5".into())), ("offset", None), ("hours", Some("48".into()))]),
+            "/x?limit=5&hours=48"
+        );
+    }
+
+    #[test]
+    fn the_share_body_omits_an_unset_onchain_switch() {
+        assert_eq!(share_body(true, None), serde_json::json!({ "hide_usd": true }));
+        assert_eq!(
+            share_body(false, Some(true)),
+            serde_json::json!({ "hide_usd": false, "show_onchain": true })
+        );
+    }
+
+    #[test]
+    fn a_leaderboard_row_decodes_and_copies_into_a_create_body() {
+        let row: LeaderboardRow = serde_json::from_value(serde_json::json!({
+            "rank": 1, "slug": "abc123", "pnl_usd": "12.34", "fees_earned_usd": null,
+            "spark": [1.0, null], "future_field": true,
+            "copy": { "dex": "meteora_dlmm", "pool_address": "POOL", "strategy": "bin_rebalancer",
+                      "config": { "kind": "bin_rebalancer", "target_bin_width": 11 } }
+        }))
+        .unwrap();
+        assert_eq!(row.pnl_usd.as_deref(), Some("12.34"));
+        assert!(row.fees_earned_usd.is_none());
+        assert_eq!(row.spark, vec![Some(1.0), None]);
+        let agent = row.copy.to_new_agent("copy", "GYdJ").expect("a copy block");
+        assert_eq!(agent.pool_address.as_deref(), Some("POOL"));
+        assert_eq!(agent.config["target_bin_width"], 11);
+        assert!(AgentCopy::default().to_new_agent("x", "y").is_none());
+    }
+
+    /// A one-request local server answering `body`; returns the raw request.
+    fn one_shot(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut chunk).unwrap();
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Some(h) = text.find("\r\n\r\n") {
+                    let len = text[..h]
+                        .lines()
+                        .find_map(|l| {
+                            let l = l.to_ascii_lowercase();
+                            l.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= h + 4 + len {
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            write!(
+                sock,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+            String::from_utf8(buf).unwrap()
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn unfollow_sends_a_delete_with_the_key() {
+        let (base, server) = one_shot(r#"{"slug":"abc123","following":false,"followers":2}"#);
+        let c = Client::new(base, "ponk_live_k").unwrap();
+        let f = c.unfollow("abc123").await.unwrap();
+        assert_eq!(f.following, Some(false));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("DELETE /v1/follows/abc123 HTTP/1.1\r\n"), "{raw}");
+        assert!(raw.to_ascii_lowercase().contains("authorization: bearer ponk_live_k"), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn the_public_board_needs_no_key_and_passes_the_window() {
+        let (base, server) = one_shot(r#"{"ranked":[],"unranked":[],"window":"30d"}"#);
+        let c = Client::public(base).unwrap();
+        let board = c.leaderboard(Some("30d")).await.unwrap();
+        assert_eq!(board.window.as_deref(), Some("30d"));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("GET /public/agents-leaderboard?window=30d HTTP/1.1\r\n"), "{raw}");
+        assert!(!raw.to_ascii_lowercase().contains("authorization:"), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn claim_handle_posts_the_handle() {
+        let (base, server) = one_shot(r#"{"code":"kader","handle":"kader","codes":[]}"#);
+        let c = Client::new(base, "ponk_live_k").unwrap();
+        let r = c.claim_handle("kader").await.unwrap();
+        assert_eq!(r.handle.as_deref(), Some("kader"));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/referral/handle HTTP/1.1\r\n"), "{raw}");
+        let body = &raw[raw.find("\r\n\r\n").unwrap() + 4..];
+        assert_eq!(serde_json::from_str::<serde_json::Value>(body).unwrap(), serde_json::json!({ "handle": "kader" }));
     }
 }

@@ -330,6 +330,38 @@ class TestRequests(unittest.TestCase):
             opener.calls[0]["headers"]["User-agent"], "ponk-python/" + ponk.__version__
         )
 
+    def test_update_config_patches_with_nulls_kept(self):
+        c, opener = client(AGENT)
+        c.update_config("a", {"recenter_mode": "extend", "ping_pong_bid_bins": None})
+        call = opener.calls[0]
+        self.assertEqual(call["method"], "PATCH")
+        self.assertEqual(call["url"], "https://example.test/api/v1/agents/a/config")
+        self.assertEqual(call["body"], {"recenter_mode": "extend", "ping_pong_bid_bins": None})
+
+    def test_update_exits_omits_an_unset_block(self):
+        c, opener = client(AGENT)
+        c.update_exits("a", tp_sl={"stop_loss_pct": 10.0, "take_profit_pct": None})
+        self.assertEqual(opener.calls[0]["method"], "POST")
+        self.assertEqual(opener.calls[0]["url"], "https://example.test/api/v1/agents/a/exits")
+        self.assertEqual(
+            opener.calls[0]["body"], {"tp_sl": {"stop_loss_pct": 10.0, "take_profit_pct": None}}
+        )
+
+    def test_set_auto_compound_omits_unset_floors(self):
+        c, opener = client(AGENT)
+        c.set_auto_compound("a", False)
+        self.assertEqual(opener.calls[0]["url"], "https://example.test/api/v1/agents/a/auto-compound")
+        self.assertEqual(opener.calls[0]["body"], {"auto_compound": False})
+        c.set_auto_compound("a", True, min_claimable_usd=0.5)
+        self.assertEqual(
+            opener.calls[1]["body"], {"auto_compound": True, "compound_min_claimable_usd": 0.5}
+        )
+
+    def test_a_refused_config_key_raises_unprocessable(self):
+        c, _ = client({"error": "target_bin_width cannot be changed on an existing agent."}, status=422)
+        with self.assertRaises(PonkUnprocessableError):
+            c.update_config("a", {"target_bin_width": 20})
+
     def test_withdraw_sends_lamports_and_no_destination(self):
         c, opener = client({"signature": "sig", "lamports": 500000000, "destination": "GYdJ", "source": "AGENT"})
         out = c.withdraw("a", lamports=500_000_000)

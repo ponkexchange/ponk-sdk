@@ -38,7 +38,7 @@ drive that from your own code instead of the app.
 # Python, from PyPI (0.2.0 today)
 pip install ponk
 
-# Python, this repository (0.3.0, not yet on PyPI)
+# Python, this repository (0.4.0, not yet on PyPI)
 pip install "git+https://github.com/ponkexchange/ponk-sdk#subdirectory=python"
 ```
 
@@ -141,9 +141,9 @@ retrying an authentication failure forever.
 
 | | |
 |---|---|
-| **Read** | `whoami` · `list_agents` · `get_agent` · `agent_performance` · `agent_position` · `agent_wallet` · `agent_mandate` · `list_positions` · `list_logs` |
-| **Act** (`trade` scope) | `create_agent` · `pause_agent` · `resume_agent` · `set_dry_run` · `set_mode` · `set_autonomous` · `compound` · `withdraw` · `exit_agent` |
-| **Public** (no key) | `health` · `pool` · `range_cost` · `ponk_perks` |
+| **Read** | `whoami` · `list_agents` · `get_agent` · `agent_performance` · `agent_position` · `agent_value_history` · `agent_decisions` · `agent_wallet` · `agent_mandate` · `list_positions` · `list_logs` · `get_public_link` · `list_follows` · `points` · `points_leaderboard` · `referral` · `creator_dashboard` · `check_handle` |
+| **Act** (`trade` scope) | `create_agent` · `copy_agent` (Python) · `optimize_draft` · `pause_agent` · `resume_agent` · `set_dry_run` · `set_mode` · `update_config` · `update_exits` · `set_auto_compound` · `set_autonomous` · `share_agent` · `unshare_agent` · `follow` · `unfollow` · `claim_handle` · `compound` · `withdraw` · `exit_agent` |
+| **Public** (no key) | `health` · `pool` · `range_cost` · `ponk_perks` · `leaderboard` · `public_agent` · `public_agent_value_history` · `public_points_leaderboard` · `resolve_referral` |
 
 `create_agent` accepts `dry_run=True`, which runs the whole decision loop and
 records what it *would* have done without sending a transaction. Start there.
@@ -155,6 +155,37 @@ argument for that reason.
 signed in the app, or off. It cannot create a mandate. `agent_mandate` reads
 that mandate's expiry, which is the thing to watch: a lapsed mandate stops the
 agent signing without any error.
+
+## Copy a Top Ponkillionaire
+
+Every agent its owner chose to share is on the public leaderboard, ranked
+against holding its opening tokens, and every row carries a `copy` block: the
+venue, pool, strategy and config, with nothing of the owner's in it. Copying is
+a read and a create on your own wallet; the leaderboard needs no key.
+
+```python
+board = ponk.leaderboard(window="7d")
+best = board.ranked[0]
+print(best.slug, best.vs_hodl_pct, best.pnl_usd or "-")
+
+agent = ponk.copy_agent(best, name="copied " + best.slug,
+                        wallet_address=me.wallet_address, dry_run=True)
+ponk.follow(best.slug)        # told when it opens, rebalances or exits
+ponk.share_agent(agent.id)    # put yours on the board too
+```
+
+```rust
+let board = ponk.leaderboard(Some("7d")).await?;
+let best = &board.ranked[0];
+let body = best.copy.to_new_agent("copied", &wallet).expect("copyable");
+let agent = ponk.create_agent(&body).await?;
+ponk.follow(best.slug.as_deref().unwrap_or_default()).await?;
+```
+
+Points (Season 1) and referrals are readable with the same key:
+`points()`, `points_leaderboard()`, `referral()` (earned, owed and unproven,
+never summed) and, once you claim a handle with `claim_handle`, the Creator
+dashboard at `creator_dashboard()`.
 
 ## Ranges are the whole game
 
@@ -189,6 +220,8 @@ To report something, see
 [SECURITY.md](https://github.com/ponkexchange/ponkexchange/blob/main/SECURITY.md).
 
 ## Versioning
+
+Changes per release are in [CHANGELOG.md](CHANGELOG.md).
 
 Each client carries its own version (`python/ponk/_version.py`,
 `rust/Cargo.toml`) and tracks the deployed API. The API is versioned at

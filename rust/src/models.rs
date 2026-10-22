@@ -599,7 +599,8 @@ pub struct NewAgent {
     pub wallet_address: String,
     /// `meteora_dlmm`, `orca`, `ponk_clouds` or `raydium`. An `entry_agent`
     /// (Degen Mode in the app) discovers its pool by screening, which works
-    /// only on `meteora_dlmm`.
+    /// only on `meteora_dlmm`, and its config may carry a bin step filter,
+    /// `min_bin_step` and `max_bin_step` (each 1 to 1000).
     pub dex: String,
     pub strategy: String,
     /// Strategy-specific configuration, matching the declared `strategy`.
@@ -791,4 +792,315 @@ mod tests {
         assert_eq!(pos.price_samples, vec![1.0, 1.1]);
         assert_eq!(pos.in_range, Some(false));
     }
+}
+
+// --------------------------------------------------------------------------
+// Leaderboard, sharing and follows (0.4.0)
+// --------------------------------------------------------------------------
+
+/// What a copy of a shared agent starts from: venue, pool, strategy and the
+/// strategy config with anything owner-specific removed.
+/// [`AgentCopy::to_new_agent`] turns it into a create body.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentCopy {
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub strategy: Option<String>,
+    pub config: serde_json::Value,
+}
+
+impl AgentCopy {
+    /// A [`NewAgent`] on YOUR wallet with this copy's venue, pool, strategy
+    /// and config. `None` when the copy carries no strategy or venue.
+    pub fn to_new_agent(
+        &self,
+        name: impl Into<String>,
+        wallet_address: impl Into<String>,
+    ) -> Option<NewAgent> {
+        let dex = self.dex.clone().filter(|s| !s.is_empty())?;
+        let strategy = self.strategy.clone().filter(|s| !s.is_empty())?;
+        let config = if self.config.is_object() {
+            self.config.clone()
+        } else {
+            serde_json::json!({ "kind": strategy })
+        };
+        let mut agent = NewAgent::new(name, wallet_address, dex, strategy, config);
+        agent.pool_address = self.pool_address.clone();
+        Some(agent)
+    }
+}
+
+/// One row of the Top Ponkillionaires board.
+///
+/// `rank` is `None` on an unranked row and `unranked_reason` says why. USD
+/// figures are decimal strings, `None` when the link hides USD or the figure
+/// cannot be priced. Nested blocks the board may grow are kept as JSON.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LeaderboardRow {
+    pub rank: Option<i64>,
+    pub slug: Option<String>,
+    pub dex: Option<String>,
+    pub strategy: Option<String>,
+    pub pool_address: Option<String>,
+    pub token_x_mint: Option<String>,
+    pub token_y_mint: Option<String>,
+    pub running_since: Option<String>,
+    pub vs_hodl_pct: Option<f64>,
+    pub score_pct: Option<f64>,
+    pub pnl_pct: Option<f64>,
+    pub drawdown_pct: Option<f64>,
+    pub unranked_reason: Option<String>,
+    pub owner_key: Option<String>,
+    pub handle: Option<String>,
+    pub usd_hidden: Option<bool>,
+    pub window: Option<String>,
+    pub pnl_usd: Option<String>,
+    pub roi_pct: Option<f64>,
+    pub basis_usd: Option<String>,
+    pub fees_realized_usd: Option<String>,
+    pub fees_earned_usd: Option<String>,
+    pub fees_unclaimed_usd: Option<String>,
+    pub deposited_usd: Option<String>,
+    pub spark: Vec<Option<f64>>,
+    pub followers: Option<i64>,
+    pub crew: Option<String>,
+    pub win_rate: Option<serde_json::Value>,
+    pub copy: AgentCopy,
+}
+
+/// `GET /public/agents-leaderboard`: ranked and unranked shared agents.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Leaderboard {
+    pub ranked: Vec<LeaderboardRow>,
+    pub unranked: Vec<LeaderboardRow>,
+    /// `24h`, `7d`, `30d` or `all`.
+    pub window: Option<String>,
+    pub min_days: Option<i64>,
+    pub min_hodl_usd: Option<f64>,
+    pub min_win_samples: Option<i64>,
+    /// The board header (shared, ranked, LPers, crews, verified, summed
+    /// figures), as sent.
+    pub totals: Option<serde_json::Value>,
+    pub computed_at: Option<String>,
+}
+
+/// `GET /public/agents/{slug}`: a shared agent's public profile.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PublicAgent {
+    pub slug: Option<String>,
+    pub usd_hidden: Option<bool>,
+    pub shared_at: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub token_x_mint: Option<String>,
+    pub token_y_mint: Option<String>,
+    pub bin_step: Option<u16>,
+    pub strategy: Option<String>,
+    pub status: Option<String>,
+    pub running_since: Option<String>,
+    /// `None` with `performance_unavailable` naming the reason.
+    pub performance: Option<serde_json::Value>,
+    pub performance_unavailable: Option<String>,
+    pub proof: Option<serde_json::Value>,
+    pub counts: Option<serde_json::Value>,
+    pub copy: AgentCopy,
+    pub owner_key: Option<String>,
+    pub handle: Option<String>,
+    pub followers: Option<i64>,
+    pub win_rate: Option<serde_json::Value>,
+    pub crew: Option<String>,
+    /// Present only when the owner turned on-chain proof on, and never beside
+    /// a percent-only link.
+    pub onchain: Option<serde_json::Value>,
+    pub computed_at: Option<String>,
+}
+
+/// An agent's position value over time against holding its opening tokens.
+/// A bucket with no reading is null in `points`, never interpolated.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ValueHistory {
+    pub range: Option<String>,
+    pub bucket_secs: Option<i64>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub points: Vec<serde_json::Value>,
+    pub hodl_since: Option<String>,
+    pub positions: Option<u64>,
+}
+
+/// An agent's live public link. `path` is site-relative (`/a/<slug>`), and
+/// `show_onchain` is always false while `hide_usd` is set.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PublicLink {
+    pub slug: Option<String>,
+    pub path: Option<String>,
+    pub hide_usd: Option<bool>,
+    pub show_onchain: Option<bool>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LinkRevoked {
+    pub revoked: Option<bool>,
+}
+
+/// The result of a follow or unfollow, with the agent's follower count.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Follow {
+    pub slug: Option<String>,
+    pub following: Option<bool>,
+    pub followers: Option<i64>,
+}
+
+/// Slugs this account follows, newest first.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Follows {
+    pub slugs: Vec<String>,
+}
+
+// --------------------------------------------------------------------------
+// Points and referrals (0.4.0)
+// --------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PointsSeason {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+    pub multiplier: Option<String>,
+}
+
+/// This account's standing in the active season. `season` is `None` between
+/// seasons. Points are decimal strings; `rank` is `None` until earned.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct MyPoints {
+    pub season: Option<PointsSeason>,
+    pub total_points: Option<String>,
+    pub tvl_time_points: Option<String>,
+    pub fee_paid_points: Option<String>,
+    pub referral_points: Option<String>,
+    pub event_count: Option<i64>,
+    pub rank: Option<i64>,
+    pub participant_count: Option<i64>,
+}
+
+/// One points row. `display_code` is a referral code, never a wallet.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PointsEntry {
+    pub rank: Option<i64>,
+    pub display_code: Option<String>,
+    pub total_points: Option<String>,
+    pub tvl_time_points: Option<String>,
+    pub fee_paid_points: Option<String>,
+    pub referral_points: Option<String>,
+    pub is_me: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PointsLeaderboard {
+    pub season: Option<PointsSeason>,
+    pub participant_count: Option<i64>,
+    pub entries: Vec<PointsEntry>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ReferralCode {
+    pub code: Option<String>,
+    pub label: Option<String>,
+    pub created_at: Option<String>,
+}
+
+/// Referral codes, handle and money. EARNED (`total_earned_usd`), OWED
+/// (`owed_usd`) and UNPROVEN (`unproven_usd`) are three different facts:
+/// never add them.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Referral {
+    pub code: Option<String>,
+    pub codes: Vec<ReferralCode>,
+    pub referred_by_code: Option<String>,
+    pub referred_count: Option<i64>,
+    pub total_payouts: Option<i64>,
+    pub total_earned_usd: Option<f64>,
+    pub back_paid_usd: Option<f64>,
+    pub back_paid_events: Option<i64>,
+    pub owed_usd: Option<f64>,
+    pub owed_events: Option<i64>,
+    pub owed_unpriced_events: Option<i64>,
+    pub unproven_usd: Option<f64>,
+    pub unproven_events: Option<i64>,
+    pub unpriced_payouts: Option<i64>,
+    pub creator_handle: Option<String>,
+    pub referred_active_agents: Option<i64>,
+    pub referred_lp_fees_usd: Option<f64>,
+    pub handle: Option<String>,
+    pub creator_application: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CreatorTotals {
+    pub referred_wallets: Option<i64>,
+    pub referred_with_active_agent: Option<i64>,
+    pub active_agents: Option<i64>,
+    pub lp_fees_usd: Option<f64>,
+    pub ponk_fees_usd: Option<f64>,
+    pub earned_usd: Option<f64>,
+    pub fee_events: Option<i64>,
+    pub unpriced_events: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CreatorDay {
+    /// UTC calendar day, `YYYY-MM-DD`.
+    pub day: Option<String>,
+    pub signups: Option<i64>,
+    pub lp_fees_usd: Option<f64>,
+    pub ponk_fees_usd: Option<f64>,
+    pub earned_usd: Option<f64>,
+    pub fee_events: Option<i64>,
+}
+
+/// The Creator dashboard: totals and one row per UTC day, oldest first.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CreatorDashboard {
+    pub handle: Option<String>,
+    pub granted_at: Option<String>,
+    pub totals: CreatorTotals,
+    pub days: Vec<CreatorDay>,
+}
+
+/// Whether a `/r/<handle>` can be claimed; `reason` when it cannot.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct HandleCheck {
+    pub handle: Option<String>,
+    pub available: Option<bool>,
+    pub reason: Option<String>,
+}
+
+/// `GET /public/referral/{code}`: the code exists, and `creator` when it is a
+/// Creator's handle. Reveals no wallet and no figure.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PublicReferral {
+    pub code: Option<String>,
+    pub creator: Option<bool>,
 }

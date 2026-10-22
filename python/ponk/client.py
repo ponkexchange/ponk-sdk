@@ -82,12 +82,25 @@ from .models import (
     AgentPosition,
     AgentWallet,
     AutonomousState,
+    CreatorDashboard,
+    Follow,
+    Follows,
+    HandleCheck,
     Health,
+    Leaderboard,
+    LinkRevoked,
     Mandate,
+    MyPoints,
+    PointsLeaderboard,
     PonkPerks,
     PoolSnapshot,
     Position,
+    PublicAgent,
+    PublicLink,
+    PublicReferral,
     RangeCost,
+    Referral,
+    ValueHistory,
     WhoAmI,
     Withdrawal,
 )
@@ -240,6 +253,66 @@ class PonkClient:
             self._request("GET", "/public/ponk/perks/{0}".format(_seg(wallet_address)))
         )
 
+    def leaderboard(self, window: Optional[str] = None) -> Leaderboard:
+        """`GET /public/agents-leaderboard?window=`. Top Ponkillionaires.
+
+        Every agent its owner chose to share, ranked against holding. `window`
+        is `24h`, `7d`, `30d` or `all` (server default when omitted). No key
+        needed; rate limited per IP. Each row carries `copy`, so a row can be
+        copied with `copy_agent` without a second read.
+        """
+        return Leaderboard.from_dict(
+            self._request("GET", "/public/agents-leaderboard", params={"window": window})
+        )
+
+    def public_agent(self, slug: str) -> PublicAgent:
+        """`GET /public/agents/{slug}`. A shared agent's public profile.
+
+        No key needed. Raises `PonkNotFoundError` for an unknown slug; a slug
+        whose owner stopped sharing it answers 410, raised as `PonkAPIError`.
+        """
+        return PublicAgent.from_dict(
+            self._request("GET", "/public/agents/{0}".format(_seg(slug)))
+        )
+
+    def public_agent_value_history(self, slug: str, range: Optional[str] = None) -> ValueHistory:
+        """`GET /public/agents/{slug}/value-history?range=`. The profile's chart.
+
+        `range` is `24h`, `7d`, `30d` or `all`. A link that hides USD answers
+        404, because every point is a dollar figure. No key needed.
+        """
+        return ValueHistory.from_dict(
+            self._request(
+                "GET",
+                "/public/agents/{0}/value-history".format(_seg(slug)),
+                params={"range": range},
+            )
+        )
+
+    def public_points_leaderboard(
+        self, limit: Optional[int] = None, offset: Optional[int] = None
+    ) -> PointsLeaderboard:
+        """`GET /public/points/leaderboard`. The points season board, signed out.
+
+        Handles are referral codes, never wallets; `is_me` is always false
+        here. `limit` is clamped to 1 to 100 on the server.
+        """
+        return PointsLeaderboard.from_dict(
+            self._request(
+                "GET", "/public/points/leaderboard", params={"limit": limit, "offset": offset}
+            )
+        )
+
+    def resolve_referral(self, code: str) -> PublicReferral:
+        """`GET /public/referral/{code}`. Whether a referral code or handle exists.
+
+        Raises `PonkNotFoundError` when it does not. Reveals no wallet and no
+        figure. No key needed.
+        """
+        return PublicReferral.from_dict(
+            self._request("GET", "/public/referral/{0}".format(_seg(code)))
+        )
+
     # -- identity ----------------------------------------------------------
 
     def whoami(self) -> WhoAmI:
@@ -312,6 +385,84 @@ class PonkClient:
             self._request("GET", "/v1/logs", params={"limit": limit})
         )
 
+    def agent_value_history(self, agent_id: str, range: Optional[str] = None) -> ValueHistory:
+        """`GET /v1/agents/{id}/value-history?range=`. Value against holding.
+
+        The position's value per bucket next to what its opening tokens would
+        be worth held. `range` is `24h`, `7d` (server default), `30d` or `all`.
+        A bucket with no reading is `None`, never filled in.
+        """
+        return ValueHistory.from_dict(
+            self._request(
+                "GET",
+                "/v1/agents/{0}/value-history".format(_seg(agent_id)),
+                params={"range": range},
+            )
+        )
+
+    def agent_decisions(
+        self, agent_id: str, hours: Optional[int] = None, limit: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """`GET /v1/agents/{id}/decisions?hours&limit`. Why the agent acted or held.
+
+        The server-computed agent state, what it evaluated, what it declined
+        and why, and which economics basis ran. Returned as the decoded JSON
+        object. `hours` defaults to 24 (1 to 720), `limit` to 50.
+        """
+        return self._request(
+            "GET",
+            "/v1/agents/{0}/decisions".format(_seg(agent_id)),
+            params={"hours": hours, "limit": limit},
+        )
+
+    def get_public_link(self, agent_id: str) -> PublicLink:
+        """`GET /v1/agents/{id}/public-link`. The agent's live leaderboard link.
+
+        Raises `PonkNotFoundError` when the agent is not shared.
+        """
+        return PublicLink.from_dict(
+            self._request("GET", "/v1/agents/{0}/public-link".format(_seg(agent_id)))
+        )
+
+    def list_follows(self) -> Follows:
+        """`GET /v1/follows`. Slugs of the shared agents this account follows."""
+        return Follows.from_dict(self._request("GET", "/v1/follows"))
+
+    def points(self) -> MyPoints:
+        """`GET /v1/points`. This account's standing in the active points season."""
+        return MyPoints.from_dict(self._request("GET", "/v1/points"))
+
+    def points_leaderboard(
+        self, limit: Optional[int] = None, offset: Optional[int] = None
+    ) -> PointsLeaderboard:
+        """`GET /v1/points/leaderboard`. The season board with your row marked `is_me`."""
+        return PointsLeaderboard.from_dict(
+            self._request("GET", "/v1/points/leaderboard", params={"limit": limit, "offset": offset})
+        )
+
+    def referral(self) -> Referral:
+        """`GET /v1/referral`. Codes, handle, referred count and referral money.
+
+        Earned, owed and unproven are separate facts; never add them.
+        """
+        return Referral.from_dict(self._request("GET", "/v1/referral"))
+
+    def creator_dashboard(self, days: Optional[int] = None) -> CreatorDashboard:
+        """`GET /v1/referral/creator?days=`. The Creator dashboard by UTC day.
+
+        `days` defaults to 30 (clamped 7 to 90). Raises `PonkNotFoundError`
+        for an account without the Creator tier; claiming a handle grants it.
+        """
+        return CreatorDashboard.from_dict(
+            self._request("GET", "/v1/referral/creator", params={"days": days})
+        )
+
+    def check_handle(self, handle: str) -> HandleCheck:
+        """`GET /v1/referral/handle/check?handle=`. Can this account claim /r/<handle>."""
+        return HandleCheck.from_dict(
+            self._request("GET", "/v1/referral/handle/check", params={"handle": handle})
+        )
+
     def get_json(self, path: str, params: Optional[Mapping[str, Any]] = None) -> Any:
         """Any GET this client does not name, decoded as raw JSON.
 
@@ -369,6 +520,9 @@ class PonkClient:
         pool: `pool_address` and `position_address` are ignored, and the
         config's `venues` must include one where ponk can discover pools,
         which today is only `meteora_dlmm`.
+        Its config may carry a bin step filter, `min_bin_step` and
+        `max_bin_step` (each 1 to 1000, max at least min), so the screener only
+        enters pools inside that band.
         """
         if not isinstance(dry_run, bool):
             raise TypeError(
@@ -454,6 +608,189 @@ class PonkClient:
                 "/v1/agents/{0}/mode".format(_seg(agent_id)),
                 body={"mode": mode},
             )
+        )
+
+    def update_config(self, agent_id: str, patch: Mapping[str, Any]) -> Agent:
+        """`PATCH /v1/agents/{id}/config`. Change how an agent recenters.
+
+        `patch` is a flat partial patch: a key with a value sets it, a key set
+        to `None` clears it back to its default, an absent key is unchanged.
+        On a bin rebalancer, conservative or volatility-aware agent the keys
+        are `recenter_mode` (`recenter`, `ping_pong` or `extend`),
+        `rebalance_direction`, `liquidity_shape`, `ping_pong_bid_bins`,
+        `ping_pong_ask_bins`, `ping_pong_spread_bins`, `shape_below`,
+        `shape_above`, `ratio_below_pct`, `rebalance_buffer`,
+        `schedule_secs`, `cooldown_sec` (60 to 86400) and
+        `max_rebalances_per_day` (1 to 96). `recenter_mode="keep_side"` with
+        `keep_side` (`token_x` or `token_y`) keeps the position one-sided on
+        that token. On Meteora, `reshape` (`{"shape", "trigger_bins",
+        "buffer_bins"?, "alternate"?}`, trigger 1 to 51) re-deposits into the
+        same position at N bins out instead of closing and reopening; `None`
+        turns it off. Adaptive range recovery takes `rebalance_cooldown_sec`
+        and `max_rebalances_per_day`. Any other key, the range width included, raises
+        `PonkUnprocessableError` naming it. Moves no funds; applies to the
+        next recenter.
+        """
+        return Agent.from_dict(
+            self._request(
+                "PATCH",
+                "/v1/agents/{0}/config".format(_seg(agent_id)),
+                body=dict(patch),
+            )
+        )
+
+    def update_exits(
+        self,
+        agent_id: str,
+        tp_sl: Optional[Mapping[str, Any]] = None,
+        automation: Optional[Mapping[str, Any]] = None,
+    ) -> Agent:
+        """`POST /v1/agents/{id}/exits`. Change exits and fee handling.
+
+        `tp_sl` and `automation` are partial patches with the same rule as
+        `update_config` (`None` inside a block clears that key). A block left
+        unset is not sent and stays as stored. Moves no funds.
+
+        Besides `stop_loss_pct` and `take_profit_pct`, `tp_sl` takes
+        `take_profit_market_cap_usd` (the volatile token's market cap),
+        `take_profit_position_value_usd` (the position's two legs) and
+        `take_profit_value_with_fees_usd` (legs plus unclaimed fees), each a
+        positive USD figure.
+        """
+        body: Dict[str, Any] = {}
+        if tp_sl is not None:
+            body["tp_sl"] = dict(tp_sl)
+        if automation is not None:
+            body["automation"] = dict(automation)
+        return Agent.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/{0}/exits".format(_seg(agent_id)),
+                body=body,
+            )
+        )
+
+    def set_auto_compound(
+        self,
+        agent_id: str,
+        auto_compound: bool,
+        min_claimable_base_units: Optional[int] = None,
+        min_claimable_usd: Optional[float] = None,
+    ) -> Agent:
+        """`POST /v1/agents/{id}/auto-compound`. Turn auto-compound on or off.
+
+        Unset floors are not sent: the base-units floor then defaults to 0
+        (the gas dust gate) and the dollar floor stays off. Turning it on while
+        the agent accumulates fees raises `PonkUnprocessableError`. Moves no
+        funds.
+        """
+        body: Dict[str, Any] = {"auto_compound": auto_compound}
+        if min_claimable_base_units is not None:
+            body["compound_min_claimable_base_units"] = min_claimable_base_units
+        if min_claimable_usd is not None:
+            body["compound_min_claimable_usd"] = min_claimable_usd
+        return Agent.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/{0}/auto-compound".format(_seg(agent_id)),
+                body=body,
+            )
+        )
+
+    def optimize_draft(self, draft: Mapping[str, Any]) -> Dict[str, Any]:
+        """`POST /v1/agents/optimize-draft`. Rank settings for a draft agent.
+
+        The same answer the app's builder shows, for a draft `create_agent`
+        body. Returned as the decoded JSON object. Needs a `trade` key (the
+        scope `create_agent` needs). Moves no funds and creates nothing.
+        """
+        return self._request("POST", "/v1/agents/optimize-draft", body=dict(draft))
+
+    def copy_agent(
+        self,
+        source: Any,
+        *,
+        name: str,
+        wallet_address: str,
+        dry_run: bool,
+        config_overrides: Optional[Mapping[str, Any]] = None,
+    ) -> Agent:
+        """Copy a shared agent: `create_agent` from its public `copy` block.
+
+        `source` is a slug, a `PublicAgent` or a `LeaderboardRow`. A slug is
+        read with `public_agent` first. The new agent is yours, on your
+        wallet, with the same venue, pool, strategy and config; nothing of the
+        owner's is shared. `config_overrides` is merged over the copied config
+        (for example a narrower range). `dry_run` is required, as in
+        `create_agent`.
+        """
+        if isinstance(source, str):
+            source = self.public_agent(source)
+        copy = getattr(source, "copy", None)
+        if copy is None or not copy.strategy or not copy.dex:
+            raise ValueError("that agent carries no copy block to start from")
+        config: Dict[str, Any] = dict(copy.config or {})
+        if config_overrides:
+            config.update(config_overrides)
+        return self.create_agent(
+            name=name,
+            wallet_address=wallet_address,
+            dex=copy.dex,
+            pool_address=copy.pool_address,
+            strategy=copy.strategy,
+            config=config,
+            dry_run=dry_run,
+        )
+
+    def share_agent(
+        self,
+        agent_id: str,
+        *,
+        hide_usd: bool = False,
+        show_onchain: Optional[bool] = None,
+    ) -> PublicLink:
+        """`POST /v1/agents/{id}/public-link`. Publish an agent to the leaderboard.
+
+        Idempotent: one live link per agent, and calling again changes its
+        privacy switches. `hide_usd=True` shares percentages only.
+        `show_onchain` publishes the agent wallet, position and signatures;
+        left as `None` it keeps what the link has (a new link starts without
+        it), and it is always off while `hide_usd` is set. Ponk Clouds agents
+        cannot be shared while Clouds is parked (`PonkUnprocessableError`).
+        """
+        body: Dict[str, Any] = {"hide_usd": hide_usd}
+        if show_onchain is not None:
+            body["show_onchain"] = show_onchain
+        return PublicLink.from_dict(
+            self._request("POST", "/v1/agents/{0}/public-link".format(_seg(agent_id)), body=body)
+        )
+
+    def unshare_agent(self, agent_id: str) -> LinkRevoked:
+        """`DELETE /v1/agents/{id}/public-link`. Stop sharing. The slug stays dead."""
+        return LinkRevoked.from_dict(
+            self._request("DELETE", "/v1/agents/{0}/public-link".format(_seg(agent_id)))
+        )
+
+    def follow(self, slug: str) -> Follow:
+        """`POST /v1/follows/{slug}`. Be told when a shared agent opens, rebalances or exits.
+
+        Idempotent. Following your own agent raises `PonkUnprocessableError`.
+        """
+        return Follow.from_dict(self._request("POST", "/v1/follows/{0}".format(_seg(slug))))
+
+    def unfollow(self, slug: str) -> Follow:
+        """`DELETE /v1/follows/{slug}`. Stop following. Idempotent."""
+        return Follow.from_dict(self._request("DELETE", "/v1/follows/{0}".format(_seg(slug))))
+
+    def claim_handle(self, handle: str) -> Referral:
+        """`POST /v1/referral/handle`. Claim or change this account's /r/<handle>.
+
+        The old handle keeps working as a referral code, and a handle makes
+        the account a Creator. Raises `PonkConflictError` when someone else
+        owns it and `PonkBadRequestError` for a handle the rules refuse.
+        """
+        return Referral.from_dict(
+            self._request("POST", "/v1/referral/handle", body={"handle": handle})
         )
 
     # -- agents, fund moving (needs a `trade` key) -------------------------

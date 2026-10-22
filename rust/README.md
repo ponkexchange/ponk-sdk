@@ -151,22 +151,44 @@ key can move your funds home. It cannot move them anywhere else.
 | `pool(dex, address)` | `GET /pools/{dex}/{address}` | nothing |
 | `range_cost(dex, address, total_bins)` | `GET /pools/{dex}/{address}/range-cost?bins=N` | nothing |
 | `ponk_perks(wallet)` | `GET /public/ponk/perks/{address}` | nothing |
+| `leaderboard(window)` | `GET /public/agents-leaderboard?window=` | nothing |
+| `public_agent(slug)` | `GET /public/agents/{slug}` | nothing |
+| `public_agent_value_history(slug, range)` | `GET /public/agents/{slug}/value-history` | nothing |
+| `public_points_leaderboard(limit, offset)` | `GET /public/points/leaderboard` | nothing |
+| `resolve_referral(code)` | `GET /public/referral/{code}` | nothing |
 | `whoami()` | `GET /v1/me` | `read` |
 | `list_agents()` | `GET /v1/agents` | `read` |
 | `get_agent(id)` | `GET /v1/agents/{id}` | `read` |
 | `agent_performance(id)` | `GET /v1/agents/{id}/performance` | `read` |
 | `agent_position(id)` | `GET /v1/agents/{id}/position` | `read` |
+| `agent_value_history(id, range)` | `GET /v1/agents/{id}/value-history` | `read` |
+| `agent_decisions(id, hours, limit)` | `GET /v1/agents/{id}/decisions`, raw JSON | `read` |
 | `agent_wallet(id)` | `GET /v1/agents/{id}/wallet` | `read` |
 | `agent_mandate(id)` | `GET /v1/agents/{id}/mandate` | `read` |
 | `list_positions()` | `GET /v1/positions` | `read` |
 | `list_logs(limit)` | `GET /v1/logs` | `read` |
+| `get_public_link(id)` | `GET /v1/agents/{id}/public-link` | `read` |
+| `list_follows()` | `GET /v1/follows` | `read` |
+| `points()` | `GET /v1/points` | `read` |
+| `points_leaderboard(limit, offset)` | `GET /v1/points/leaderboard` | `read` |
+| `referral()` | `GET /v1/referral` | `read` |
+| `creator_dashboard(days)` | `GET /v1/referral/creator` | `read` |
+| `check_handle(handle)` | `GET /v1/referral/handle/check` | `read` |
 | `get_json(path)` | any GET | `read` |
-| `create_agent(&NewAgent)` | `POST /v1/agents` | `trade` |
+| `create_agent(&NewAgent)` | `POST /v1/agents` (copy an agent with `row.copy.to_new_agent(name, wallet)`) | `trade` |
+| `optimize_draft(&draft)` | `POST /v1/agents/optimize-draft`, raw JSON | `trade` |
 | `set_autonomous(id, bool)` | `POST /v1/agents/{id}/autonomous` | `trade` |
 | `pause_agent(id)` | `POST /v1/agents/{id}/pause` | `trade` |
 | `resume_agent(id)` | `POST /v1/agents/{id}/resume` | `trade` |
 | `set_dry_run(id, bool)` | `POST /v1/agents/{id}/dry-run` | `trade` |
 | `set_mode(id, mode)` | `POST /v1/agents/{id}/mode` | `trade` |
+| `update_config(id, &patch)` | `PATCH /v1/agents/{id}/config` | `trade` |
+| `update_exits(id, tp_sl, automation)` | `POST /v1/agents/{id}/exits` | `trade` |
+| `set_auto_compound(id, on, min_base_units, min_usd)` | `POST /v1/agents/{id}/auto-compound` | `trade` |
+| `share_agent(id, hide_usd, show_onchain)` | `POST /v1/agents/{id}/public-link` | `trade` |
+| `unshare_agent(id)` | `DELETE /v1/agents/{id}/public-link` | `trade` |
+| `follow(slug)` / `unfollow(slug)` | `POST` / `DELETE /v1/follows/{slug}` | `trade` |
+| `claim_handle(handle)` | `POST /v1/referral/handle` | `trade` |
 | `compound(id)` | `POST /v1/agents/{id}/compound` | `trade` |
 | `withdraw(id, lamports)` | `POST /v1/agents/{id}/withdraw` | `trade` |
 | `exit(id)` | `POST /v1/agents/{id}/exit` | `trade` |
@@ -340,6 +362,17 @@ println!("api agents {:?}%", perks.api_agent_fee.and_then(|f| f.effective_percen
 
 `Agent::managed_fee_bps` is the rate that specific agent's skim actually
 charges, before any $PONK holder discount.
+
+## Examples
+
+```bash
+PONK_API_KEY=ponk_live_... cargo run --example quickstart
+PONK_API_KEY=ponk_live_... cargo run --example leaderboard
+```
+
+`leaderboard` reads the Top Ponkillionaires board, prints how the top row
+would be copied (it creates nothing unless `PONK_COPY=1`), and prints your
+points and referral standing.
 
 ## Tests
 

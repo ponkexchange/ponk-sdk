@@ -27,6 +27,7 @@ __all__ = [
     "ActionLog",
     "ActionReceipt",
     "Agent",
+    "AgentCopy",
     "AgentPerformance",
     "AgentPosition",
     "AgentWallet",
@@ -35,16 +36,35 @@ __all__ = [
     "ClaimPayout",
     "ClaimPayoutToken",
     "ComponentStatus",
+    "CreatorDashboard",
+    "CreatorDay",
+    "CreatorTotals",
     "ExitSnapshot",
     "FeeRates",
+    "Follow",
+    "Follows",
+    "HandleCheck",
     "Health",
     "HealthChecks",
+    "Leaderboard",
+    "LeaderboardRow",
+    "LinkRevoked",
     "Mandate",
+    "MyPoints",
+    "PointsEntry",
+    "PointsLeaderboard",
+    "PointsSeason",
     "PonkPerks",
     "PoolSnapshot",
     "Position",
+    "PublicAgent",
+    "PublicLink",
+    "PublicReferral",
     "RangeCost",
+    "Referral",
+    "ReferralCode",
     "TokenAmount",
+    "ValueHistory",
     "WhoAmI",
     "Withdrawal",
 ]
@@ -700,3 +720,324 @@ class Withdrawal(Model):
     pnl: Optional[ExitSnapshot] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"pnl": ExitSnapshot}
+
+
+# --------------------------------------------------------------------------
+# Leaderboard, sharing and follows (0.4.0)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class AgentCopy(Model):
+    """What a copy of a shared agent starts from.
+
+    The same allow-listed slice the public profile serves: venue, pool,
+    strategy and the strategy config with anything owner-specific removed.
+    `PonkClient.copy_agent` turns it into a `create_agent` call.
+    """
+
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    strategy: Optional[str] = None
+    config: Optional[Any] = None
+
+
+@dataclass
+class LeaderboardRow(Model):
+    """One row of the Top Ponkillionaires board.
+
+    `rank` is `None` on an unranked row and `unranked_reason` says why. USD
+    figures arrive as decimal strings and are `None` when the link hides USD
+    or the figure cannot be priced; never read `None` as zero. Every other
+    field the server sends is in `raw_json`.
+    """
+
+    rank: Optional[int] = None
+    slug: Optional[str] = None
+    dex: Optional[str] = None
+    strategy: Optional[str] = None
+    pool_address: Optional[str] = None
+    token_x_mint: Optional[str] = None
+    token_y_mint: Optional[str] = None
+    running_since: Optional[str] = None
+    vs_hodl_pct: Optional[float] = None
+    score_pct: Optional[float] = None
+    pnl_pct: Optional[float] = None
+    drawdown_pct: Optional[float] = None
+    unranked_reason: Optional[str] = None
+    owner_key: Optional[str] = None
+    handle: Optional[str] = None
+    usd_hidden: Optional[bool] = None
+    window: Optional[str] = None
+    pnl_usd: Optional[str] = None
+    roi_pct: Optional[float] = None
+    basis_usd: Optional[str] = None
+    fees_realized_usd: Optional[str] = None
+    fees_earned_usd: Optional[str] = None
+    fees_unclaimed_usd: Optional[str] = None
+    deposited_usd: Optional[str] = None
+    spark: Optional[List[Optional[float]]] = None
+    followers: Optional[int] = None
+    crew: Optional[str] = None
+    win_rate: Optional[Any] = None
+    copy: Optional[AgentCopy] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"copy": AgentCopy}
+
+
+@dataclass
+class Leaderboard(Model):
+    """`GET /public/agents-leaderboard`: ranked and unranked shared agents.
+
+    `window` is `24h`, `7d`, `30d` or `all`. `totals` is the board header
+    (shared, ranked, LPers, crews, verified, summed P&L and fees) as sent.
+    """
+
+    ranked: List[LeaderboardRow] = field(default_factory=list)
+    unranked: List[LeaderboardRow] = field(default_factory=list)
+    window: Optional[str] = None
+    min_days: Optional[int] = None
+    min_hodl_usd: Optional[float] = None
+    min_win_samples: Optional[int] = None
+    totals: Optional[Any] = None
+    computed_at: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "ranked": (LeaderboardRow,),
+        "unranked": (LeaderboardRow,),
+    }
+
+
+@dataclass
+class PublicAgent(Model):
+    """`GET /public/agents/{slug}`: a shared agent's public profile.
+
+    `performance`, `proof`, `counts`, `win_rate` and `onchain` are kept as the
+    server sent them. `performance` is `None` with `performance_unavailable`
+    naming the reason; `onchain` is present only when the owner turned proof
+    on (and never beside a percent-only link).
+    """
+
+    slug: Optional[str] = None
+    usd_hidden: Optional[bool] = None
+    shared_at: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    token_x_mint: Optional[str] = None
+    token_y_mint: Optional[str] = None
+    bin_step: Optional[int] = None
+    strategy: Optional[str] = None
+    status: Optional[str] = None
+    running_since: Optional[str] = None
+    performance: Optional[Any] = None
+    performance_unavailable: Optional[str] = None
+    proof: Optional[Any] = None
+    counts: Optional[Any] = None
+    copy: Optional[AgentCopy] = None
+    owner_key: Optional[str] = None
+    handle: Optional[str] = None
+    followers: Optional[int] = None
+    win_rate: Optional[Any] = None
+    crew: Optional[str] = None
+    onchain: Optional[Any] = None
+    computed_at: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"copy": AgentCopy}
+
+
+@dataclass
+class ValueHistory(Model):
+    """An agent's position value over time against holding its opening tokens.
+
+    `points` is the bucketed series as sent; a bucket with no reading is
+    `None`, never interpolated.
+    """
+
+    range: Optional[str] = None
+    bucket_secs: Optional[int] = None
+    since: Optional[str] = None
+    until: Optional[str] = None
+    points: Optional[List[Any]] = None
+    hodl_since: Optional[str] = None
+    positions: Optional[int] = None
+
+
+@dataclass
+class PublicLink(Model):
+    """An agent's live public link. `path` is site-relative (`/a/<slug>`).
+
+    `show_onchain` is always `False` while `hide_usd` is set.
+    """
+
+    slug: Optional[str] = None
+    path: Optional[str] = None
+    hide_usd: Optional[bool] = None
+    show_onchain: Optional[bool] = None
+    created_at: Optional[str] = None
+
+
+@dataclass
+class LinkRevoked(Model):
+    revoked: Optional[bool] = None
+
+
+@dataclass
+class Follow(Model):
+    """The result of a follow or unfollow, with the agent's follower count."""
+
+    slug: Optional[str] = None
+    following: Optional[bool] = None
+    followers: Optional[int] = None
+
+
+@dataclass
+class Follows(Model):
+    """Slugs this account follows, newest first."""
+
+    slugs: List[str] = field(default_factory=list)
+
+
+# --------------------------------------------------------------------------
+# Points and referrals (0.4.0)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class PointsSeason(Model):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    starts_at: Optional[str] = None
+    ends_at: Optional[str] = None
+    multiplier: Optional[str] = None
+
+
+@dataclass
+class MyPoints(Model):
+    """This account's standing in the active season.
+
+    `season` is `None` between seasons, and the totals are then zero. Points
+    arrive as decimal strings. `rank` is `None` until the account has earned.
+    """
+
+    season: Optional[PointsSeason] = None
+    total_points: Optional[str] = None
+    tvl_time_points: Optional[str] = None
+    fee_paid_points: Optional[str] = None
+    referral_points: Optional[str] = None
+    event_count: Optional[int] = None
+    rank: Optional[int] = None
+    participant_count: Optional[int] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"season": PointsSeason}
+
+
+@dataclass
+class PointsEntry(Model):
+    """One leaderboard row. `display_code` is a referral code, never a wallet."""
+
+    rank: Optional[int] = None
+    display_code: Optional[str] = None
+    total_points: Optional[str] = None
+    tvl_time_points: Optional[str] = None
+    fee_paid_points: Optional[str] = None
+    referral_points: Optional[str] = None
+    is_me: Optional[bool] = None
+
+
+@dataclass
+class PointsLeaderboard(Model):
+    season: Optional[PointsSeason] = None
+    participant_count: Optional[int] = None
+    entries: List[PointsEntry] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"season": PointsSeason, "entries": (PointsEntry,)}
+
+
+@dataclass
+class ReferralCode(Model):
+    code: Optional[str] = None
+    label: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+@dataclass
+class Referral(Model):
+    """Referral codes, handle and money for this account.
+
+    EARNED (`total_earned_usd`, reached your wallet), OWED (`owed_usd`, held by
+    the treasury for you) and UNPROVEN (`unproven_usd`, booked against a
+    signature that did not verify) are three different facts. Never add them.
+    """
+
+    code: Optional[str] = None
+    codes: List[ReferralCode] = field(default_factory=list)
+    referred_by_code: Optional[str] = None
+    referred_count: Optional[int] = None
+    total_payouts: Optional[int] = None
+    total_earned_usd: Optional[float] = None
+    back_paid_usd: Optional[float] = None
+    back_paid_events: Optional[int] = None
+    owed_usd: Optional[float] = None
+    owed_events: Optional[int] = None
+    owed_unpriced_events: Optional[int] = None
+    unproven_usd: Optional[float] = None
+    unproven_events: Optional[int] = None
+    unpriced_payouts: Optional[int] = None
+    creator_handle: Optional[str] = None
+    referred_active_agents: Optional[int] = None
+    referred_lp_fees_usd: Optional[float] = None
+    handle: Optional[str] = None
+    creator_application: Optional[Any] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"codes": (ReferralCode,)}
+
+
+@dataclass
+class CreatorTotals(Model):
+    referred_wallets: Optional[int] = None
+    referred_with_active_agent: Optional[int] = None
+    active_agents: Optional[int] = None
+    lp_fees_usd: Optional[float] = None
+    ponk_fees_usd: Optional[float] = None
+    earned_usd: Optional[float] = None
+    fee_events: Optional[int] = None
+    unpriced_events: Optional[int] = None
+
+
+@dataclass
+class CreatorDay(Model):
+    day: Optional[str] = None
+    signups: Optional[int] = None
+    lp_fees_usd: Optional[float] = None
+    ponk_fees_usd: Optional[float] = None
+    earned_usd: Optional[float] = None
+    fee_events: Optional[int] = None
+
+
+@dataclass
+class CreatorDashboard(Model):
+    """The Creator dashboard: totals and one row per UTC day, oldest first."""
+
+    handle: Optional[str] = None
+    granted_at: Optional[str] = None
+    totals: Optional[CreatorTotals] = None
+    days: List[CreatorDay] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"totals": CreatorTotals, "days": (CreatorDay,)}
+
+
+@dataclass
+class HandleCheck(Model):
+    """Whether a /r/<handle> can be claimed. `reason` is set when it cannot."""
+
+    handle: Optional[str] = None
+    available: Optional[bool] = None
+    reason: Optional[str] = None
+
+
+@dataclass
+class PublicReferral(Model):
+    """`GET /public/referral/{code}`: the code exists; `creator` if it is a Creator's handle."""
+
+    code: Optional[str] = None
+    creator: Optional[bool] = None

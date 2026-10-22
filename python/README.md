@@ -12,10 +12,10 @@ endpoint. It never computes a number the server did not send.
 pip install ponk
 ```
 
-PyPI carries 0.2.0. This directory is 0.3.0, which adds `agent_mandate`,
-`set_autonomous` and `range_cost` and makes `create_agent`'s `dry_run`
-required (see [Changes in 0.3.0](#changes-in-030)). Until 0.3.0 is on PyPI,
-install it from this repository:
+PyPI carries 0.2.0. This directory is 0.4.0, which adds the leaderboard,
+copying a shared agent, follows, points and referrals (see
+[Changes in 0.4.0](#changes-in-040)); 0.3.0 made `create_agent`'s `dry_run`
+required. Until 0.4.0 is on PyPI, install it from this repository:
 
 ```bash
 git clone https://github.com/ponkexchange/ponk-sdk
@@ -231,22 +231,45 @@ if m is not None:
 | `pool(dex, address)` | `GET /pools/{dex}/{address}` | nothing |
 | `range_cost(dex, address, bins)` | `GET /pools/{dex}/{address}/range-cost?bins=N` | nothing |
 | `ponk_perks(wallet_address)` | `GET /public/ponk/perks/{address}` | nothing |
+| `leaderboard(window=None)` | `GET /public/agents-leaderboard?window=24h\|7d\|30d\|all` | nothing |
+| `public_agent(slug)` | `GET /public/agents/{slug}` | nothing |
+| `public_agent_value_history(slug, range=None)` | `GET /public/agents/{slug}/value-history` | nothing |
+| `public_points_leaderboard(limit, offset)` | `GET /public/points/leaderboard` | nothing |
+| `resolve_referral(code)` | `GET /public/referral/{code}` | nothing |
 | `whoami()` | `GET /v1/me` | `read` |
 | `list_agents()` | `GET /v1/agents` | `read` |
 | `get_agent(id)` | `GET /v1/agents/{id}` | `read` |
 | `agent_performance(id)` | `GET /v1/agents/{id}/performance` | `read` |
 | `agent_position(id)` | `GET /v1/agents/{id}/position` | `read` |
+| `agent_value_history(id, range=None)` | `GET /v1/agents/{id}/value-history` | `read` |
+| `agent_decisions(id, hours=None, limit=None)` | `GET /v1/agents/{id}/decisions`, raw JSON | `read` |
 | `agent_wallet(id)` | `GET /v1/agents/{id}/wallet` | `read` |
 | `agent_mandate(id)` | `GET /v1/agents/{id}/mandate` | `read` |
 | `list_positions()` | `GET /v1/positions` | `read` |
 | `list_logs(limit)` | `GET /v1/logs` (limit 1 to 500, default 100) | `read` |
+| `get_public_link(id)` | `GET /v1/agents/{id}/public-link` | `read` |
+| `list_follows()` | `GET /v1/follows` | `read` |
+| `points()` | `GET /v1/points` | `read` |
+| `points_leaderboard(limit, offset)` | `GET /v1/points/leaderboard` | `read` |
+| `referral()` | `GET /v1/referral` | `read` |
+| `creator_dashboard(days=None)` | `GET /v1/referral/creator` | `read` |
+| `check_handle(handle)` | `GET /v1/referral/handle/check` | `read` |
 | `get_json(path, params)` | any `GET`, raw JSON | depends on the route |
 | `create_agent(...)` | `POST /v1/agents` | `trade` |
+| `copy_agent(source, name=, wallet_address=, dry_run=)` | `public_agent` then `POST /v1/agents` from its `copy` block | `trade` |
+| `optimize_draft(draft)` | `POST /v1/agents/optimize-draft`, raw JSON | `trade` |
 | `pause_agent(id)` | `POST /v1/agents/{id}/pause` | `trade` |
 | `resume_agent(id)` | `POST /v1/agents/{id}/resume` | `trade` |
 | `set_autonomous(id, enabled)` | `POST /v1/agents/{id}/autonomous` | `trade` |
 | `set_dry_run(id, dry_run)` | `POST /v1/agents/{id}/dry-run` | `trade` |
 | `set_mode(id, mode)` | `POST /v1/agents/{id}/mode` | `trade` |
+| `update_config(id, patch)` | `PATCH /v1/agents/{id}/config` | `trade` |
+| `update_exits(id, tp_sl=None, automation=None)` | `POST /v1/agents/{id}/exits` | `trade` |
+| `set_auto_compound(id, auto_compound, min_claimable_base_units=None, min_claimable_usd=None)` | `POST /v1/agents/{id}/auto-compound` | `trade` |
+| `share_agent(id, hide_usd=False, show_onchain=None)` | `POST /v1/agents/{id}/public-link` | `trade` |
+| `unshare_agent(id)` | `DELETE /v1/agents/{id}/public-link` | `trade` |
+| `follow(slug)` / `unfollow(slug)` | `POST` / `DELETE /v1/follows/{slug}` | `trade` |
+| `claim_handle(handle)` | `POST /v1/referral/handle` | `trade` |
 | `compound(id)` | `POST /v1/agents/{id}/compound` | `trade` |
 | `withdraw(id, lamports)` | `POST /v1/agents/{id}/withdraw` | `trade` |
 | `exit_agent(id)` | `POST /v1/agents/{id}/exit` | `trade` |
@@ -351,6 +374,35 @@ print("holding $PONK would make that", perks.api_agent_fee.holder_percent, "%")
 
 `agent.managed_fee_bps` is the rate that specific agent's skim actually
 charges, before any $PONK holder discount.
+
+## Changes in 0.4.0
+
+* **Top Ponkillionaires, no key:** `leaderboard(window)`, `public_agent(slug)`,
+  `public_agent_value_history(slug, range)`.
+* **Copy an agent:** `copy_agent(slug_or_row, name=, wallet_address=,
+  dry_run=, config_overrides=None)` creates an agent on your wallet from a
+  shared agent's `copy` block.
+* **Share and follow:** `share_agent`, `unshare_agent`, `get_public_link`,
+  `follow`, `unfollow`, `list_follows`.
+* **Points and referrals:** `points`, `points_leaderboard`,
+  `public_points_leaderboard`, `referral`, `creator_dashboard`,
+  `check_handle`, `claim_handle`, `resolve_referral`.
+* **Agent reads:** `agent_value_history` and `agent_decisions`.
+* **Settings edits:** `update_config`, `update_exits`, `set_auto_compound`,
+  and `optimize_draft`. The docstrings list the new keys: keep side, reshape,
+  cooldown and daily cap, the market cap, value and value plus fees take
+  profits, and the Degen Mode bin step filter.
+
+```python
+board = ponk.leaderboard(window="7d")
+row = board.ranked[0]
+mine = ponk.copy_agent(row, name="copy", wallet_address=me.wallet_address, dry_run=True)
+
+standing = ponk.points()
+print(standing.season.name if standing.season else "off-season", standing.total_points, standing.rank)
+r = ponk.referral()
+print("earned", r.total_earned_usd, "owed", r.owed_usd, "unproven", r.unproven_usd)  # never add these
+```
 
 ## Changes in 0.3.0
 

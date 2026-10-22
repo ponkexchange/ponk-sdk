@@ -89,13 +89,17 @@
 //!
 //! # Scope
 //!
-//! This crate covers the key-authenticated `/v1` API plus the four public
-//! reads that need no key at all ([`Client::health`], [`Client::pool`],
-//! [`Client::range_cost`], [`Client::ponk_perks`]), and, behind the default
+//! This crate covers the key-authenticated `/v1` API (agents, their value
+//! history and decision record, sharing to the leaderboard, follows, points
+//! and referrals) plus the public reads that need no key at all
+//! ([`Client::health`], [`Client::pool`], [`Client::range_cost`],
+//! [`Client::ponk_perks`], the Top Ponkillionaires board
+//! [`Client::leaderboard`], [`Client::public_agent`] and its value history,
+//! the points board and [`Client::resolve_referral`]), and, behind the default
 //! `webhooks` feature, receiver-side verification of webhook deliveries in
 //! [`webhooks`]. The rest of the server's surface, the session-authenticated
-//! app routes (including registering webhooks, minting API keys and an
-//! agent's decision history) and the wallet-signed Meteora transaction
+//! app routes (including registering webhooks and minting API keys) and the
+//! wallet-signed Meteora transaction
 //! builders, needs a wallet session rather than a key, so it is out of scope
 //! here.
 
@@ -111,8 +115,11 @@ pub mod webhooks;
 pub use client::{Client, ClientBuilder, DEFAULT_BASE_URL, DEFAULT_FUND_TIMEOUT, DEFAULT_TIMEOUT};
 pub use error::{ApiError, Error, ErrorKind};
 pub use models::{
-    ActionLog, ActionReceipt, Agent, AgentPerformance, AgentPosition, AgentWallet,
-    AutonomousView, BinShare, ClaimPayout, ClaimPayoutToken, ComponentStatus, ExitSnapshot,
-    FeeRates, Health, HealthChecks, Mandate, NewAgent, PonkPerks, PoolSnapshot, Position,
-    RangeCostQuote, TokenAmount, WhoAmI, Withdrawal,
+    ActionLog, ActionReceipt, Agent, AgentCopy, AgentPerformance, AgentPosition, AgentWallet,
+    AutonomousView, BinShare, ClaimPayout, ClaimPayoutToken, ComponentStatus, CreatorDashboard,
+    CreatorDay, CreatorTotals, ExitSnapshot, FeeRates, Follow, Follows, HandleCheck, Health,
+    HealthChecks, Leaderboard, LeaderboardRow, LinkRevoked, Mandate, MyPoints, NewAgent,
+    PointsEntry, PointsLeaderboard, PointsSeason, PonkPerks, PoolSnapshot, Position, PublicAgent,
+    PublicLink, PublicReferral, RangeCostQuote, Referral, ReferralCode, TokenAmount, ValueHistory,
+    WhoAmI, Withdrawal,
 };
