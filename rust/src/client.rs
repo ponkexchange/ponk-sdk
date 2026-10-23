@@ -189,6 +189,93 @@ impl Client {
         self.get(&format!("/public/referral/{}", seg(code))).await
     }
 
+    /// `GET /public/agents-activity`. What the board's agents are doing now:
+    /// confirmed actions of the last 24 hours and every live hold, with the
+    /// reason and the check count. Same agents and privacy as the
+    /// leaderboard; no event carries an id, a slug, a name or a wallet.
+    pub async fn agents_activity(&self) -> Result<AgentsActivity> {
+        self.get("/public/agents-activity").await
+    }
+
+    /// `GET /public/ponkillionaires/week`. This week's race for the top three
+    /// (a lower agent fee rate for the following week plus points) and last
+    /// week's winners.
+    pub async fn ponkillionaires_week(&self) -> Result<PonkillionairesWeek> {
+        self.get("/public/ponkillionaires/week").await
+    }
+
+    // -- X Tracker, public ---------------------------------------------------
+
+    /// `GET /public/x/feed`. The curated X accounts' posts and events, newest
+    /// first. See [`XFeedQuery`] for the filters.
+    pub async fn x_feed(&self, query: &XFeedQuery) -> Result<XFeed> {
+        self.get(&with_query("/public/x/feed", &query.params())).await
+    }
+
+    /// `GET /public/x/trending?window=&limit=`. Tokens trending on X with
+    /// their first caller. `window` is `1h` (default) or `24h`; `limit` 1 to 50.
+    pub async fn x_trending(&self, window: Option<&str>, limit: Option<i64>) -> Result<XTrending> {
+        self.get(&with_query(
+            "/public/x/trending",
+            &[
+                ("window", window.map(str::to_string)),
+                ("limit", limit.map(|n| n.to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /public/x/callers?days=`. The caller leaderboard (1 to 90 days,
+    /// default 30), ranked by median 24h multiple, then by calls.
+    pub async fn x_callers(&self, days: Option<i64>) -> Result<XCallers> {
+        self.get(&with_query("/public/x/callers", &[("days", days.map(|n| n.to_string()))]))
+            .await
+    }
+
+    /// `GET /public/x/token/{mint}`. Every tracked mention of one token. 400
+    /// for a string that is not a Solana address.
+    pub async fn x_token(&self, mint: &str) -> Result<XToken> {
+        self.get(&format!("/public/x/token/{}", seg(mint))).await
+    }
+
+    /// `GET /public/x/accounts`. The curated account directory and its categories.
+    pub async fn x_accounts(&self) -> Result<XDirectory> {
+        self.get("/public/x/accounts").await
+    }
+
+    /// `GET /public/x/status`. The feed source's state.
+    pub async fn x_status(&self) -> Result<XSource> {
+        self.get("/public/x/status").await
+    }
+
+    // -- Wallet Tracker, public ----------------------------------------------
+
+    /// `GET /public/wallets/feed`. The curated wallets' swaps and LP actions,
+    /// merged. See [`WalletFeedQuery`] for the filters.
+    pub async fn wallets_feed(&self, query: &WalletFeedQuery) -> Result<WalletFeed> {
+        self.get(&with_query("/public/wallets/feed", &query.params())).await
+    }
+
+    /// `GET /public/wallets/defaults`. The curated wallet list.
+    pub async fn wallets_defaults(&self) -> Result<CuratedWallets> {
+        self.get("/public/wallets/defaults").await
+    }
+
+    /// `GET /public/wallets/status`. The chain reader's state.
+    pub async fn wallets_status(&self) -> Result<WalletSource> {
+        self.get("/public/wallets/status").await
+    }
+
+    /// `GET /public/wallets/{address}/activity`. Any wallet's recent swaps and
+    /// LP actions: from the tracker when it stores the wallet (`mode`
+    /// `tracked`), read from chain otherwise (`live`, one page). Rate limited
+    /// per IP. `query.wallet` is ignored here.
+    pub async fn wallet_activity(&self, address: &str, query: &WalletFeedQuery) -> Result<WalletActivity> {
+        let q = WalletFeedQuery { wallet: None, ..query.clone() };
+        self.get(&with_query(&format!("/public/wallets/{}/activity", seg(address)), &q.params()))
+            .await
+    }
+
     // -- identity ----------------------------------------------------------
 
     /// `GET /v1/me`. The first call any integration should make.
@@ -785,6 +872,69 @@ fn with_query(path: &str, params: &[(&str, Option<String>)]) -> String {
     }
 }
 
+/// Filters for [`Client::x_feed`]. Every field is optional.
+#[derive(Debug, Clone, Default)]
+pub struct XFeedQuery {
+    /// RFC 3339: the previous page's `next_before`.
+    pub before: Option<String>,
+    /// RFC 3339: only what was seen after this time.
+    pub since: Option<String>,
+    /// 1 to 100, default 50.
+    pub limit: Option<i64>,
+    /// Comma-separated directory categories.
+    pub category: Option<String>,
+    /// Only posts that name a token.
+    pub ca_only: bool,
+    pub min_followers: Option<i64>,
+    /// One handle.
+    pub account: Option<String>,
+    /// Text search.
+    pub q: Option<String>,
+}
+
+impl XFeedQuery {
+    fn params(&self) -> Vec<(&'static str, Option<String>)> {
+        vec![
+            ("before", self.before.clone()),
+            ("since", self.since.clone()),
+            ("limit", self.limit.map(|n| n.to_string())),
+            ("category", self.category.clone()),
+            ("ca", self.ca_only.then(|| "1".to_string())),
+            ("minFollowers", self.min_followers.map(|n| n.to_string())),
+            ("account", self.account.clone()),
+            ("q", self.q.clone()),
+        ]
+    }
+}
+
+/// Filters for [`Client::wallets_feed`] and [`Client::wallet_activity`].
+#[derive(Debug, Clone, Default)]
+pub struct WalletFeedQuery {
+    /// The previous page's `next_before`.
+    pub before: Option<String>,
+    pub limit: Option<i64>,
+    /// Comma separated: `buy`, `sell`, `swap`, `lp` or any single kind.
+    pub kind: Option<String>,
+    pub min_usd: Option<f64>,
+    /// Only rows touching this mint.
+    pub token: Option<String>,
+    /// Only this wallet (feed only).
+    pub wallet: Option<String>,
+}
+
+impl WalletFeedQuery {
+    fn params(&self) -> Vec<(&'static str, Option<String>)> {
+        vec![
+            ("before", self.before.clone()),
+            ("limit", self.limit.map(|n| n.to_string())),
+            ("kind", self.kind.clone()),
+            ("minUsd", self.min_usd.map(|n| n.to_string())),
+            ("token", self.token.clone()),
+            ("wallet", self.wallet.clone()),
+        ]
+    }
+}
+
 /// Builder for [`Client`].
 #[derive(Debug, Clone)]
 pub struct ClientBuilder {
@@ -986,6 +1136,18 @@ mod tests {
         let body = &raw[raw.find("\r\n\r\n").unwrap() + 4..];
         let sent: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(sent, patch);
+    }
+
+    #[test]
+    fn the_tracker_queries_use_the_servers_camel_case_names() {
+        let q = XFeedQuery { limit: Some(2), ca_only: true, min_followers: Some(1000), category: Some("kol,news".into()), ..Default::default() };
+        assert_eq!(
+            with_query("/public/x/feed", &q.params()),
+            "/public/x/feed?limit=2&category=kol%2Cnews&ca=1&minFollowers=1000"
+        );
+        assert_eq!(with_query("/public/x/feed", &XFeedQuery::default().params()), "/public/x/feed");
+        let w = WalletFeedQuery { kind: Some("lp".into()), min_usd: Some(50.0), ..Default::default() };
+        assert_eq!(with_query("/public/wallets/feed", &w.params()), "/public/wallets/feed?kind=lp&minUsd=50");
     }
 
     #[test]

@@ -76,6 +76,18 @@ from ._version import __version__
 from .errors import PonkTransportError, error_from_response
 from .models import (
     ActionLog,
+    AgentsActivity,
+    CuratedWallets,
+    PonkillionairesWeek,
+    WalletActivity,
+    WalletFeed,
+    WalletSource,
+    XCallers,
+    XDirectory,
+    XFeed,
+    XSource,
+    XToken,
+    XTrending,
     ActionReceipt,
     Agent,
     AgentPerformance,
@@ -313,6 +325,177 @@ class PonkClient:
             self._request("GET", "/public/referral/{0}".format(_seg(code)))
         )
 
+    def agents_activity(self) -> AgentsActivity:
+        """`GET /public/agents-activity`. What the board's agents are doing now.
+
+        The confirmed actions (open, rebalance, compound, claim, exit) of the
+        last 24 hours and every live hold with the reason the agent is holding
+        and how many times it has checked. Same agents and same privacy as the
+        leaderboard; no event carries an agent id, a slug, a name or a wallet.
+        No key needed.
+        """
+        return AgentsActivity.from_dict(self._request("GET", "/public/agents-activity"))
+
+    def ponkillionaires_week(self) -> PonkillionairesWeek:
+        """`GET /public/ponkillionaires/week`. This week's race and last week's winners.
+
+        The top three by profit win a lower agent fee rate for the following
+        week plus points (`prizes`). Owners appear under the identity they
+        chose on the board. No key needed.
+        """
+        return PonkillionairesWeek.from_dict(
+            self._request("GET", "/public/ponkillionaires/week")
+        )
+
+    # -- X Tracker, public -------------------------------------------------
+
+    def x_feed(
+        self,
+        *,
+        before: Optional[str] = None,
+        since: Optional[str] = None,
+        limit: Optional[int] = None,
+        category: Optional[str] = None,
+        ca_only: bool = False,
+        min_followers: Optional[int] = None,
+        account: Optional[str] = None,
+        q: Optional[str] = None,
+    ) -> XFeed:
+        """`GET /public/x/feed`. The curated X accounts' posts and events, newest first.
+
+        `before` (RFC 3339) pages back: pass the previous page's
+        `next_before`. `since` returns only what was seen after that time.
+        `limit` is 1 to 100 (default 50). `category` is a comma-separated list
+        of directory categories (`x_accounts().categories`). `ca_only` keeps
+        posts that name a token. `account` is one handle, `q` a text search.
+        """
+        return XFeed.from_dict(
+            self._request(
+                "GET",
+                "/public/x/feed",
+                params={
+                    "before": before,
+                    "since": since,
+                    "limit": limit,
+                    "category": category,
+                    "ca": "1" if ca_only else None,
+                    "minFollowers": min_followers,
+                    "account": account,
+                    "q": q,
+                },
+            )
+        )
+
+    def x_trending(self, window: Optional[str] = None, limit: Optional[int] = None) -> XTrending:
+        """`GET /public/x/trending?window=&limit=`. Tokens trending on X.
+
+        `window` is `1h` (default) or `24h`; `limit` is 1 to 50 (default 25).
+        Each token carries its first caller and the multiple since that call.
+        """
+        return XTrending.from_dict(
+            self._request("GET", "/public/x/trending", params={"window": window, "limit": limit})
+        )
+
+    def x_callers(self, days: Optional[int] = None) -> XCallers:
+        """`GET /public/x/callers?days=`. The caller leaderboard, up to 50 accounts.
+
+        `days` is 1 to 90 (default 30). Ranked by median 24h multiple, then by
+        calls.
+        """
+        return XCallers.from_dict(
+            self._request("GET", "/public/x/callers", params={"days": days})
+        )
+
+    def x_token(self, mint: str) -> XToken:
+        """`GET /public/x/token/{mint}`. Every tracked mention of one token.
+
+        Raises `PonkBadRequestError` for a string that is not a Solana address.
+        """
+        return XToken.from_dict(
+            self._request("GET", "/public/x/token/{0}".format(_seg(mint)))
+        )
+
+    def x_accounts(self) -> XDirectory:
+        """`GET /public/x/accounts`. The curated account directory and its categories."""
+        return XDirectory.from_dict(self._request("GET", "/public/x/accounts"))
+
+    def x_status(self) -> XSource:
+        """`GET /public/x/status`. The feed source's state: `live`, `degraded`, `down` or `starting`."""
+        return XSource.from_dict(self._request("GET", "/public/x/status"))
+
+    # -- Wallet Tracker, public --------------------------------------------
+
+    def wallets_feed(
+        self,
+        *,
+        before: Optional[str] = None,
+        limit: Optional[int] = None,
+        kind: Optional[str] = None,
+        min_usd: Optional[float] = None,
+        token: Optional[str] = None,
+        wallet: Optional[str] = None,
+    ) -> WalletFeed:
+        """`GET /public/wallets/feed`. The curated wallets' swaps and LP actions, merged.
+
+        `before` is the previous page's `next_before`. `kind` is a
+        comma-separated filter: `buy`, `sell`, `swap`, `lp` (every liquidity
+        kind) or any single kind. `min_usd` drops smaller rows, `token` keeps
+        rows touching one mint, `wallet` keeps one wallet.
+        """
+        return WalletFeed.from_dict(
+            self._request(
+                "GET",
+                "/public/wallets/feed",
+                params={
+                    "before": before,
+                    "limit": limit,
+                    "kind": kind,
+                    "minUsd": min_usd,
+                    "token": token,
+                    "wallet": wallet,
+                },
+            )
+        )
+
+    def wallets_defaults(self) -> CuratedWallets:
+        """`GET /public/wallets/defaults`. The curated wallet list and where each comes from."""
+        return CuratedWallets.from_dict(self._request("GET", "/public/wallets/defaults"))
+
+    def wallets_status(self) -> WalletSource:
+        """`GET /public/wallets/status`. The chain reader's state: `live`, `slowed` or `starting`."""
+        return WalletSource.from_dict(self._request("GET", "/public/wallets/status"))
+
+    def wallet_activity(
+        self,
+        address: str,
+        *,
+        before: Optional[str] = None,
+        limit: Optional[int] = None,
+        kind: Optional[str] = None,
+        min_usd: Optional[float] = None,
+        token: Optional[str] = None,
+    ) -> WalletActivity:
+        """`GET /public/wallets/{address}/activity`. Any wallet's recent swaps and LP actions.
+
+        A wallet the tracker already stores is served from there
+        (`mode == "tracked"`, pageable with `before`). Any other wallet is read
+        from chain for this request (`mode == "live"`, one page). Rate limited
+        per IP. Filters as in `wallets_feed`.
+        """
+        return WalletActivity.from_dict(
+            self._request(
+                "GET",
+                "/public/wallets/{0}/activity".format(_seg(address)),
+                params={
+                    "before": before,
+                    "limit": limit,
+                    "kind": kind,
+                    "minUsd": min_usd,
+                    "token": token,
+                },
+            )
+        )
+
     # -- identity ----------------------------------------------------------
 
     def whoami(self) -> WhoAmI:
@@ -441,9 +624,12 @@ class PonkClient:
         )
 
     def referral(self) -> Referral:
-        """`GET /v1/referral`. Codes, handle, referred count and referral money.
+        """`GET /v1/referral`. Codes, handle, referred count, referral money and tier.
 
-        Earned, owed and unproven are separate facts; never add them.
+        Earned, owed and unproven are separate facts; never add them. `tier`
+        is your current share of ponk's platform fee and the next rung;
+        `programme.ladder` is the whole ladder (one level: 20%, 25% from
+        $1,000 and 30% from $5,000 of referred platform fees over 30 days).
         """
         return Referral.from_dict(self._request("GET", "/v1/referral"))
 

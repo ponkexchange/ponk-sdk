@@ -26,11 +26,13 @@ from typing import Any, ClassVar, Dict, List, Mapping, Optional, Type, TypeVar
 __all__ = [
     "ActionLog",
     "ActionReceipt",
+    "ActivityEvent",
     "Agent",
     "AgentCopy",
     "AgentPerformance",
     "AgentPosition",
     "AgentWallet",
+    "AgentsActivity",
     "AutonomousState",
     "BinShare",
     "ClaimPayout",
@@ -39,6 +41,8 @@ __all__ = [
     "CreatorDashboard",
     "CreatorDay",
     "CreatorTotals",
+    "CuratedWallet",
+    "CuratedWallets",
     "ExitSnapshot",
     "FeeRates",
     "Follow",
@@ -46,6 +50,7 @@ __all__ = [
     "HandleCheck",
     "Health",
     "HealthChecks",
+    "LastWeek",
     "Leaderboard",
     "LeaderboardRow",
     "LinkRevoked",
@@ -55,6 +60,7 @@ __all__ = [
     "PointsLeaderboard",
     "PointsSeason",
     "PonkPerks",
+    "PonkillionairesWeek",
     "PoolSnapshot",
     "Position",
     "PublicAgent",
@@ -63,13 +69,50 @@ __all__ = [
     "RangeCost",
     "Referral",
     "ReferralCode",
+    "ReferralProgramme",
+    "ReferralTier",
+    "ReferralTierStep",
     "TokenAmount",
+    "TrackedWalletRef",
     "ValueHistory",
+    "WalletActivity",
+    "WalletEvent",
+    "WalletFeed",
+    "WalletLeg",
+    "WalletSource",
+    "WeekPrize",
+    "WeekStanding",
+    "WeekWinner",
     "WhoAmI",
     "Withdrawal",
+    "XAccount",
+    "XAuthor",
+    "XCaller",
+    "XCallers",
+    "XDirectory",
+    "XDirectoryEntry",
+    "XEvent",
+    "XEventPost",
+    "XFeed",
+    "XFeedItem",
+    "XFirstCall",
+    "XMetrics",
+    "XPost",
+    "XSource",
+    "XToken",
+    "XTokenMention",
+    "XTokenRef",
+    "XTrending",
+    "XTrendingToken",
 ]
 
 T = TypeVar("T", bound="Model")
+
+
+def _camel(name: str) -> str:
+    """serde's camelCase: `last_ok_at` is `lastOkAt`, `accounts_1h` is `accounts1h`."""
+    head, *rest = name.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
 
 
 class Model:
@@ -86,6 +129,11 @@ class Model:
     _ALIASES: ClassVar[Mapping[str, str]] = {}
     # Fields that hold another model. A one-tuple means "a list of these".
     _NESTED: ClassVar[Mapping[str, Any]] = {}
+    # True for a response the server serializes camelCase (the X Tracker,
+    # the Wallet Tracker and the weekly Ponkillionaires race). Python fields
+    # stay snake_case and each one reads its camelCase key, exactly as serde's
+    # `rename_all = "camelCase"` spells it (`accounts_1h` is `accounts1h`).
+    _CAMEL: ClassVar[bool] = False
 
     @classmethod
     def from_dict(cls: Type[T], data: Any) -> T:
@@ -95,7 +143,7 @@ class Model:
             )
         kwargs: Dict[str, Any] = {}
         for f in dataclasses.fields(cls):  # type: ignore[arg-type]
-            key = cls._ALIASES.get(f.name, f.name)
+            key = cls._ALIASES.get(f.name) or (_camel(f.name) if cls._CAMEL else f.name)
             if key not in data:
                 continue
             value = data[key]
@@ -864,7 +912,7 @@ class ValueHistory(Model):
 
 @dataclass
 class PublicLink(Model):
-    """An agent's live public link. `path` is site-relative (`/a/<slug>`).
+    """An agent's live public link. `path` is site-relative (`/ponkillionaires/<slug>`).
 
     `show_onchain` is always `False` while `hide_usd` is set.
     """
@@ -988,8 +1036,10 @@ class Referral(Model):
     referred_lp_fees_usd: Optional[float] = None
     handle: Optional[str] = None
     creator_application: Optional[Any] = None
+    tier: Optional["ReferralTier"] = None
+    programme: Optional["ReferralProgramme"] = None
 
-    _NESTED: ClassVar[Mapping[str, Any]] = {"codes": (ReferralCode,)}
+    _NESTED: ClassVar[Mapping[str, Any]] = {}
 
 
 @dataclass
@@ -1041,3 +1091,594 @@ class PublicReferral(Model):
 
     code: Optional[str] = None
     creator: Optional[bool] = None
+
+
+@dataclass
+class ReferralTierStep(Model):
+    """One rung of the referral ladder. `share_bps` is bps of ponk's platform fee."""
+
+    tier: Optional[int] = None
+    min_fees_usd: Optional[int] = None
+    share_bps: Optional[int] = None
+
+
+@dataclass
+class ReferralTier(Model):
+    """Your referral tier, from the platform fees your referred users paid.
+
+    One level only: you earn on the people you referred, nobody above you
+    earns on them. `current` is 1, 2 or 3 and `share_bps` is your share of
+    ponk's platform fee now. `referred_fees_usd` is the trailing
+    `window_days` total, `None` when it could not be read; the share is then
+    the base rate and no progress should be shown. `next` is the next rung,
+    `None` at the top. Every share comes out of ponk's fee and never changes
+    what a user pays.
+    """
+
+    current: Optional[int] = None
+    share_bps: Optional[int] = None
+    referred_fees_usd: Optional[float] = None
+    window_days: Optional[int] = None
+    next: Optional[ReferralTierStep] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"next": ReferralTierStep}
+
+
+@dataclass
+class ReferralProgramme(Model):
+    """The programme's constants, lowest rung first, so no client hardcodes a rate."""
+
+    ladder: List[ReferralTierStep] = field(default_factory=list)
+    window_days: Optional[int] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"ladder": (ReferralTierStep,)}
+
+
+Referral._NESTED = {
+    "codes": (ReferralCode,),
+    "tier": ReferralTier,
+    "programme": ReferralProgramme,
+}
+
+
+# -- live agents activity --------------------------------------------------
+
+
+@dataclass
+class ActivityEvent(Model):
+    """One event on the live agents strip. It carries no identity at all.
+
+    `kind` is `open`, `rebalance`, `compound`, `claim`, `exit` or `hold`.
+    `coarse` means `at` was truncated to the start of its hour (an agent with
+    no live public link). `usd` is a decimal string or `None`; `usd_kind`
+    says what it is: `fees` (realized net fees of a compound or claim) or
+    `margin` (the rebalance gate's benefit minus cost on a hold). Holds also
+    carry `reason_key`, `evaluations` and `last_seen_at`.
+    """
+
+    key: Optional[str] = None
+    kind: Optional[str] = None
+    at: Optional[str] = None
+    coarse: Optional[bool] = None
+    dex: Optional[str] = None
+    token_x_mint: Optional[str] = None
+    token_y_mint: Optional[str] = None
+    usd: Optional[str] = None
+    usd_kind: Optional[str] = None
+    reason_key: Optional[str] = None
+    evaluations: Optional[int] = None
+    last_seen_at: Optional[str] = None
+
+
+@dataclass
+class AgentsActivity(Model):
+    """`GET /public/agents-activity`: the last 24 hours of board agents' actions
+    and every live hold, under the board's privacy. `holding` counts agents
+    holding right now."""
+
+    events: List[ActivityEvent] = field(default_factory=list)
+    holding: Optional[int] = None
+    computed_at: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"events": (ActivityEvent,)}
+
+
+# -- weekly Ponkillionaires --------------------------------------------------
+
+
+@dataclass
+class WeekPrize(Model):
+    """A weekly prize: the agent fee rate for the following week (`fee_rate_pct`,
+    2.0 means 2%) plus points."""
+
+    rank: Optional[int] = None
+    fee_rate_pct: Optional[float] = None
+    points: Optional[int] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class WeekStanding(Model):
+    """A row of this week's race. `prize` is what the rank would win if the week
+    ended now, `None` for a row in loss. Identity follows the owner's board
+    privacy: `owner_key` always, `handle`, `display_name` and `wallet` only
+    when they chose to show them."""
+
+    rank: Optional[int] = None
+    pnl_usd: Optional[float] = None
+    agents: Optional[int] = None
+    deployed_usd: Optional[float] = None
+    prize: Optional[WeekPrize] = None
+    owner_key: Optional[str] = None
+    handle: Optional[str] = None
+    display_name: Optional[str] = None
+    wallet: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"prize": WeekPrize}
+
+
+@dataclass
+class WeekWinner(Model):
+    """A settled winner. The prize rate applies from `rate_from` to `rate_until`."""
+
+    rank: Optional[int] = None
+    pnl_usd: Optional[float] = None
+    agents: Optional[int] = None
+    fee_rate_pct: Optional[float] = None
+    points: Optional[float] = None
+    rate_from: Optional[str] = None
+    rate_until: Optional[str] = None
+    owner_key: Optional[str] = None
+    handle: Optional[str] = None
+    display_name: Optional[str] = None
+    wallet: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class LastWeek(Model):
+    week_start: Optional[str] = None
+    settled: Optional[bool] = None
+    winners: List[WeekWinner] = field(default_factory=list)
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"winners": (WeekWinner,)}
+
+
+@dataclass
+class PonkillionairesWeek(Model):
+    """`GET /public/ponkillionaires/week`: this week's race for the top three and
+    last week's winners. The week resets Monday 00:00 UTC (`resets_at`).
+    `min_peak_usd` and `min_running_days` are the eligibility floors."""
+
+    week_start: Optional[str] = None
+    resets_at: Optional[str] = None
+    prizes: List[WeekPrize] = field(default_factory=list)
+    min_peak_usd: Optional[int] = None
+    min_running_days: Optional[int] = None
+    standings: List[WeekStanding] = field(default_factory=list)
+    last_week: Optional[LastWeek] = None
+    computed_at: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "prizes": (WeekPrize,),
+        "standings": (WeekStanding,),
+        "last_week": LastWeek,
+    }
+
+
+# -- X Tracker -----------------------------------------------------------------
+
+
+@dataclass
+class XAccount(Model):
+    """A tracked X account. `handle` is lowercase; `screen_name` keeps its case."""
+
+    handle: Optional[str] = None
+    screen_name: Optional[str] = None
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    followers: Optional[int] = None
+    category: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class XTokenRef(Model):
+    mint: Optional[str] = None
+    symbol: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class XAuthor(Model):
+    screen_name: Optional[str] = None
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class XMetrics(Model):
+    views: Optional[int] = None
+    likes: Optional[int] = None
+    replies: Optional[int] = None
+    reposts: Optional[int] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class XPost(Model):
+    """A post on the feed. `tokens` are the Solana mints it names. `media`,
+    `quote` and `card` are passed through as decoded JSON."""
+
+    id: Optional[str] = None
+    kind: Optional[str] = None
+    url: Optional[str] = None
+    text: Optional[str] = None
+    created_at: Optional[str] = None
+    seen_at: Optional[str] = None
+    latency_secs: Optional[int] = None
+    is_backfill: Optional[bool] = None
+    reply_to: Optional[str] = None
+    author: Optional[XAuthor] = None
+    media: List[Any] = field(default_factory=list)
+    quote: Optional[Any] = None
+    card: Optional[Any] = None
+    metrics: Optional[XMetrics] = None
+    tokens: List[XTokenRef] = field(default_factory=list)
+    cashtags: List[str] = field(default_factory=list)
+    deleted_at: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "author": XAuthor,
+        "metrics": XMetrics,
+        "tokens": (XTokenRef,),
+    }
+
+
+@dataclass
+class XEventPost(Model):
+    id: Optional[str] = None
+    url: Optional[str] = None
+    text: Optional[str] = None
+    created_at: Optional[str] = None
+    tokens: List[XTokenRef] = field(default_factory=list)
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"tokens": (XTokenRef,)}
+
+
+@dataclass
+class XEvent(Model):
+    """A change on a tracked account (a profile edit, a deleted post), with
+    `before` and `after` where they apply."""
+
+    id: Optional[int] = None
+    kind: Optional[str] = None
+    before: Optional[str] = None
+    after: Optional[str] = None
+    detail: Optional[Any] = None
+    at: Optional[str] = None
+    post: Optional[XEventPost] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"post": XEventPost}
+
+
+@dataclass
+class XFeedItem(Model):
+    """One feed row. `type` is `post` (then `post` is set) or `event` (then `event`)."""
+
+    type: Optional[str] = None
+    key: Optional[str] = None
+    account: Optional[XAccount] = None
+    post: Optional[XPost] = None
+    event: Optional[XEvent] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"account": XAccount, "post": XPost, "event": XEvent}
+
+
+@dataclass
+class XSource(Model):
+    """The feed's data source. `state` is `live`, `degraded`, `down` or `starting`."""
+
+    name: Optional[str] = None
+    url: Optional[str] = None
+    state: Optional[str] = None
+    last_ok_at: Optional[str] = None
+    last_error_at: Optional[str] = None
+    last_error: Optional[str] = None
+    requests_1h: Optional[int] = None
+    rate_limited_1h: Optional[int] = None
+    median_latency_secs: Optional[int] = None
+    accounts_fresh: Optional[int] = None
+    accounts_active: Optional[int] = None
+    hot_secs: Optional[int] = None
+    normal_secs: Optional[int] = None
+    cold_secs: Optional[int] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class XFeed(Model):
+    """A page of the X feed, newest first. Pass `next_before` back as `before`
+    for the next page; it is `None` at the end."""
+
+    items: List[XFeedItem] = field(default_factory=list)
+    next_before: Optional[str] = None
+    source: Optional[XSource] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"items": (XFeedItem,), "source": XSource}
+
+
+@dataclass
+class XFirstCall(Model):
+    """The first tracked account to post a token. `price_usd` and `mcap_usd` are
+    the read when the call was seen, `None` when it was seen too late to know."""
+
+    handle: Optional[str] = None
+    screen_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    post_id: Optional[str] = None
+    url: Optional[str] = None
+    at: Optional[str] = None
+    price_usd: Optional[float] = None
+    mcap_usd: Optional[float] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class XTrendingToken(Model):
+    """A token trending on X. `multiple` is price now over the first call's
+    price, `None` without both."""
+
+    mint: Optional[str] = None
+    symbol: Optional[str] = None
+    name: Optional[str] = None
+    accounts_1h: Optional[int] = None
+    accounts_24h: Optional[int] = None
+    mentions_24h: Optional[int] = None
+    last_at: Optional[str] = None
+    first_call: Optional[XFirstCall] = None
+    price_usd: Optional[float] = None
+    mcap_usd: Optional[float] = None
+    multiple: Optional[float] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"first_call": XFirstCall}
+
+
+@dataclass
+class XTrending(Model):
+    window: Optional[str] = None
+    tokens: List[XTrendingToken] = field(default_factory=list)
+    computed_at: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"tokens": (XTrendingToken,)}
+
+
+@dataclass
+class XCaller(Model):
+    """A caller's record over the window. Medians and `best` are price multiples
+    after the call; `hit_rate` is the share of calls with a 24h mark that were
+    up (a fraction), `None` until one has a 24h mark."""
+
+    account: Optional[XAccount] = None
+    calls: Optional[int] = None
+    priced_calls: Optional[int] = None
+    median_1h: Optional[float] = None
+    median_24h: Optional[float] = None
+    best: Optional[float] = None
+    hit_rate: Optional[float] = None
+    scored_24h: Optional[int] = None
+    last_call_at: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"account": XAccount}
+
+
+@dataclass
+class XCallers(Model):
+    days: Optional[int] = None
+    callers: List[XCaller] = field(default_factory=list)
+    computed_at: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"callers": (XCaller,)}
+
+
+@dataclass
+class XTokenMention(Model):
+    account: Optional[XAccount] = None
+    post_id: Optional[str] = None
+    url: Optional[str] = None
+    text: Optional[str] = None
+    kind: Optional[str] = None
+    at: Optional[str] = None
+    price_usd: Optional[float] = None
+    mcap_usd: Optional[float] = None
+    deleted: Optional[bool] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"account": XAccount}
+
+
+@dataclass
+class XToken(Model):
+    """Every tracked mention of one token, its first call and its multiple since."""
+
+    mint: Optional[str] = None
+    symbol: Optional[str] = None
+    accounts_1h: Optional[int] = None
+    accounts_24h: Optional[int] = None
+    first_call: Optional[XFirstCall] = None
+    price_usd: Optional[float] = None
+    multiple: Optional[float] = None
+    mentions: List[XTokenMention] = field(default_factory=list)
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"first_call": XFirstCall, "mentions": (XTokenMention,)}
+
+
+@dataclass
+class XDirectoryEntry(Model):
+    """A directory account. `status` is `active` or `not_found`. `followed`,
+    `muted` and `alerting` are always false signed out."""
+
+    handle: Optional[str] = None
+    screen_name: Optional[str] = None
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    followers: Optional[int] = None
+    category: Optional[str] = None
+    is_default: Optional[bool] = None
+    status: Optional[str] = None
+    last_ok_at: Optional[str] = None
+    followed: Optional[bool] = None
+    muted: Optional[bool] = None
+    alerting: Optional[bool] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class XDirectory(Model):
+    accounts: List[XDirectoryEntry] = field(default_factory=list)
+    hidden_categories: List[str] = field(default_factory=list)
+    categories: List[str] = field(default_factory=list)
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"accounts": (XDirectoryEntry,)}
+
+
+# -- Wallet Tracker ------------------------------------------------------------
+
+
+@dataclass
+class TrackedWalletRef(Model):
+    """Who a feed row belongs to. `source` is `ponkillionaire`, `agent`,
+    `notable`, `mine`, or `None` for a wallet read on demand. `agent_slug` is
+    the public profile at `/ponkillionaires/<slug>` when there is one."""
+
+    address: Optional[str] = None
+    label: Optional[str] = None
+    emoji: Optional[str] = None
+    color: Optional[str] = None
+    source: Optional[str] = None
+    agent_slug: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class WalletLeg(Model):
+    """One token movement. `amount` is a base-unit string, `dir` is `in` or `out`."""
+
+    mint: Optional[str] = None
+    symbol: Optional[str] = None
+    amount: Optional[str] = None
+    decimals: Optional[int] = None
+    dir: Optional[str] = None
+    usd: Optional[float] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class WalletEvent(Model):
+    """A swap or liquidity action by a tracked wallet, with its signature."""
+
+    key: Optional[str] = None
+    signature: Optional[str] = None
+    kind: Optional[str] = None
+    venue: Optional[str] = None
+    pool: Optional[str] = None
+    position: Optional[str] = None
+    token_mint: Optional[str] = None
+    legs: List[WalletLeg] = field(default_factory=list)
+    usd: Optional[float] = None
+    block_time: Optional[str] = None
+    seen_at: Optional[str] = None
+    is_backfill: Optional[bool] = None
+    wallet: Optional[TrackedWalletRef] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"legs": (WalletLeg,), "wallet": TrackedWalletRef}
+
+
+@dataclass
+class WalletSource(Model):
+    """The chain reader's state: `live`, `slowed` or `starting`."""
+
+    state: Optional[str] = None
+    wallets_fresh: Optional[int] = None
+    wallets_tracked: Optional[int] = None
+    last_ok_at: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class WalletFeed(Model):
+    """A page of wallet activity, newest first. `next_before` is the cursor."""
+
+    items: List[WalletEvent] = field(default_factory=list)
+    next_before: Optional[str] = None
+    source: Optional[WalletSource] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"items": (WalletEvent,), "source": WalletSource}
+
+
+@dataclass
+class CuratedWallet(Model):
+    """A wallet on the curated list and where it comes from (`kind`)."""
+
+    address: Optional[str] = None
+    label: Optional[str] = None
+    kind: Optional[str] = None
+    agent_slug: Optional[str] = None
+    source: Optional[str] = None
+    muted: Optional[bool] = None
+    last_activity_at: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class CuratedWallets(Model):
+    defaults: List[CuratedWallet] = field(default_factory=list)
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"defaults": (CuratedWallet,)}
+
+
+@dataclass
+class WalletActivity(Model):
+    """Any wallet's recent swaps and LP actions. `mode` is `tracked` (served
+    from what the tracker stored) or `live` (read from chain for this request,
+    with no paging)."""
+
+    address: Optional[str] = None
+    mode: Optional[str] = None
+    items: List[WalletEvent] = field(default_factory=list)
+    next_before: Optional[str] = None
+    last_ok_at: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"items": (WalletEvent,)}

@@ -3,6 +3,41 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.5.0 (2026-10-23)
+
+Added, in both the Python and the Rust client, all with no key needed:
+
+- **Live agents activity.** `agents_activity()` reads
+  `GET /public/agents-activity`: the board agents' confirmed actions of the
+  last 24 hours and every live hold, with the hold reason and check count. No
+  event carries an agent id, a slug, a name or a wallet.
+- **Weekly Ponkillionaires.** `ponkillionaires_week()` reads
+  `GET /public/ponkillionaires/week`: this week's standings, the prizes (the
+  following week's agent fee rate plus points) and last week's winners.
+- **X Tracker.** `x_feed`, `x_trending`, `x_callers`, `x_token`, `x_accounts`
+  and `x_status` (`/public/x/*`).
+- **Wallet Tracker.** `wallets_feed`, `wallets_defaults`, `wallets_status`
+  and `wallet_activity(address)` (`/public/wallets/*`).
+
+Changed:
+
+- **Referral tiers.** `Referral` gained `tier` (`current`, `share_bps`,
+  `referred_fees_usd`, `window_days`, `next`) and `programme` (`ladder`,
+  `window_days`). One level only: 20% of ponk's platform fee, 25% from $1,000
+  and 30% from $5,000 of referred platform fees over the trailing 30 days.
+- `PublicLink.path` is documented as `/ponkillionaires/<slug>`, which is what
+  the server sends.
+- Python: models can read camelCase responses (the trackers and the weekly
+  race) while exposing snake_case attributes. Rust: `XFeedQuery` and
+  `WalletFeedQuery` carry the feed filters.
+
+Not added: following X accounts, tracked wallets, live copy follow
+(`/agents/{id}/follow`, `/me/copy-follows`), mandate reminder settings and the
+PnL and referral card settings. Those are app session routes that take a
+wallet sign-in, not an API key, so a key-based client cannot call them.
+
+Versions: Python and Rust 0.4.0 to 0.5.0.
+
 ## 0.4.0 (2026-10-21)
 
 Added, in both the Python and the Rust client:

@@ -12,10 +12,10 @@ endpoint. It never computes a number the server did not send.
 pip install ponk
 ```
 
-PyPI carries 0.2.0. This directory is 0.4.0, which adds the leaderboard,
-copying a shared agent, follows, points and referrals (see
-[Changes in 0.4.0](#changes-in-040)); 0.3.0 made `create_agent`'s `dry_run`
-required. Until 0.4.0 is on PyPI, install it from this repository:
+0.5.0 adds the X Tracker, the Wallet Tracker, live agents activity, the
+weekly Ponkillionaires race and referral tiers (see
+[Changes in 0.5.0](#changes-in-050)). To install from this repository
+instead:
 
 ```bash
 git clone https://github.com/ponkexchange/ponk-sdk
@@ -236,6 +236,18 @@ if m is not None:
 | `public_agent_value_history(slug, range=None)` | `GET /public/agents/{slug}/value-history` | nothing |
 | `public_points_leaderboard(limit, offset)` | `GET /public/points/leaderboard` | nothing |
 | `resolve_referral(code)` | `GET /public/referral/{code}` | nothing |
+| `agents_activity()` | `GET /public/agents-activity` | nothing |
+| `ponkillionaires_week()` | `GET /public/ponkillionaires/week` | nothing |
+| `x_feed(before=, since=, limit=, category=, ca_only=, min_followers=, account=, q=)` | `GET /public/x/feed` | nothing |
+| `x_trending(window=None, limit=None)` | `GET /public/x/trending?window=1h\|24h` | nothing |
+| `x_callers(days=None)` | `GET /public/x/callers` | nothing |
+| `x_token(mint)` | `GET /public/x/token/{mint}` | nothing |
+| `x_accounts()` | `GET /public/x/accounts` | nothing |
+| `x_status()` | `GET /public/x/status` | nothing |
+| `wallets_feed(before=, limit=, kind=, min_usd=, token=, wallet=)` | `GET /public/wallets/feed` | nothing |
+| `wallets_defaults()` | `GET /public/wallets/defaults` | nothing |
+| `wallets_status()` | `GET /public/wallets/status` | nothing |
+| `wallet_activity(address, before=, limit=, kind=, min_usd=, token=)` | `GET /public/wallets/{address}/activity` | nothing |
 | `whoami()` | `GET /v1/me` | `read` |
 | `list_agents()` | `GET /v1/agents` | `read` |
 | `get_agent(id)` | `GET /v1/agents/{id}` | `read` |
@@ -374,6 +386,40 @@ print("holding $PONK would make that", perks.api_agent_fee.holder_percent, "%")
 
 `agent.managed_fee_bps` is the rate that specific agent's skim actually
 charges, before any $PONK holder discount.
+
+## Changes in 0.5.0
+
+* **Live agents activity, no key:** `agents_activity()` returns the board
+  agents' confirmed actions of the last 24 hours and every live hold, with no
+  identity on any event.
+* **Weekly Ponkillionaires, no key:** `ponkillionaires_week()` returns this
+  week's standings, the prizes (next week's agent fee rate plus points) and
+  last week's winners.
+* **X Tracker, no key:** `x_feed`, `x_trending`, `x_callers`, `x_token`,
+  `x_accounts`, `x_status`.
+* **Wallet Tracker, no key:** `wallets_feed`, `wallets_defaults`,
+  `wallets_status`, and `wallet_activity(address)` for any wallet.
+* **Referral tiers:** `referral()` now carries `tier` (`current`,
+  `share_bps`, `referred_fees_usd`, `window_days`, `next`) and `programme`
+  (`ladder`, `window_days`). One level only: 20%, 25% from $1,000 and 30% from
+  $5,000 of referred platform fees over 30 days.
+* The tracker and weekly race responses are camelCase on the wire; the models
+  expose snake_case attributes (`accounts_1h` reads `accounts1h`).
+* `PublicLink.path` is documented as `/ponkillionaires/<slug>`, the path the
+  server sends.
+
+Not in the client, by design: following X accounts, tracked wallets, live copy
+follow, mandate reminder settings and the PnL and referral card settings are
+app session routes (`/me/*`, `/agents/{id}/follow`) that need a wallet
+sign-in, not an API key.
+
+```python
+ponk = PonkClient()
+hot = ponk.x_trending(window="24h", limit=10)
+week = ponk.ponkillionaires_week()
+tier = PonkClient(api_key=KEY).referral().tier
+print(tier.current, tier.share_bps / 100, "%", tier.next.min_fees_usd if tier.next else "top")
+```
 
 ## Changes in 0.4.0
 

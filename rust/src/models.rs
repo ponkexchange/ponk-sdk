@@ -933,7 +933,7 @@ pub struct ValueHistory {
     pub positions: Option<u64>,
 }
 
-/// An agent's live public link. `path` is site-relative (`/a/<slug>`), and
+/// An agent's live public link. `path` is site-relative (`/ponkillionaires/<slug>`), and
 /// `show_onchain` is always false while `hide_usd` is set.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -1050,6 +1050,43 @@ pub struct Referral {
     pub referred_lp_fees_usd: Option<f64>,
     pub handle: Option<String>,
     pub creator_application: Option<serde_json::Value>,
+    /// Your referral tier now and the next rung.
+    pub tier: Option<ReferralTier>,
+    /// The whole ladder, so no client hardcodes a rate.
+    pub programme: Option<ReferralProgramme>,
+}
+
+/// One rung of the referral ladder. `share_bps` is bps of ponk's platform fee.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ReferralTierStep {
+    pub tier: Option<u8>,
+    pub min_fees_usd: Option<u64>,
+    pub share_bps: Option<u16>,
+}
+
+/// Your referral tier, from the platform fees your referred users paid over
+/// the trailing `window_days`. One level only: nobody above you earns on the
+/// people you referred. `referred_fees_usd` is `None` when it could not be
+/// read; the share is then the base rate and no progress should be shown.
+/// `next` is `None` at the top. Every share comes out of ponk's fee and never
+/// changes what a user pays.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ReferralTier {
+    pub current: Option<u8>,
+    pub share_bps: Option<u16>,
+    pub referred_fees_usd: Option<f64>,
+    pub window_days: Option<i32>,
+    pub next: Option<ReferralTierStep>,
+}
+
+/// The programme's constants, lowest rung first.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ReferralProgramme {
+    pub ladder: Vec<ReferralTierStep>,
+    pub window_days: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1103,4 +1140,550 @@ pub struct HandleCheck {
 pub struct PublicReferral {
     pub code: Option<String>,
     pub creator: Option<bool>,
+}
+
+// -- live agents activity ----------------------------------------------------
+
+/// One event on the live agents strip. It carries no identity at all.
+///
+/// `kind` is `open`, `rebalance`, `compound`, `claim`, `exit` or `hold`.
+/// `coarse` means `at` was truncated to the start of its hour. `usd` is a
+/// decimal string; `usd_kind` is `fees` (realized net fees of a compound or
+/// claim) or `margin` (the rebalance gate's benefit minus cost on a hold).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ActivityEvent {
+    pub key: Option<String>,
+    pub kind: Option<String>,
+    pub at: Option<String>,
+    pub coarse: Option<bool>,
+    pub dex: Option<String>,
+    pub token_x_mint: Option<String>,
+    pub token_y_mint: Option<String>,
+    pub usd: Option<String>,
+    pub usd_kind: Option<String>,
+    pub reason_key: Option<String>,
+    pub evaluations: Option<i64>,
+    pub last_seen_at: Option<String>,
+}
+
+/// `GET /public/agents-activity`: the board agents' actions of the last 24
+/// hours and every live hold. `holding` counts agents holding right now.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentsActivity {
+    pub events: Vec<ActivityEvent>,
+    pub holding: Option<i64>,
+    pub computed_at: Option<String>,
+}
+
+// -- weekly Ponkillionaires --------------------------------------------------
+
+/// A weekly prize: the agent fee rate for the following week
+/// (`fee_rate_pct`, 2.0 means 2%) plus points.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WeekPrize {
+    pub rank: Option<i64>,
+    pub fee_rate_pct: Option<f64>,
+    pub points: Option<i64>,
+}
+
+/// A row of this week's race. `prize` is what the rank would win if the week
+/// ended now, `None` for a row in loss. `handle`, `display_name` and `wallet`
+/// appear only when the owner chose to show them on the board.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WeekStanding {
+    pub rank: Option<i64>,
+    pub pnl_usd: Option<f64>,
+    pub agents: Option<i64>,
+    pub deployed_usd: Option<f64>,
+    pub prize: Option<WeekPrize>,
+    pub owner_key: Option<String>,
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+    pub wallet: Option<String>,
+}
+
+/// A settled winner; the prize rate runs from `rate_from` to `rate_until`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WeekWinner {
+    pub rank: Option<i64>,
+    pub pnl_usd: Option<f64>,
+    pub agents: Option<i64>,
+    pub fee_rate_pct: Option<f64>,
+    pub points: Option<f64>,
+    pub rate_from: Option<String>,
+    pub rate_until: Option<String>,
+    pub owner_key: Option<String>,
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+    pub wallet: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LastWeek {
+    pub week_start: Option<String>,
+    pub settled: Option<bool>,
+    pub winners: Vec<WeekWinner>,
+}
+
+/// `GET /public/ponkillionaires/week`: this week's race for the top three and
+/// last week's winners. Resets Monday 00:00 UTC (`resets_at`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PonkillionairesWeek {
+    pub week_start: Option<String>,
+    pub resets_at: Option<String>,
+    pub prizes: Vec<WeekPrize>,
+    pub min_peak_usd: Option<i64>,
+    pub min_running_days: Option<i64>,
+    pub standings: Vec<WeekStanding>,
+    pub last_week: Option<LastWeek>,
+    pub computed_at: Option<String>,
+}
+
+// -- X Tracker ---------------------------------------------------------------
+
+/// A tracked X account. `handle` is lowercase; `screen_name` keeps its case.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XAccount {
+    pub handle: Option<String>,
+    pub screen_name: Option<String>,
+    pub name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub followers: Option<i64>,
+    pub category: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XTokenRef {
+    pub mint: Option<String>,
+    pub symbol: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XAuthor {
+    pub screen_name: Option<String>,
+    pub name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XMetrics {
+    pub views: Option<i64>,
+    pub likes: Option<i64>,
+    pub replies: Option<i64>,
+    pub reposts: Option<i64>,
+}
+
+/// A post on the feed. `tokens` are the Solana mints it names.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XPost {
+    pub id: Option<String>,
+    pub kind: Option<String>,
+    pub url: Option<String>,
+    pub text: Option<String>,
+    pub created_at: Option<String>,
+    pub seen_at: Option<String>,
+    pub latency_secs: Option<i64>,
+    pub is_backfill: Option<bool>,
+    pub reply_to: Option<String>,
+    pub author: Option<XAuthor>,
+    pub media: Vec<serde_json::Value>,
+    pub quote: Option<serde_json::Value>,
+    pub card: Option<serde_json::Value>,
+    pub metrics: Option<XMetrics>,
+    pub tokens: Vec<XTokenRef>,
+    pub cashtags: Vec<String>,
+    pub deleted_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XEventPost {
+    pub id: Option<String>,
+    pub url: Option<String>,
+    pub text: Option<String>,
+    pub created_at: Option<String>,
+    pub tokens: Vec<XTokenRef>,
+}
+
+/// A change on a tracked account, with `before` and `after` where they apply.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XEvent {
+    pub id: Option<i64>,
+    pub kind: Option<String>,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub detail: Option<serde_json::Value>,
+    pub at: Option<String>,
+    pub post: Option<XEventPost>,
+}
+
+/// One feed row. `item_type` (the JSON `type`) is `post` or `event`, and the
+/// matching field is set.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XFeedItem {
+    #[serde(rename = "type")]
+    pub item_type: Option<String>,
+    pub key: Option<String>,
+    pub account: Option<XAccount>,
+    pub post: Option<XPost>,
+    pub event: Option<XEvent>,
+}
+
+/// The feed's data source. `state` is `live`, `degraded`, `down` or `starting`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XSource {
+    pub name: Option<String>,
+    pub url: Option<String>,
+    pub state: Option<String>,
+    pub last_ok_at: Option<String>,
+    pub last_error_at: Option<String>,
+    pub last_error: Option<String>,
+    pub requests_1h: Option<i64>,
+    pub rate_limited_1h: Option<i64>,
+    pub median_latency_secs: Option<i64>,
+    pub accounts_fresh: Option<i64>,
+    pub accounts_active: Option<i64>,
+    pub hot_secs: Option<u64>,
+    pub normal_secs: Option<u64>,
+    pub cold_secs: Option<u64>,
+}
+
+/// A page of the X feed, newest first. Pass `next_before` back as `before`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XFeed {
+    pub items: Vec<XFeedItem>,
+    pub next_before: Option<String>,
+    pub source: Option<XSource>,
+}
+
+/// The first tracked account to post a token, with the price when seen.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XFirstCall {
+    pub handle: Option<String>,
+    pub screen_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub post_id: Option<String>,
+    pub url: Option<String>,
+    pub at: Option<String>,
+    pub price_usd: Option<f64>,
+    pub mcap_usd: Option<f64>,
+}
+
+/// A token trending on X. `multiple` is price now over the first call's price.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XTrendingToken {
+    pub mint: Option<String>,
+    pub symbol: Option<String>,
+    pub name: Option<String>,
+    pub accounts_1h: Option<i64>,
+    pub accounts_24h: Option<i64>,
+    pub mentions_24h: Option<i64>,
+    pub last_at: Option<String>,
+    pub first_call: Option<XFirstCall>,
+    pub price_usd: Option<f64>,
+    pub mcap_usd: Option<f64>,
+    pub multiple: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XTrending {
+    pub window: Option<String>,
+    pub tokens: Vec<XTrendingToken>,
+    pub computed_at: Option<String>,
+}
+
+/// A caller's record. Medians and `best` are price multiples after the call;
+/// `hit_rate` is the share of 24h-marked calls that were up, as a fraction.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XCaller {
+    pub account: Option<XAccount>,
+    pub calls: Option<i64>,
+    pub priced_calls: Option<i64>,
+    pub median_1h: Option<f64>,
+    pub median_24h: Option<f64>,
+    pub best: Option<f64>,
+    pub hit_rate: Option<f64>,
+    pub scored_24h: Option<i64>,
+    pub last_call_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XCallers {
+    pub days: Option<i64>,
+    pub callers: Vec<XCaller>,
+    pub computed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XTokenMention {
+    pub account: Option<XAccount>,
+    pub post_id: Option<String>,
+    pub url: Option<String>,
+    pub text: Option<String>,
+    pub kind: Option<String>,
+    pub at: Option<String>,
+    pub price_usd: Option<f64>,
+    pub mcap_usd: Option<f64>,
+    pub deleted: Option<bool>,
+}
+
+/// Every tracked mention of one token, its first call and its multiple since.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XToken {
+    pub mint: Option<String>,
+    pub symbol: Option<String>,
+    pub accounts_1h: Option<i64>,
+    pub accounts_24h: Option<i64>,
+    pub first_call: Option<XFirstCall>,
+    pub price_usd: Option<f64>,
+    pub multiple: Option<f64>,
+    pub mentions: Vec<XTokenMention>,
+}
+
+/// A directory account. `status` is `active` or `not_found`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XDirectoryEntry {
+    pub handle: Option<String>,
+    pub screen_name: Option<String>,
+    pub name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub followers: Option<i64>,
+    pub category: Option<String>,
+    pub is_default: Option<bool>,
+    pub status: Option<String>,
+    pub last_ok_at: Option<String>,
+    pub followed: Option<bool>,
+    pub muted: Option<bool>,
+    pub alerting: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XDirectory {
+    pub accounts: Vec<XDirectoryEntry>,
+    pub hidden_categories: Vec<String>,
+    pub categories: Vec<String>,
+}
+
+// -- Wallet Tracker ----------------------------------------------------------
+
+/// Who a feed row belongs to. `source` is `ponkillionaire`, `agent`,
+/// `notable`, `mine`, or `None` for a wallet read on demand.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TrackedWalletRef {
+    pub address: Option<String>,
+    pub label: Option<String>,
+    pub emoji: Option<String>,
+    pub color: Option<String>,
+    pub source: Option<String>,
+    pub agent_slug: Option<String>,
+}
+
+/// One token movement. `amount` is a base-unit string, `dir` is `in` or `out`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WalletLeg {
+    pub mint: Option<String>,
+    pub symbol: Option<String>,
+    pub amount: Option<String>,
+    pub decimals: Option<u8>,
+    pub dir: Option<String>,
+    pub usd: Option<f64>,
+}
+
+/// A swap or liquidity action by a tracked wallet, with its signature.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WalletEvent {
+    pub key: Option<String>,
+    pub signature: Option<String>,
+    pub kind: Option<String>,
+    pub venue: Option<String>,
+    pub pool: Option<String>,
+    pub position: Option<String>,
+    pub token_mint: Option<String>,
+    pub legs: Vec<WalletLeg>,
+    pub usd: Option<f64>,
+    pub block_time: Option<String>,
+    pub seen_at: Option<String>,
+    pub is_backfill: Option<bool>,
+    pub wallet: Option<TrackedWalletRef>,
+}
+
+/// The chain reader's state: `live`, `slowed` or `starting`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WalletSource {
+    pub state: Option<String>,
+    pub wallets_fresh: Option<i64>,
+    pub wallets_tracked: Option<i64>,
+    pub last_ok_at: Option<String>,
+}
+
+/// A page of wallet activity, newest first. `next_before` is the cursor.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WalletFeed {
+    pub items: Vec<WalletEvent>,
+    pub next_before: Option<String>,
+    pub source: Option<WalletSource>,
+}
+
+/// A wallet on the curated list and where it comes from (`kind`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CuratedWallet {
+    pub address: Option<String>,
+    pub label: Option<String>,
+    pub kind: Option<String>,
+    pub agent_slug: Option<String>,
+    pub source: Option<String>,
+    pub muted: Option<bool>,
+    pub last_activity_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CuratedWallets {
+    pub defaults: Vec<CuratedWallet>,
+}
+
+/// Any wallet's recent swaps and LP actions. `mode` is `tracked` (from what
+/// the tracker stored) or `live` (read from chain for this request).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WalletActivity {
+    pub address: Option<String>,
+    pub mode: Option<String>,
+    pub items: Vec<WalletEvent>,
+    pub next_before: Option<String>,
+    pub last_ok_at: Option<String>,
+}
+
+#[cfg(test)]
+mod live_shape_tests {
+    use super::*;
+
+    #[test]
+    fn the_x_trackers_digit_suffixed_camel_case_keys_decode() {
+        let t: XTrending = serde_json::from_str(
+            r#"{"window":"1h","tokens":[{"mint":"M","symbol":"S","accounts1h":1,"accounts24h":2,
+            "mentions24h":3,"lastAt":"2026-10-23T03:22:04Z","firstCall":{"handle":"h","screenName":"H",
+            "postId":"9","url":"u","at":"2026-10-23T03:00:00Z","priceUsd":null,"mcapUsd":null},
+            "priceUsd":1.5,"mcapUsd":null,"multiple":null}],"computedAt":"2026-10-23T04:00:00Z"}"#,
+        )
+        .unwrap();
+        let tok = &t.tokens[0];
+        assert_eq!((tok.accounts_1h, tok.accounts_24h, tok.mentions_24h), (Some(1), Some(2), Some(3)));
+        assert_eq!(tok.first_call.as_ref().unwrap().post_id.as_deref(), Some("9"));
+        assert!(tok.multiple.is_none());
+
+        let s: XSource = serde_json::from_str(
+            r#"{"name":"FxTwitter","state":"live","requests1h":5721,"rateLimited1h":0,"hotSecs":20}"#,
+        )
+        .unwrap();
+        assert_eq!((s.requests_1h, s.rate_limited_1h, s.hot_secs), (Some(5721), Some(0), Some(20)));
+    }
+
+    #[test]
+    fn a_feed_item_names_its_type() {
+        let f: XFeed = serde_json::from_str(
+            r#"{"items":[{"type":"post","key":"p:a:1","account":{"handle":"a","screenName":"A"},
+            "post":{"id":"1","tokens":[{"mint":"M","symbol":null}],"metrics":{"views":3}}}],
+            "nextBefore":null,"source":{"state":"live"}}"#,
+        )
+        .unwrap();
+        let item = &f.items[0];
+        assert_eq!(item.item_type.as_deref(), Some("post"));
+        assert_eq!(item.post.as_ref().unwrap().tokens[0].mint.as_deref(), Some("M"));
+        assert!(item.event.is_none());
+    }
+
+    #[test]
+    fn the_week_flattens_identity_into_each_row() {
+        let w: PonkillionairesWeek = serde_json::from_str(
+            r#"{"weekStart":"2026-10-19T00:00:00Z","resetsAt":"2026-10-26T00:00:00Z",
+            "prizes":[{"rank":1,"feeRatePct":2.0,"points":50000}],"minPeakUsd":250,"minRunningDays":3,
+            "standings":[{"rank":1,"pnlUsd":41.5,"agents":2,"deployedUsd":900.0,"prize":null,
+            "ownerKey":"k1","handle":null,"displayName":"kader","wallet":null}],
+            "lastWeek":{"weekStart":"2026-10-12T00:00:00Z","settled":true,"winners":[]},
+            "computedAt":"2026-10-23T04:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(w.min_peak_usd, Some(250));
+        assert_eq!(w.prizes[0].fee_rate_pct, Some(2.0));
+        assert_eq!(w.standings[0].display_name.as_deref(), Some("kader"));
+        assert_eq!(w.last_week.unwrap().settled, Some(true));
+    }
+
+    #[test]
+    fn activity_money_stays_a_string() {
+        let a: AgentsActivity = serde_json::from_str(
+            r#"{"events":[{"key":"k","kind":"compound","at":"2026-10-23T02:14:09Z","coarse":false,
+            "dex":"meteora_dlmm","usd":"1.234567","usd_kind":"fees"}],"holding":7,
+            "computed_at":"2026-10-23T04:10:05Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(a.holding, Some(7));
+        assert_eq!(a.events[0].usd.as_deref(), Some("1.234567"));
+    }
+
+    #[test]
+    fn the_referral_tier_and_ladder_decode() {
+        let r: Referral = serde_json::from_str(
+            r#"{"code":"abc","tier":{"current":2,"share_bps":2500,"referred_fees_usd":1500.0,
+            "window_days":30,"next":{"tier":3,"min_fees_usd":5000,"share_bps":3000}},
+            "programme":{"ladder":[{"tier":1,"min_fees_usd":0,"share_bps":2000},
+            {"tier":2,"min_fees_usd":1000,"share_bps":2500},{"tier":3,"min_fees_usd":5000,"share_bps":3000}],
+            "window_days":30}}"#,
+        )
+        .unwrap();
+        let t = r.tier.unwrap();
+        assert_eq!((t.current, t.share_bps), (Some(2), Some(2500)));
+        assert_eq!(t.next.unwrap().min_fees_usd, Some(5000));
+        let ladder: Vec<_> = r.programme.unwrap().ladder.iter().map(|s| s.share_bps).collect();
+        assert_eq!(ladder, vec![Some(2000), Some(2500), Some(3000)]);
+    }
+
+    #[test]
+    fn a_wallet_event_keeps_base_unit_amounts() {
+        let f: WalletFeed = serde_json::from_str(
+            r#"{"items":[{"key":"sig:a","signature":"a","kind":"buy","tokenMint":"M",
+            "legs":[{"mint":"U","amount":"1000000","decimals":6,"dir":"out","usd":1.0}],
+            "usd":1.0,"blockTime":"2026-10-23T04:00:00Z","seenAt":"2026-10-23T04:00:03Z","isBackfill":false,
+            "wallet":{"address":"W","agentSlug":"abc123","source":"ponkillionaire"}}],
+            "nextBefore":"1761192000000_42","source":{"state":"live","walletsFresh":1,"walletsTracked":2}}"#,
+        )
+        .unwrap();
+        let e = &f.items[0];
+        assert_eq!(e.token_mint.as_deref(), Some("M"));
+        assert_eq!(e.legs[0].amount.as_deref(), Some("1000000"));
+        assert_eq!(e.wallet.as_ref().unwrap().agent_slug.as_deref(), Some("abc123"));
+        assert_eq!(f.source.unwrap().wallets_tracked, Some(2));
+    }
 }

@@ -156,6 +156,18 @@ key can move your funds home. It cannot move them anywhere else.
 | `public_agent_value_history(slug, range)` | `GET /public/agents/{slug}/value-history` | nothing |
 | `public_points_leaderboard(limit, offset)` | `GET /public/points/leaderboard` | nothing |
 | `resolve_referral(code)` | `GET /public/referral/{code}` | nothing |
+| `agents_activity()` | `GET /public/agents-activity` | nothing |
+| `ponkillionaires_week()` | `GET /public/ponkillionaires/week` | nothing |
+| `x_feed(&XFeedQuery)` | `GET /public/x/feed` | nothing |
+| `x_trending(window, limit)` | `GET /public/x/trending?window=1h\|24h` | nothing |
+| `x_callers(days)` | `GET /public/x/callers` | nothing |
+| `x_token(mint)` | `GET /public/x/token/{mint}` | nothing |
+| `x_accounts()` | `GET /public/x/accounts` | nothing |
+| `x_status()` | `GET /public/x/status` | nothing |
+| `wallets_feed(&WalletFeedQuery)` | `GET /public/wallets/feed` | nothing |
+| `wallets_defaults()` | `GET /public/wallets/defaults` | nothing |
+| `wallets_status()` | `GET /public/wallets/status` | nothing |
+| `wallet_activity(address, &WalletFeedQuery)` | `GET /public/wallets/{address}/activity` | nothing |
 | `whoami()` | `GET /v1/me` | `read` |
 | `list_agents()` | `GET /v1/agents` | `read` |
 | `get_agent(id)` | `GET /v1/agents/{id}` | `read` |

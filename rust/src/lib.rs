@@ -112,7 +112,10 @@ mod models;
 #[cfg(feature = "webhooks")]
 pub mod webhooks;
 
-pub use client::{Client, ClientBuilder, DEFAULT_BASE_URL, DEFAULT_FUND_TIMEOUT, DEFAULT_TIMEOUT};
+pub use client::{
+    Client, ClientBuilder, WalletFeedQuery, XFeedQuery, DEFAULT_BASE_URL, DEFAULT_FUND_TIMEOUT,
+    DEFAULT_TIMEOUT,
+};
 pub use error::{ApiError, Error, ErrorKind};
 pub use models::{
     ActionLog, ActionReceipt, Agent, AgentCopy, AgentPerformance, AgentPosition, AgentWallet,
@@ -122,4 +125,12 @@ pub use models::{
     PointsEntry, PointsLeaderboard, PointsSeason, PonkPerks, PoolSnapshot, Position, PublicAgent,
     PublicLink, PublicReferral, RangeCostQuote, Referral, ReferralCode, TokenAmount, ValueHistory,
     WhoAmI, Withdrawal,
+};
+pub use models::{
+    ActivityEvent, AgentsActivity, CuratedWallet, CuratedWallets, LastWeek, PonkillionairesWeek,
+    ReferralProgramme, ReferralTier, ReferralTierStep, TrackedWalletRef, WalletActivity,
+    WalletEvent, WalletFeed, WalletLeg, WalletSource, WeekPrize, WeekStanding, WeekWinner,
+    XAccount, XAuthor, XCaller, XCallers, XDirectory, XDirectoryEntry, XEvent, XEventPost, XFeed,
+    XFeedItem, XFirstCall, XMetrics, XPost, XSource, XToken, XTokenMention, XTokenRef, XTrending,
+    XTrendingToken,
 };

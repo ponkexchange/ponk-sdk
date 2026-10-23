@@ -151,9 +151,9 @@ class TestAccountReads(unittest.TestCase):
 
 class TestWrites(unittest.TestCase):
     def test_share_sends_only_what_was_asked(self):
-        c, opener = client({"slug": "abc123", "path": "/a/abc123", "hide_usd": True, "show_onchain": False})
+        c, opener = client({"slug": "abc123", "path": "/ponkillionaires/abc123", "hide_usd": True, "show_onchain": False})
         link = c.share_agent("a", hide_usd=True)
-        self.assertEqual(link.path, "/a/abc123")
+        self.assertEqual(link.path, "/ponkillionaires/abc123")
         self.assertEqual(opener.calls[0]["method"], "POST")
         self.assertEqual(opener.calls[0]["url"], BASE + "/v1/agents/a/public-link")
         self.assertEqual(opener.calls[0]["body"], {"hide_usd": True})

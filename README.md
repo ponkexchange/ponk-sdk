@@ -35,10 +35,10 @@ drive that from your own code instead of the app.
 ## Install
 
 ```bash
-# Python, from PyPI (0.2.0 today)
+# Python, from PyPI
 pip install ponk
 
-# Python, this repository (0.4.0, not yet on PyPI)
+# Python, straight from this repository
 pip install "git+https://github.com/ponkexchange/ponk-sdk#subdirectory=python"
 ```
 
@@ -143,7 +143,9 @@ retrying an authentication failure forever.
 |---|---|
 | **Read** | `whoami` · `list_agents` · `get_agent` · `agent_performance` · `agent_position` · `agent_value_history` · `agent_decisions` · `agent_wallet` · `agent_mandate` · `list_positions` · `list_logs` · `get_public_link` · `list_follows` · `points` · `points_leaderboard` · `referral` · `creator_dashboard` · `check_handle` |
 | **Act** (`trade` scope) | `create_agent` · `copy_agent` (Python) · `optimize_draft` · `pause_agent` · `resume_agent` · `set_dry_run` · `set_mode` · `update_config` · `update_exits` · `set_auto_compound` · `set_autonomous` · `share_agent` · `unshare_agent` · `follow` · `unfollow` · `claim_handle` · `compound` · `withdraw` · `exit_agent` |
-| **Public** (no key) | `health` · `pool` · `range_cost` · `ponk_perks` · `leaderboard` · `public_agent` · `public_agent_value_history` · `public_points_leaderboard` · `resolve_referral` |
+| **Public** (no key) | `health` · `pool` · `range_cost` · `ponk_perks` · `leaderboard` · `public_agent` · `public_agent_value_history` · `public_points_leaderboard` · `resolve_referral` · `agents_activity` · `ponkillionaires_week` |
+| **X Tracker** (no key) | `x_feed` · `x_trending` · `x_callers` · `x_token` · `x_accounts` · `x_status` |
+| **Wallet Tracker** (no key) | `wallets_feed` · `wallets_defaults` · `wallets_status` · `wallet_activity` |
 
 `create_agent` accepts `dry_run=True`, which runs the whole decision loop and
 records what it *would* have done without sending a transaction. Start there.
@@ -155,6 +157,36 @@ argument for that reason.
 signed in the app, or off. It cannot create a mandate. `agent_mandate` reads
 that mandate's expiry, which is the thing to watch: a lapsed mandate stops the
 agent signing without any error.
+
+`referral()` carries your referral tier: one level, 20% of ponk's platform
+fee on the people you referred, 25% once they paid $1,000 of platform fees
+over the trailing 30 days, 30% from $5,000. `tier.next` is the next rung and
+`programme.ladder` the whole ladder, so no integration hardcodes a rate.
+
+## Watch the market without a key
+
+```python
+from ponk import PonkClient
+
+ponk = PonkClient()
+for t in ponk.x_trending(window="1h").tokens:
+    print(t.symbol, t.accounts_1h, "accounts, first call by", t.first_call.screen_name, t.multiple or "-")
+
+for e in ponk.agents_activity().events:
+    print(e.kind, e.dex, e.at, e.usd or "-")
+
+week = ponk.ponkillionaires_week()
+for s in week.standings[:3]:
+    print(s.rank, s.display_name or s.owner_key, s.pnl_usd)
+
+activity = ponk.wallet_activity(ANY_WALLET_ADDRESS)
+print(activity.mode, [(e.kind, e.usd) for e in activity.items[:5]])
+```
+
+Following X accounts, tracking your own wallets, live copy follow and the
+notification and card settings are app session routes (`/me/*`,
+`/agents/{id}/follow`). They take a wallet sign-in, not an API key, so they are
+not in these clients. Use them in the app.
 
 ## Copy a Top Ponkillionaire
 
