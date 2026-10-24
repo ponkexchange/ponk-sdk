@@ -84,8 +84,13 @@ import urllib.request
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence
 
 from ._version import __version__
-from .errors import PonkTransportError, error_from_response
+from .errors import PonkError, PonkTransportError, error_from_response
 from .models import (
+    CopilotFleet,
+    CopilotFleetSummary,
+    CopilotParse,
+    CopilotPlan,
+    CopilotStart,
     ActionLog,
     AgentsActivity,
     CuratedWallets,
@@ -205,6 +210,12 @@ class PonkClient:
             to reach only the endpoints that need no key (`health`, `pool`,
             `range_cost`, `ponk_perks`); every other method will then get a
             401 from the server.
+        session_token: a signed-in wallet session (Sign-In-With-Solana on
+            ponk.exchange, `POST /auth/nonce` then `POST /auth/verify`). The
+            copilot methods take ONLY this: their routes accept a wallet
+            session and refuse an API key, so a fleet is planned, started and
+            stopped only by the wallet's own session. Every other method keeps
+            using `api_key`.
         base_url: defaults to production. Point it elsewhere to test.
         timeout: seconds for read and control calls.
         fund_timeout: seconds for compound, withdraw and exit.
@@ -217,12 +228,14 @@ class PonkClient:
         api_key: Optional[str] = None,
         base_url: str = DEFAULT_BASE_URL,
         *,
+        session_token: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         fund_timeout: float = DEFAULT_FUND_TIMEOUT,
         opener: Optional[urllib.request.OpenerDirector] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.session_token = session_token
         self.timeout = timeout
         self.fund_timeout = fund_timeout
         self._opener = opener or urllib.request.build_opener()
@@ -239,6 +252,7 @@ class PonkClient:
         timeout: Optional[float] = None,
         allow_statuses: tuple = (),
         headers: Optional[Mapping[str, str]] = None,
+        session_only: bool = False,
     ) -> Any:
         url = self.base_url + path
         if params:
@@ -252,7 +266,17 @@ class PonkClient:
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
-        if self.api_key:
+        if session_only:
+            # The copilot routes take a wallet session only. The key is never
+            # sent to them, even when this client also holds one.
+            if not self.session_token:
+                raise PonkError(
+                    "{0} {1} needs a wallet session: construct the client with "
+                    "session_token=. The copilot refuses an API key by design, so "
+                    "nothing was sent.".format(method, path)
+                )
+            headers["Authorization"] = "Bearer " + self.session_token
+        elif self.api_key:
             headers["Authorization"] = "Bearer " + self.api_key
         if extra_headers:
             headers.update(extra_headers)
@@ -1329,6 +1353,158 @@ class PonkClient:
         """
         return AgentWalletCreated.from_dict(
             self._request("POST", "/v1/agents/{0}/wallet".format(_seg(agent_id)))
+        )
+
+    # -- the copilot (wallet session only) -----------------------------------
+
+    def copilot_parse(self, text: str) -> CopilotParse:
+        """`POST /copilot/parse`. Read one sentence with ponk's closed grammar.
+
+        Pure on the server: reads nothing, writes nothing. `ok` false carries
+        `refusal` (a `code`, a sentence, the words not understood and example
+        sentences that do parse). No language model runs anywhere. Needs
+        `session_token`; an API key is never sent here.
+        """
+        return CopilotParse.from_dict(
+            self._request("POST", "/copilot/parse", body={"text": text}, session_only=True)
+        )
+
+    def copilot_plan(self, text: str) -> CopilotPlan:
+        """`POST /copilot/plans`. Start building a plan from one sentence.
+
+        Returns at once with `state` `building`; poll `copilot_get_plan` (or
+        use `copilot_wait`). A sentence that does not parse, or that stops or
+        shows a fleet rather than planning one, raises
+        `PonkUnprocessableError` with the parser's sentence. Creates nothing
+        and moves nothing. Plans last 15 minutes.
+        """
+        return CopilotPlan.from_dict(
+            self._request("POST", "/copilot/plans", body={"text": text}, session_only=True)
+        )
+
+    def copilot_get_plan(self, plan_id: str) -> CopilotPlan:
+        """`GET /copilot/plans/{id}`. The plan, its progress and its replay."""
+        return CopilotPlan.from_dict(
+            self._request("GET", "/copilot/plans/{0}".format(_seg(plan_id)), session_only=True)
+        )
+
+    def copilot_replay(self, plan_id: str) -> CopilotPlan:
+        """`POST /copilot/plans/{id}/replay`. Replay every leg over the last 30 days.
+
+        The replay runs on the server; poll the plan until `replay.state` is
+        `done`. A repeat while it runs or after it finished returns the plan
+        as it is. Read `replay.result` as sent: net, holding and net against
+        holding side by side. It is one past window, not a forecast.
+        """
+        return CopilotPlan.from_dict(
+            self._request(
+                "POST", "/copilot/plans/{0}/replay".format(_seg(plan_id)), session_only=True
+            )
+        )
+
+    def copilot_wait(
+        self,
+        plan_id: str,
+        *,
+        replay: bool = True,
+        timeout: float = 300.0,
+        sleep: Any = None,
+    ) -> CopilotPlan:
+        """Poll a plan until it is ready (and replayed, with `replay=True`) or refused.
+
+        Starts the replay once the plan is ready when it has not run. Returns
+        the last read when `timeout` seconds pass, so check `state` and
+        `replay.state` rather than assuming it finished. `sleep` defaults to
+        `time.sleep` and is a parameter for tests.
+        """
+        import time
+
+        pause = sleep or time.sleep
+        deadline = time.monotonic() + timeout
+        asked = False
+        while True:
+            plan = self.copilot_get_plan(plan_id)
+            rstate = plan.replay.state if plan.replay else None
+            if plan.state == "ready" and replay and rstate == "idle" and not asked:
+                asked = True
+                self.copilot_replay(plan_id)
+                continue
+            settled = plan.state == "refused" or (
+                plan.state == "ready" and (not replay or rstate == "done")
+            )
+            if settled or time.monotonic() >= deadline:
+                return plan
+            pause(max((plan.poll_after_ms or 2000) / 1000.0, 1.0))
+
+    def copilot_start(self, plan_id: str) -> CopilotStart:
+        """`POST /copilot/plans/{id}/start`. Create the agents and prepare the funding.
+
+        The agents are created in dry run, each with its own empty managed
+        wallet, and the funding comes back as UNSIGNED transfers from your
+        wallet (`funding`, a `FundPlan`) plus `sign_url`, the ponk.exchange
+        page where your wallet signs them and then one custody mandate per
+        agent (`mandate_queue`). NOTHING MOVES until your wallet signs; this
+        client never signs. A plan starts at most once: a repeat returns
+        `already_started` with the existing `fleet_id`. Takes the fund timeout.
+        """
+        return CopilotStart.from_dict(
+            self._request(
+                "POST",
+                "/copilot/plans/{0}/start".format(_seg(plan_id)),
+                timeout=self.fund_timeout,
+                session_only=True,
+            )
+        )
+
+    def copilot_fleets(self) -> List[CopilotFleetSummary]:
+        """`GET /copilot/fleets`. Every fleet this wallet started from a plan."""
+        return CopilotFleetSummary.from_list(
+            self._request("GET", "/copilot/fleets", session_only=True)
+        )
+
+    def copilot_fleet(self, fleet_id: str) -> CopilotFleet:
+        """`GET /copilot/fleets/{id}`. The fleet live: totals, the stop now, every agent.
+
+        USD figures the server could not price are `None`, never zero, and
+        `totals["unvalued"]` counts the agents left out of the totals.
+        """
+        return CopilotFleet.from_dict(
+            self._request("GET", "/copilot/fleets/{0}".format(_seg(fleet_id)), session_only=True)
+        )
+
+    def copilot_stop_fleet(self, fleet_id: str) -> FleetBatch:
+        """`POST /copilot/fleets/{id}/stop`. Close every agent in this fleet.
+
+        Each agent of this fleet only is stopped, its position closed and its
+        own wallet swept to your linked wallet through the managed exit under
+        the mandate you signed; the destination cannot be named. The exits run
+        detached: a `running` item is still going, not failed, and
+        `copilot_fleet` shows where each agent got to. Do not call it again
+        for the same fleet: a second stop answers 409. Takes the fund timeout.
+        """
+        return FleetBatch.from_dict(
+            self._request(
+                "POST",
+                "/copilot/fleets/{0}/stop".format(_seg(fleet_id)),
+                timeout=self.fund_timeout,
+                session_only=True,
+            )
+        )
+
+    def copilot_tighten_stop(self, fleet_id: str, drawdown_pct: float) -> CopilotFleetSummary:
+        """`POST /copilot/fleets/{id}/stop-rule`. Make the fleet stop tighter.
+
+        `drawdown_pct` is percent below what went in, 1 to 50. Only a tighter
+        (smaller) stop than the current one is accepted, and only while the
+        fleet is active: a looser one raises `PonkUnprocessableError`.
+        """
+        return CopilotFleetSummary.from_dict(
+            self._request(
+                "POST",
+                "/copilot/fleets/{0}/stop-rule".format(_seg(fleet_id)),
+                body={"drawdown_pct": drawdown_pct},
+                session_only=True,
+            )
         )
 
     # -- agents, more actions (0.6.0) ----------------------------------------
