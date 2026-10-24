@@ -415,6 +415,30 @@ print("holding $PONK would make that", perks.api_agent_fee.holder_percent, "%")
 `agent.managed_fee_bps` is the rate that specific agent's skim actually
 charges, before any $PONK holder discount.
 
+## The copilot (unreleased)
+
+One sentence to a fleet plan, read by ponk's own closed grammar (no language
+model anywhere). The copilot routes take a WALLET SESSION ONLY and refuse an
+API key, so these methods need `session_token=` and never send `api_key`:
+
+```python
+ponk = PonkClient(session_token="...")       # from POST /auth/nonce + /auth/verify
+plan = ponk.copilot_plan("put 2 sol into 4 agents on sol pools, stop all if down 10%")
+plan = ponk.copilot_wait(plan.plan_id)          # builds, then replays 30 days
+totals = plan.replay.result["totals"]
+print(totals["net_pnl_usd"], totals["hold_pnl_usd"], totals["net_vs_hold_usd"])
+if plan.can_start:
+    start = ponk.copilot_start(plan.plan_id)    # agents in dry run, UNSIGNED funding
+    print(start.sign_url)                       # your wallet signs there; nothing moves before
+fleet = ponk.copilot_fleet(start.fleet_id)
+ponk.copilot_stop_fleet(start.fleet_id)         # managed exit of this fleet's agents only
+```
+
+`copilot_parse`, `copilot_plan`, `copilot_get_plan`, `copilot_replay`,
+`copilot_wait`, `copilot_start`, `copilot_fleets`, `copilot_fleet`,
+`copilot_stop_fleet` and `copilot_tighten_stop` (tighter only). The replay is
+one past window beside holding, not a forecast.
+
 ## Changes in 0.6.0
 
 * **Agent fleets.** `create_agents([...])` creates many agents in one call,

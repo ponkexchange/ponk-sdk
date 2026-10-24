@@ -3,6 +3,17 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## Unreleased
+
+Added, in the Python client:
+
+- **The copilot**, wallet session only: `PonkClient(session_token=...)` and
+  `copilot_parse`, `copilot_plan`, `copilot_get_plan`, `copilot_replay`,
+  `copilot_wait`, `copilot_start` (agents in dry run, unsigned funding, the
+  signing page), `copilot_fleets`, `copilot_fleet`, `copilot_stop_fleet` and
+  `copilot_tighten_stop`, over `/copilot/...`. These methods never send the
+  API key; without a session they raise `PonkError` and send nothing.
+
 ## 0.6.0 (2026-10-23)
 
 Added, in both the Python and the Rust client:

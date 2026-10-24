@@ -42,6 +42,12 @@ __all__ = [
     "ClaimPayout",
     "ClaimPayoutToken",
     "ComponentStatus",
+    "CopilotFleet",
+    "CopilotFleetSummary",
+    "CopilotParse",
+    "CopilotPlan",
+    "CopilotReplay",
+    "CopilotStart",
     "CostLeg",
     "CreatorDashboard",
     "CreatorDay",
@@ -1930,6 +1936,133 @@ class Fleet(Model):
     rows: List[FleetRow] = field(default_factory=list)
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"rows": (FleetRow,)}
+
+
+# --------------------------------------------------------------------------
+# The copilot (wallet session only)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class CopilotParse(Model):
+    """What ponk's closed grammar read from one sentence.
+
+    `ok` true carries `intent` (`kind` is `deploy`, `stop_fleet` or
+    `show_fleet`; a deploy carries `verb`, `budget`, `per_agent`, `count`,
+    `pools`, `risk`, `risk_stated`, `range_pct`, `fleet_stop_pct`) and `echo`,
+    the intent restated for the user to confirm. `ok` false carries `refusal`:
+    `code`, `message`, `unknown_words` and `examples`.
+    """
+
+    ok: Optional[bool] = None
+    intent: Optional[Dict[str, Any]] = None
+    echo: Optional[str] = None
+    refusal: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class CopilotReplay(Model):
+    """A plan's 30 day replay. `state` is `idle`, `running` or `done`.
+
+    `result` (when done) holds per-leg `legs` and fleet `totals` with
+    `net_pnl_usd`, `hold_pnl_usd` and `net_vs_hold_usd` side by side, plus
+    `statement`. A leg the engine could not replay honestly is `refused` with
+    its `reason` and is left out of the totals (`complete` false).
+    """
+
+    state: Optional[str] = None
+    done: Optional[int] = None
+    total: Optional[int] = None
+    result: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class CopilotPlan(Model):
+    """A plan: `state` is `building`, `ready` or `refused`.
+
+    `plan` (when ready) is the server's plan verbatim: `intent`, `echo`,
+    `inputs`, `sizing`, `legs` (pool, funding and deposit lamports, range,
+    strategy, config), `totals`, `fleet_stop`, `notes` and `skipped`.
+    `can_start` is true only for a ready start plan with at least one leg.
+    `poll_after_ms` is set while something is still moving.
+    """
+
+    plan_id: Optional[str] = None
+    state: Optional[str] = None
+    progress: Optional[str] = None
+    text: Optional[str] = None
+    created_at: Optional[str] = None
+    expires_in_secs: Optional[int] = None
+    plan: Optional[Dict[str, Any]] = None
+    refusal: Optional[Dict[str, Any]] = None
+    replay: Optional[CopilotReplay] = None
+    can_start: Optional[bool] = None
+    poll_after_ms: Optional[int] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"replay": CopilotReplay}
+
+
+@dataclass
+class CopilotStart(Model):
+    """What a start created and what is left for your wallet to sign.
+
+    `created` is the create batch (one item per leg). `funding` is the
+    UNSIGNED funding plan, `None` when nothing could be funded (then `next`
+    says why). `sign_url` is the ponk.exchange page that signs the funding
+    and then each mandate in `mandate_queue`. `already_started` true means the
+    plan was started before and only `fleet_id` and `next` are set.
+    """
+
+    fleet_id: Optional[str] = None
+    already_started: Optional[bool] = None
+    created: Optional[FleetBatch] = None
+    funding: Optional[FundPlan] = None
+    mandate_queue: List[str] = field(default_factory=list)
+    sign_url: Optional[str] = None
+    next: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"created": FleetBatch, "funding": FundPlan}
+
+
+@dataclass
+class CopilotFleetSummary(Model):
+    """One fleet. `status` is `active`, `stopping` or `stopped`."""
+
+    id: Optional[str] = None
+    intent_text: Optional[str] = None
+    status: Optional[str] = None
+    agents: Optional[int] = None
+    stop_drawdown_pct: Optional[float] = None
+    stop_armed: Optional[bool] = None
+    stop_reason: Optional[str] = None
+    stop_batch_id: Optional[str] = None
+    breach_count: Optional[int] = None
+    last_eval: Optional[Dict[str, Any]] = None
+    last_eval_at: Optional[str] = None
+    stopped_at: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+@dataclass
+class CopilotFleet(Model):
+    """A fleet live.
+
+    `totals` has `value_usd`, `cost_basis_usd`, `pnl_usd` (each `None` when
+    nothing could be priced) and `unvalued`. `stop_now` is the fleet stop
+    evaluated on this read: `state` `waiting`, `holding`, `breached` or
+    `fire`, with `drawdown_pct` and `threshold_usd`. `missing_agents` lists
+    agents whose row could not be read.
+    """
+
+    fleet: Optional[CopilotFleetSummary] = None
+    stop_now: Optional[Dict[str, Any]] = None
+    totals: Optional[Dict[str, Any]] = None
+    rows: List[FleetRow] = field(default_factory=list)
+    missing_agents: List[str] = field(default_factory=list)
+    as_of: Optional[str] = None
+    poll_after_ms: Optional[int] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"fleet": CopilotFleetSummary, "rows": (FleetRow,)}
 
 
 # --------------------------------------------------------------------------
