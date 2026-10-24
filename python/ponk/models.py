@@ -2013,13 +2013,19 @@ class CopilotReplay(Model):
 
 @dataclass
 class CopilotPlan(Model):
-    """A plan: `state` is `building`, `ready` or `refused`.
+    """A plan: `state` is `building`, `ready`, `refused` or `expired`.
 
     `plan` (when ready) is the server's plan verbatim: `intent`, `echo`,
-    `inputs`, `sizing`, `legs` (pool, funding and deposit lamports, range,
-    strategy, config), `totals`, `fleet_stop`, `notes` and `skipped`.
-    `can_start` is true only for a ready start plan with at least one leg.
-    `poll_after_ms` is set while something is still moving.
+    `inputs`, `sizing`, `legs` (pool with both mints and their verification,
+    funding and deposit lamports, range, strategy, config), `totals` (with
+    `ponk_fee_bps`, the Ponk fee on fees earned for this wallet, and
+    `ponk_fee_holder_bps`), `fleet_stop`, `notes`, `skipped` (each pool
+    looked at and not used, with its reason) and `resolved_tokens` (each
+    token you named and the mint it was resolved to). The copilot plans
+    Meteora DLMM pools only. `can_start` is true only for a ready start plan
+    with at least one leg whose 30 day replay is done. An expired plan
+    carries `refusal` with code `plan_expired`. `poll_after_ms` is set while
+    something is still moving.
     """
 
     plan_id: Optional[str] = None
@@ -2033,6 +2039,7 @@ class CopilotPlan(Model):
     replay: Optional[CopilotReplay] = None
     can_start: Optional[bool] = None
     poll_after_ms: Optional[int] = None
+    signed_in: Optional[bool] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"replay": CopilotReplay}
 
@@ -2045,7 +2052,11 @@ class CopilotStart(Model):
     UNSIGNED funding plan, `None` when nothing could be funded (then `next`
     says why). `sign_url` is the ponk.exchange page that signs the funding
     and then each mandate in `mandate_queue`. `already_started` true means the
-    plan was started before and only `fleet_id` and `next` are set.
+    plan was started before: `fleet_id`, `next` and `funding_state` are set.
+    `funding_state` is what the fleet still needs from your wallet: `agents`
+    (each with `agent_id`, `pair`, `planned_lamports`, `wallet_lamports`,
+    `funded`, `mandate_needed`), `unfunded`, `mandates_needed`, `creating`
+    and a fresh `sign_url` for what is left.
     """
 
     fleet_id: Optional[str] = None
@@ -2055,6 +2066,7 @@ class CopilotStart(Model):
     mandate_queue: List[str] = field(default_factory=list)
     sign_url: Optional[str] = None
     next: Optional[str] = None
+    funding_state: Optional[Dict[str, Any]] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"created": FleetBatch, "funding": FundPlan}
 
@@ -2082,10 +2094,14 @@ class CopilotFleetSummary(Model):
 class CopilotFleet(Model):
     """A fleet live.
 
-    `totals` has `value_usd`, `cost_basis_usd`, `pnl_usd` (each `None` when
-    nothing could be priced) and `unvalued`. `stop_now` is the fleet stop
-    evaluated on this read: `state` `waiting`, `holding`, `breached` or
-    `fire`, with `drawdown_pct` and `threshold_usd`. `missing_agents` lists
+    `totals` has `value_usd`, `cost_basis_usd`, `pnl_usd` over the same
+    in-market agents the fleet stop counts (each `None`, with `reason`, when
+    any of them cannot be valued), `agents_counted`, `unvalued` and `exited`.
+    `stop_now` is the fleet stop evaluated on this read: `state` `waiting`,
+    `holding`, `breached` or `fire`, with `drawdown_pct` and `threshold_usd`.
+    `exit` (once the fleet is stopping) has `done`, `failed`, `running` and
+    `failed_agents` by name. `funding` is what the fleet still needs from
+    your wallet, as on `CopilotStart.funding_state`. `missing_agents` lists
     agents whose row could not be read.
     """
 
@@ -2096,6 +2112,8 @@ class CopilotFleet(Model):
     missing_agents: List[str] = field(default_factory=list)
     as_of: Optional[str] = None
     poll_after_ms: Optional[int] = None
+    exit: Optional[Dict[str, Any]] = None
+    funding: Optional[Dict[str, Any]] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"fleet": CopilotFleetSummary, "rows": (FleetRow,)}
 

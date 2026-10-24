@@ -117,6 +117,8 @@ class TestCopilot(unittest.TestCase):
             "totals": {"value_usd": None, "cost_basis_usd": None, "pnl_usd": None, "unvalued": 1},
             "rows": [],
             "missing_agents": [],
+            "exit": {"done": 0, "failed": 1, "running": 0, "failed_agents": [{"agent_id": "a", "name": "Fleet 1 SOL-USDC", "error": "Short of gas."}]},
+            "funding": {"unfunded": 0, "mandates_needed": 1, "creating": 0, "sign_url": "https://ponk.exchange/agents/fund?a=a:0", "agents": []},
         }
         batch = {"batch_id": "b", "kind": "exit", "total": 1, "done": 0, "failed": 0, "running": 1, "items": []}
         c, opener = session_client([[{"id": FLEET, "status": "active"}], fleet, batch, {"id": FLEET, "stop_drawdown_pct": 5.0}])
@@ -125,11 +127,27 @@ class TestCopilot(unittest.TestCase):
         self.assertIsInstance(f, CopilotFleet)
         self.assertIsNone(f.totals["value_usd"])
         self.assertEqual(f.fleet.status, "active")
+        self.assertEqual(f.exit["failed_agents"][0]["name"], "Fleet 1 SOL-USDC")
+        self.assertEqual(f.funding["mandates_needed"], 1)
         self.assertEqual(c.copilot_stop_fleet(FLEET).running, 1)
         self.assertEqual(c.copilot_tighten_stop(FLEET, 5).stop_drawdown_pct, 5.0)
         self.assertEqual(opener.calls[2]["url"], BASE + "/copilot/fleets/" + FLEET + "/stop")
         self.assertEqual(opener.calls[3]["body"], {"drawdown_pct": 5})
         self.assertTrue(all(x["headers"]["Authorization"] == "Bearer " + SESSION for x in opener.calls))
+
+
+    def test_wait_stops_on_an_expired_plan(self):
+        expired = {
+            "plan_id": PLAN,
+            "state": "expired",
+            "refusal": {"code": "plan_expired", "message": "This plan expired."},
+            "replay": {"state": "idle"},
+        }
+        c, opener = session_client([expired])
+        plan = c.copilot_wait(PLAN, sleep=lambda _s: None)
+        self.assertEqual(plan.state, "expired")
+        self.assertEqual(plan.refusal["code"], "plan_expired")
+        self.assertEqual(len(opener.calls), 1)
 
 
 if __name__ == "__main__":

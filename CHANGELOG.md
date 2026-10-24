@@ -13,6 +13,14 @@ Added, in the Python client:
   signing page), `copilot_fleets`, `copilot_fleet`, `copilot_stop_fleet` and
   `copilot_tighten_stop`, over `/copilot/...`. These methods never send the
   API key; without a session they raise `PonkError` and send nothing.
+  The grammar is SOL only (a dollar amount or a share of the wallet is
+  refused, never converted), a fleet is 1 to 8 agents, a token can be named by
+  its symbol (resolved to a mint, an ambiguous one refused) or its mint, and
+  only Meteora DLMM pools are planned. A plan can start only once its 30 day
+  replay is done. `CopilotPlan.signed_in`, `CopilotStart.funding_state` and
+  `CopilotFleet.exit` / `funding` carry what the fleet still needs and which
+  exits failed, by name; `copilot_stop_fleet` on a stopping fleet retries only
+  the failed exits.
 
 ## 0.7.0 (2026-10-23)
 

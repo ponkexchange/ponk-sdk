@@ -1429,7 +1429,7 @@ class PonkClient:
                 asked = True
                 self.copilot_replay(plan_id)
                 continue
-            settled = plan.state == "refused" or (
+            settled = plan.state in ("refused", "expired") or (
                 plan.state == "ready" and (not replay or rstate == "done")
             )
             if settled or time.monotonic() >= deadline:
@@ -1479,8 +1479,10 @@ class PonkClient:
         own wallet swept to your linked wallet through the managed exit under
         the mandate you signed; the destination cannot be named. The exits run
         detached: a `running` item is still going, not failed, and
-        `copilot_fleet` shows where each agent got to. Do not call it again
-        for the same fleet: a second stop answers 409. Takes the fund timeout.
+        `copilot_fleet` shows where each agent got to, and its `exit` names
+        every agent whose exit failed. On a fleet that is `stopping` with
+        failed exits, calling this again retries ONLY those exits; on a
+        stopped fleet it answers 409. Takes the fund timeout.
         """
         return FleetBatch.from_dict(
             self._request(

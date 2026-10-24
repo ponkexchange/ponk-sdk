@@ -437,7 +437,17 @@ ponk.copilot_stop_fleet(start.fleet_id)         # managed exit of this fleet's a
 
 `copilot_parse`, `copilot_plan`, `copilot_get_plan`, `copilot_replay`,
 `copilot_wait`, `copilot_start`, `copilot_fleets`, `copilot_fleet`,
-`copilot_stop_fleet` and `copilot_tighten_stop` (tighter only). The replay is
+`copilot_stop_fleet` and `copilot_tighten_stop` (tighter only).
+
+Amounts are SOL, exactly as typed: "$500", "half my sol" or "20% of my wallet"
+are refused, never converted. A fleet is 1 to 8 agents on Meteora DLMM pools
+only. Name a token by symbol ("jup pools") or by its mint; a symbol is
+resolved to a mint and an ambiguous one is refused with a sentence asking
+for the mint. `plan.can_start` turns true once the replay is done, and
+`plan.plan["totals"]["ponk_fee_bps"]` is the Ponk fee on fees earned for this
+wallet. After a start, `copilot_fleet(...).funding` lists what is left to fund
+or approve with a fresh `sign_url`, and `.exit` names any agent whose exit
+failed; `copilot_stop_fleet` on a stopping fleet retries only those. The replay is
 one past window beside holding, not a forecast.
 
 ## Changes in 0.7.0
