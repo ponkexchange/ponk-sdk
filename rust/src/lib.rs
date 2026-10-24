@@ -95,7 +95,11 @@
 //! ([`Client::health`], [`Client::pool`], [`Client::range_cost`],
 //! [`Client::ponk_perks`], the Top Ponkillionaires board
 //! [`Client::leaderboard`], [`Client::public_agent`] and its value history,
-//! the points board and [`Client::resolve_referral`]), and, behind the default
+//! the points board and [`Client::resolve_referral`]), the agent fleet
+//! ([`Client::create_agents`], [`Client::fund_prepare`], which returns
+//! UNSIGNED transfers for your wallet to sign, [`Client::fleet_all`],
+//! [`Client::exit_agents`]) and the account parity routes (portfolio,
+//! transactions, fees, notifications, recommendations, presets), and, behind the default
 //! `webhooks` feature, receiver-side verification of webhook deliveries in
 //! [`webhooks`]. The rest of the server's surface, the session-authenticated
 //! app routes (including registering webhooks and minting API keys) and the
@@ -125,6 +129,14 @@ pub use models::{
     PointsEntry, PointsLeaderboard, PointsSeason, PonkPerks, PoolSnapshot, Position, PublicAgent,
     PublicLink, PublicReferral, RangeCostQuote, Referral, ReferralCode, TokenAmount, ValueHistory,
     WhoAmI, Withdrawal,
+};
+pub use models::{
+    ActionCosts, AgentProof, AgentWalletCreated, CalendarDay, CostLeg, FeeEvent, FeeSummary, Fleet,
+    FleetBatch, FleetBatchItem, FleetRow, FundItem, FundPlan, FundRequest, FundTransaction,
+    FundTransfer, NewPreset, Notification, NotifySettings, Portfolio, PortfolioHistory,
+    PortfolioHistoryPoint, PortfolioPosition, PortfolioSeriesPoint, Preset, ProofAction,
+    RangeHistory, RangePoint, ReadAll, RebalanceReceipt, RebalanceRequest, Recommendation,
+    RiskEvent, TimeInRange, Transaction, UnreadCount,
 };
 pub use models::{
     ActivityEvent, AgentsActivity, CuratedWallet, CuratedWallets, LastWeek, PonkillionairesWeek,

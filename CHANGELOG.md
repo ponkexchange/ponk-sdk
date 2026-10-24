@@ -3,6 +3,49 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.6.0 (2026-10-23)
+
+Added, in both the Python and the Rust client:
+
+- **Agent fleets.** Create, fund, read and close many agents in one call.
+  `create_agents` (`POST /v1/agents/batch`, each agent with its own wallet),
+  `fund_prepare` (`POST /v1/agents/fund/prepare`: UNSIGNED transfers from your
+  wallet to your agents' wallets, as few transactions as fit, plus signing
+  links on ponk.exchange), `fleet` (`GET /v1/agents/fleet`, paged) with
+  `fleet_all` (and `iter_fleet` in Python) following `next_offset`,
+  `exit_agents` / `withdraw_agents` (`POST /v1/agents/batch/exit` and
+  `/withdraw`, by id or all; Rust: `exit_all_agents`, `withdraw_all_agents`)
+  and `get_batch` (`GET /v1/agents/batch/{batch_id}`) for what was still
+  running when the response was written.
+- `create_agent_wallet` (`POST /v1/agents/{id}/wallet`, idempotent).
+- **Agent actions:** `rebalance`, `collect_fees` (destination `agent` or
+  `connected`, never an address), `rename_agent` (`PATCH /v1/agents/{id}`),
+  `delete_agent` (`DELETE /v1/agents/{id}`).
+- **Agent reads:** `agent_proof` (cost and earnings per action) and
+  `agent_range_history`.
+- **Legacy shared wallet:** `custody_withdraw`, `custody_exit`.
+- **Account:** `portfolio`, `portfolio_history`, `list_transactions`,
+  `list_risk_events`, `list_fees`, `fee_summary`; notifications (list,
+  unread count, read all, read, dismiss); recommendations (list, get, review,
+  approve, dismiss, snooze); `notify_settings` / `update_notify_settings`;
+  saved presets (list, create, update, delete).
+- Python example `examples/fleet.py`: open 10 dry-run agents, fund them with
+  one signature, read the fleet, exit them all.
+
+Changed:
+
+- `AgentWallet` gained `withdrawable_lamports` and
+  `token_accounts_with_value`.
+- Python: `create_agents` requires a boolean `dry_run` on every element, as
+  `create_agent` does. Rust: a response with an empty body (a 204) decodes as
+  JSON null, so `()` results work.
+
+Neither client signs or holds a key. `fund_prepare` returns unsigned
+transactions; your wallet signs them. Minting a custody mandate, API keys and
+webhooks stay app only.
+
+Versions: Python and Rust 0.5.0 to 0.6.0.
+
 ## 0.5.0 (2026-10-23)
 
 Added, in both the Python and the Rust client, all with no key needed:

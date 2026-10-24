@@ -24,6 +24,7 @@ from decimal import Decimal
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Type, TypeVar
 
 __all__ = [
+    "ActionCosts",
     "ActionLog",
     "ActionReceipt",
     "ActivityEvent",
@@ -31,22 +32,36 @@ __all__ = [
     "AgentCopy",
     "AgentPerformance",
     "AgentPosition",
+    "AgentProof",
     "AgentWallet",
+    "AgentWalletCreated",
     "AgentsActivity",
     "AutonomousState",
     "BinShare",
+    "CalendarDay",
     "ClaimPayout",
     "ClaimPayoutToken",
     "ComponentStatus",
+    "CostLeg",
     "CreatorDashboard",
     "CreatorDay",
     "CreatorTotals",
     "CuratedWallet",
     "CuratedWallets",
     "ExitSnapshot",
+    "FeeEvent",
     "FeeRates",
+    "FeeSummary",
+    "Fleet",
+    "FleetBatch",
+    "FleetBatchItem",
+    "FleetRow",
     "Follow",
     "Follows",
+    "FundItem",
+    "FundPlan",
+    "FundTransaction",
+    "FundTransfer",
     "HandleCheck",
     "Health",
     "HealthChecks",
@@ -56,24 +71,42 @@ __all__ = [
     "LinkRevoked",
     "Mandate",
     "MyPoints",
+    "Notification",
+    "NotifySettings",
     "PointsEntry",
     "PointsLeaderboard",
     "PointsSeason",
     "PonkPerks",
     "PonkillionairesWeek",
     "PoolSnapshot",
+    "Portfolio",
+    "PortfolioHistory",
+    "PortfolioHistoryPoint",
+    "PortfolioPosition",
+    "PortfolioSeriesPoint",
     "Position",
+    "Preset",
+    "ProofAction",
     "PublicAgent",
     "PublicLink",
     "PublicReferral",
     "RangeCost",
+    "RangeHistory",
+    "RangePoint",
+    "ReadAll",
+    "RebalanceReceipt",
+    "Recommendation",
     "Referral",
     "ReferralCode",
     "ReferralProgramme",
     "ReferralTier",
     "ReferralTierStep",
+    "RiskEvent",
+    "TimeInRange",
     "TokenAmount",
     "TrackedWalletRef",
+    "Transaction",
+    "UnreadCount",
     "ValueHistory",
     "WalletActivity",
     "WalletEvent",
@@ -514,6 +547,8 @@ class AgentWallet(Model):
     min_open_lamports: Optional[int] = None
     recommended_open_lamports: Optional[int] = None
     scope: Optional[str] = None
+    withdrawable_lamports: Optional[int] = None
+    token_accounts_with_value: Optional[int] = None
 
 
 @dataclass
@@ -1682,3 +1717,617 @@ class WalletActivity(Model):
 
     _CAMEL: ClassVar[bool] = True
     _NESTED: ClassVar[Mapping[str, Any]] = {"items": (WalletEvent,)}
+
+
+# --------------------------------------------------------------------------
+# The agent fleet: batches, funding and the fleet read (0.6.0)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class AgentWalletCreated(Model):
+    """The answer to `create_agent_wallet`: the agent's own managed wallet.
+
+    `created` is true when this call made the wallet and false when an existing
+    active one was returned, so calling it twice is safe. An empty wallet
+    grants no authority: nothing signs from it until the owner signs a custody
+    mandate in the app.
+    """
+
+    pubkey: Optional[str] = None
+    status: Optional[str] = None
+    created_at: Optional[str] = None
+    created: Optional[bool] = None
+
+
+@dataclass
+class FleetBatchItem(Model):
+    """One agent's outcome inside a batch.
+
+    `outcome` is `done`, `failed` or `running`. `running` is not a failure: the
+    work is still going on the server, detached from the request, and
+    `get_batch(batch_id)` collects it. A `failed` item always carries `error`
+    (a plain sentence) plus `status` and `code` to branch on. `result` is the
+    single-agent call's own answer, verbatim: for a create it is
+    `{"agent": ..., "wallet": ...}` (plus `wallet_error` when the wallet could
+    not be made, which never undoes the create), for an exit or a withdraw it
+    is the `Withdrawal` shape. `agent_id` is `None` on a create that failed.
+    """
+
+    index: Optional[int] = None
+    agent_id: Optional[str] = None
+    outcome: Optional[str] = None
+    ok: Optional[bool] = None
+    status: Optional[int] = None
+    code: Optional[str] = None
+    error: Optional[str] = None
+    result: Optional[Any] = None
+
+    def agent(self) -> Optional[Agent]:
+        """The created agent on a create item, or `None`."""
+        if isinstance(self.result, Mapping) and isinstance(self.result.get("agent"), Mapping):
+            return Agent.from_dict(self.result["agent"])
+        return None
+
+    def withdrawal(self) -> Optional[Withdrawal]:
+        """The receipt on a done exit or withdraw item, or `None`."""
+        if isinstance(self.result, Mapping) and "signature" in self.result:
+            return Withdrawal.from_dict(self.result)
+        return None
+
+
+@dataclass
+class FleetBatch(Model):
+    """A create, exit or withdraw over many agents.
+
+    `kind` is `create`, `exit` or `withdraw`, and `done + failed + running ==
+    total`. The server answers once its fund deadline passes; whatever is
+    still in flight then is `running`, and the batch keeps going after the
+    response. Poll `get_batch(batch_id)` until `running == 0`. A finished
+    batch is kept for 30 minutes.
+    """
+
+    batch_id: Optional[str] = None
+    kind: Optional[str] = None
+    total: Optional[int] = None
+    done: Optional[int] = None
+    failed: Optional[int] = None
+    running: Optional[int] = None
+    items: List[FleetBatchItem] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"items": (FleetBatchItem,)}
+
+
+@dataclass
+class FundItem(Model):
+    """One agent in a funding plan.
+
+    `wallet` is the agent's own managed wallet, resolved by the server under
+    the owner scope; it is never taken from the request. `ok` false carries
+    `refusal`, a sentence saying why the agent was left out (not on this
+    account, already funded, or an amount that would leave it below the
+    `recommended_open_lamports` it needs to open). `needs_mandate` is true
+    when the agent cannot act on these funds until its owner signs a custody
+    mandate in the app.
+    """
+
+    agent_id: Optional[str] = None
+    ok: Optional[bool] = None
+    wallet: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    lamports: Optional[int] = None
+    current_lamports: Optional[int] = None
+    recommended_open_lamports: Optional[int] = None
+    needs_mandate: Optional[bool] = None
+    refusal: Optional[str] = None
+
+
+@dataclass
+class FundTransfer(Model):
+    """One SystemProgram transfer inside a funding transaction."""
+
+    agent_id: Optional[str] = None
+    to: Optional[str] = None
+    lamports: Optional[int] = None
+
+
+@dataclass
+class FundTransaction(Model):
+    """One unsigned funding transaction.
+
+    `unsigned_tx_b64` is a legacy Solana transaction, base64 of the bincode
+    wire format, with the owner's wallet as fee payer and only signer. The
+    server simulated it against mainnet before returning it (`simulated`).
+    This client never signs it.
+    """
+
+    index: Optional[int] = None
+    unsigned_tx_b64: Optional[str] = None
+    transfers: List[FundTransfer] = field(default_factory=list)
+    total_lamports: Optional[int] = None
+    simulated: Optional[bool] = None
+    units_consumed: Optional[int] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"transfers": (FundTransfer,)}
+
+
+@dataclass
+class FundPlan(Model):
+    """Unsigned transfers from your wallet to your agents' own wallets.
+
+    `owner` is the fee payer and the only signer: the wallet the key belongs
+    to. The transfers are packed into as few transactions as the packet size
+    allows (ten fit in one). `ok` false carries `refusal` and no transaction,
+    for example when the balance cannot cover `total_lamports` plus
+    `network_fee_lamports` plus the rent-exempt minimum a wallet must keep.
+
+    Two ways to sign, neither of them this client:
+
+    * open each of `sign_urls` on ponk.exchange with the wallet connected; the
+      page rebuilds the same transfers fresh, asks the wallet to sign, then
+      queues the custody mandate each agent in `needs_mandate` still needs;
+    * or sign `transactions[i].unsigned_tx_b64` in wallet software you already
+      control, before `last_valid_block_height`, and send it yourself.
+    """
+
+    owner: Optional[str] = None
+    ok: Optional[bool] = None
+    refusal: Optional[str] = None
+    balance_lamports: Optional[int] = None
+    total_lamports: Optional[int] = None
+    network_fee_lamports: Optional[int] = None
+    recent_blockhash: Optional[str] = None
+    last_valid_block_height: Optional[int] = None
+    transactions: List[FundTransaction] = field(default_factory=list)
+    items: List[FundItem] = field(default_factory=list)
+    needs_mandate: List[str] = field(default_factory=list)
+    sign_urls: List[str] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "transactions": (FundTransaction,),
+        "items": (FundItem,),
+    }
+
+
+@dataclass
+class FleetRow(Model):
+    """One agent with its wallet, mandate and performance.
+
+    `wallet` is `None` before the agent has its own wallet and `mandate` is
+    `None` when none was ever signed. A part that is `None` because its read
+    FAILED, rather than because there is nothing, is named in `read_errors`.
+    So `performance is None` with empty `read_errors` means "nothing to
+    price", and with a non-empty one means "could not be read right now".
+    """
+
+    agent: Optional[Agent] = None
+    wallet: Optional[AgentWallet] = None
+    mandate: Optional[Mandate] = None
+    performance: Optional[AgentPerformance] = None
+    read_errors: List[str] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "agent": Agent,
+        "wallet": AgentWallet,
+        "mandate": Mandate,
+        "performance": AgentPerformance,
+    }
+
+
+@dataclass
+class Fleet(Model):
+    """One page of the fleet. `next_offset` is `None` on the last page.
+
+    `limit` defaults to 25 and the server clamps it to 1 to 100.
+    `PonkClient.iter_fleet` follows `next_offset` for you.
+    """
+
+    total: Optional[int] = None
+    offset: Optional[int] = None
+    limit: Optional[int] = None
+    next_offset: Optional[int] = None
+    rows: List[FleetRow] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"rows": (FleetRow,)}
+
+
+# --------------------------------------------------------------------------
+# /v1 account parity (0.6.0)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class RebalanceReceipt(Model):
+    """The receipt for a managed manual rebalance.
+
+    Read it like `ActionReceipt`: a refusal at signing time (an expired
+    mandate, a risk halt, the 60 second cooldown after a confirmed rebalance)
+    answers 200 with a failed `status` and `signature is None`.
+    `position_address` is the new position once one opened.
+    """
+
+    action_id: Optional[str] = None
+    signature: Optional[str] = None
+    status: Optional[str] = None
+    action_status: Optional[str] = None
+    position_address: Optional[str] = None
+    compute_units_consumed: Optional[int] = None
+    error_message: Optional[str] = None
+    risk_approved: Optional[bool] = None
+    risk_failed_checks: List[str] = field(default_factory=list)
+
+
+@dataclass
+class TimeInRange(Model):
+    """How long the position was in range over the measured window.
+
+    `pct` is `None` when nothing was observed, never zero.
+    """
+
+    in_range_secs: Optional[int] = None
+    observed_secs: Optional[int] = None
+    pct: Optional[float] = None
+    readings: Optional[int] = None
+
+
+@dataclass
+class CostLeg(Model):
+    """One cost of an action. `usd` is `None`, with `reason`, when it was not measured."""
+
+    usd: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@dataclass
+class ActionCosts(Model):
+    """What one action cost: network, swap, rent and the ponk fee.
+
+    `total_usd` is `None` unless every leg is known. `modelled_usd` is what the
+    engine's cost model predicted before acting.
+    """
+
+    network: Optional[CostLeg] = None
+    swap: Optional[CostLeg] = None
+    rent: Optional[CostLeg] = None
+    ponk_fee: Optional[CostLeg] = None
+    total_usd: Optional[str] = None
+    modelled_usd: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "network": CostLeg,
+        "swap": CostLeg,
+        "rent": CostLeg,
+        "ponk_fee": CostLeg,
+    }
+
+
+@dataclass
+class ProofAction(Model):
+    """One action the agent took, what it cost, and what it earned while held."""
+
+    kind: Optional[str] = None
+    at: Optional[str] = None
+    tx_signature: Optional[str] = None
+    trigger_key: Optional[str] = None
+    costs: Optional[ActionCosts] = None
+    earned_usd: Optional[str] = None
+    earned_reason: Optional[str] = None
+    held_secs: Optional[int] = None
+    open: Optional[bool] = None
+    within_measured_range: Optional[bool] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"costs": ActionCosts}
+
+
+@dataclass
+class AgentProof(Model):
+    """Whether the agent's actions paid for themselves, read from the ledger.
+
+    `earned_known` of `earned_countable` actions have a measured earning and
+    `cost_legs_known` of `cost_legs_total` cost legs a measured cost. The USD
+    totals cover only those, and are `None` when none is known.
+    """
+
+    window_hours: Optional[int] = None
+    since: Optional[str] = None
+    time_in_range: Optional[TimeInRange] = None
+    gap_cap_secs: Optional[int] = None
+    actions: List[ProofAction] = field(default_factory=list)
+    earned_usd: Optional[str] = None
+    earned_known: Optional[int] = None
+    earned_countable: Optional[int] = None
+    measured_cost_usd: Optional[str] = None
+    cost_legs_known: Optional[int] = None
+    cost_legs_total: Optional[int] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "time_in_range": TimeInRange,
+        "actions": (ProofAction,),
+    }
+
+
+@dataclass
+class RangePoint(Model):
+    """One bucket of the range history: the active bin against the range edges."""
+
+    t: Optional[str] = None
+    active: Optional[int] = None
+    lower: Optional[int] = None
+    upper: Optional[int] = None
+    in_range: Optional[bool] = None
+    price: Optional[float] = None
+    lower_price: Optional[float] = None
+    upper_price: Optional[float] = None
+
+
+@dataclass
+class RangeHistory(Model):
+    """Where the price sat against the agent's range over time."""
+
+    range: Optional[str] = None
+    bucket_secs: Optional[int] = None
+    since: Optional[str] = None
+    until: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    price_now: Optional[float] = None
+    active_now: Optional[int] = None
+    in_range_share: Optional[float] = None
+    points: List[RangePoint] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"points": (RangePoint,)}
+
+
+@dataclass
+class PortfolioPosition(Model):
+    """One position in the portfolio summary. `None` is unpriced, not zero."""
+
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    value_usd: Optional[float] = None
+    cost_basis_usd: Optional[float] = None
+    pnl_usd: Optional[float] = None
+    pnl_pct: Optional[float] = None
+    claimable_fees_usd: Optional[float] = None
+    price_pnl_usd: Optional[float] = None
+    fee_pnl_usd: Optional[float] = None
+    il_usd: Optional[float] = None
+    vs_hodl_usd: Optional[float] = None
+    fee_apr_pct: Optional[float] = None
+    fees_per_day_usd: Optional[float] = None
+    fees_earned_usd: Optional[float] = None
+
+
+@dataclass
+class PortfolioSeriesPoint(Model):
+    """`t` is unix seconds."""
+
+    t: Optional[int] = None
+    value_usd: Optional[float] = None
+
+
+@dataclass
+class Portfolio(Model):
+    """The account's LP portfolio, the summary the app's Portfolio shows.
+
+    `vs_hodl_usd` covers `vs_hodl_measured` of `vs_hodl_positions` positions.
+    """
+
+    total_position_value_usd: Optional[float] = None
+    all_time_deposit_usd: Optional[float] = None
+    fees_claimed_usd: Optional[float] = None
+    claimable_fees_usd: Optional[float] = None
+    total_pnl_usd: Optional[float] = None
+    total_pnl_pct: Optional[float] = None
+    avg_invested_usd: Optional[float] = None
+    win_rate_pct: Optional[float] = None
+    biggest_win_usd: Optional[float] = None
+    position_count: Optional[int] = None
+    price_pnl_usd: Optional[float] = None
+    fee_pnl_usd: Optional[float] = None
+    il_usd: Optional[float] = None
+    vs_hodl_usd: Optional[float] = None
+    vs_hodl_measured: Optional[int] = None
+    vs_hodl_positions: Optional[int] = None
+    fee_apr_pct: Optional[float] = None
+    positions: List[PortfolioPosition] = field(default_factory=list)
+    series: List[PortfolioSeriesPoint] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "positions": (PortfolioPosition,),
+        "series": (PortfolioSeriesPoint,),
+    }
+
+
+@dataclass
+class PortfolioHistoryPoint(Model):
+    """`value_usd` is `None` for a bucket holding an unpriced position (`unpriced`)."""
+
+    t: Optional[str] = None
+    value_usd: Optional[float] = None
+    fees_usd: Optional[float] = None
+    realized_usd: Optional[float] = None
+    unpriced: Optional[int] = None
+
+
+@dataclass
+class CalendarDay(Model):
+    """One UTC day of fees and realized PnL. `date` is `YYYY-MM-DD`."""
+
+    date: Optional[str] = None
+    fees_usd: Optional[float] = None
+    realized_usd: Optional[float] = None
+    pnl_usd: Optional[float] = None
+    events: Optional[int] = None
+    unpriced: Optional[int] = None
+
+
+@dataclass
+class PortfolioHistory(Model):
+    """The account's value over time, plus a daily calendar."""
+
+    range: Optional[str] = None
+    bucket_secs: Optional[int] = None
+    since: Optional[str] = None
+    until: Optional[str] = None
+    points: List[PortfolioHistoryPoint] = field(default_factory=list)
+    incomplete_buckets: Optional[int] = None
+    positions: Optional[int] = None
+    days: List[CalendarDay] = field(default_factory=list)
+    first_record_at: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "points": (PortfolioHistoryPoint,),
+        "days": (CalendarDay,),
+    }
+
+
+@dataclass
+class Transaction(Model):
+    """One transaction an agent sent, with its on-chain outcome."""
+
+    id: Optional[str] = None
+    agent_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    signature: Optional[str] = None
+    status: Optional[str] = None
+    dex: Optional[str] = None
+    action_type: Optional[str] = None
+    priority_fee_lamports: Optional[int] = None
+    compute_units: Optional[int] = None
+    error_message: Optional[str] = None
+    created_at: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    pnl_delta_usd: Optional[str] = None
+
+
+@dataclass
+class RiskEvent(Model):
+    """Something the risk engine flagged or refused."""
+
+    id: Optional[str] = None
+    agent_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    severity: Optional[str] = None
+    code: Optional[str] = None
+    message: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+@dataclass
+class FeeEvent(Model):
+    """One platform fee taken on claimed LP fees.
+
+    Amounts are base-unit strings of `fee_token_mint`. The USD figures are
+    `None` when the token could not be priced.
+    """
+
+    id: Optional[str] = None
+    agent_id: Optional[str] = None
+    wallet_address: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    position_address: Optional[str] = None
+    fee_bps: Optional[int] = None
+    fee_token_mint: Optional[str] = None
+    gross_fee_amount: Optional[str] = None
+    platform_fee_amount: Optional[str] = None
+    user_net_amount: Optional[str] = None
+    gross_fee_usd: Optional[str] = None
+    platform_fee_usd: Optional[str] = None
+    user_net_usd: Optional[str] = None
+    platform_fee_wallet: Optional[str] = None
+    platform_fee_signature: Optional[str] = None
+    status: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: Optional[str] = None
+    confirmed_at: Optional[str] = None
+
+
+@dataclass
+class FeeSummary(Model):
+    """Totals over every fee event of the account, as decimal strings."""
+
+    total_platform_fees_usd: Optional[str] = None
+    total_claimed_fees_usd: Optional[str] = None
+    total_net_fees_usd: Optional[str] = None
+    event_count: Optional[int] = None
+
+
+@dataclass
+class Notification(Model):
+    """One notification from the app's bell."""
+
+    id: Optional[str] = None
+    agent_id: Optional[str] = None
+    kind: Optional[str] = None
+    severity: Optional[str] = None
+    title: Optional[str] = None
+    message: Optional[str] = None
+    status: Optional[str] = None
+    metadata: Optional[Any] = None
+    created_at: Optional[str] = None
+    read_at: Optional[str] = None
+    dismissed_at: Optional[str] = None
+
+
+@dataclass
+class UnreadCount(Model):
+    unread: Optional[int] = None
+
+
+@dataclass
+class ReadAll(Model):
+    """How many notifications `mark_all_notifications_read` marked."""
+
+    marked: Optional[int] = None
+
+
+@dataclass
+class Recommendation(Model):
+    """A recommendation an agent raised for its owner to act on.
+
+    Approving one flips its status only. The approval builds and signs no
+    transaction.
+    """
+
+    id: Optional[str] = None
+    agent_id: Optional[str] = None
+    recommendation_type: Optional[str] = None
+    status: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    position_address: Optional[str] = None
+    reason: Optional[str] = None
+    strategy_snapshot: Optional[Any] = None
+    risk_result: Optional[Any] = None
+    transaction_preview: Optional[Any] = None
+    created_at: Optional[str] = None
+    expires_at: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    acted_at: Optional[str] = None
+    dismissed_at: Optional[str] = None
+
+
+@dataclass
+class NotifySettings(Model):
+    """Which Telegram messages the account receives."""
+
+    rebalance_telegram: Optional[bool] = None
+    mandate_telegram: Optional[bool] = None
+    weekly_recap_telegram: Optional[bool] = None
+
+
+@dataclass
+class Preset(Model):
+    """A saved agent preset. `overrides` is the normalized document the server stored.
+
+    `dex` is `None` for "any venue except Ponk Clouds".
+    """
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    overrides: Optional[Any] = None
+    dex: Optional[str] = None
+    created_at: Optional[str] = None

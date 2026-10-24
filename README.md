@@ -142,7 +142,9 @@ retrying an authentication failure forever.
 | | |
 |---|---|
 | **Read** | `whoami` · `list_agents` · `get_agent` · `agent_performance` · `agent_position` · `agent_value_history` · `agent_decisions` · `agent_wallet` · `agent_mandate` · `list_positions` · `list_logs` · `get_public_link` · `list_follows` · `points` · `points_leaderboard` · `referral` · `creator_dashboard` · `check_handle` |
-| **Act** (`trade` scope) | `create_agent` · `copy_agent` (Python) · `optimize_draft` · `pause_agent` · `resume_agent` · `set_dry_run` · `set_mode` · `update_config` · `update_exits` · `set_auto_compound` · `set_autonomous` · `share_agent` · `unshare_agent` · `follow` · `unfollow` · `claim_handle` · `compound` · `withdraw` · `exit_agent` |
+| **Act** (`trade` scope) | `create_agent` · `copy_agent` (Python) · `optimize_draft` · `pause_agent` · `resume_agent` · `set_dry_run` · `set_mode` · `update_config` · `update_exits` · `set_auto_compound` · `set_autonomous` · `share_agent` · `unshare_agent` · `follow` · `unfollow` · `claim_handle` · `compound` · `withdraw` · `exit_agent` · `rebalance` · `collect_fees` · `rename_agent` · `delete_agent` · `create_agent_wallet` · `custody_withdraw` · `custody_exit` |
+| **Fleet** | `create_agents` · `fund_prepare` · `fleet` · `iter_fleet` / `fleet_all` · `get_batch` · `exit_agents` · `withdraw_agents` |
+| **Account** | `portfolio` · `portfolio_history` · `list_transactions` · `list_risk_events` · `list_fees` · `fee_summary` · `agent_proof` · `agent_range_history` · notifications · recommendations · `notify_settings` · presets |
 | **Public** (no key) | `health` · `pool` · `range_cost` · `ponk_perks` · `leaderboard` · `public_agent` · `public_agent_value_history` · `public_points_leaderboard` · `resolve_referral` · `agents_activity` · `ponkillionaires_week` |
 | **X Tracker** (no key) | `x_feed` · `x_trending` · `x_callers` · `x_token` · `x_accounts` · `x_status` |
 | **Wallet Tracker** (no key) | `wallets_feed` · `wallets_defaults` · `wallets_status` · `wallet_activity` |
@@ -162,6 +164,31 @@ agent signing without any error.
 fee on the people you referred, 25% once they paid $1,000 of platform fees
 over the trailing 30 days, 30% from $5,000. `tier.next` is the next rung and
 `programme.ladder` the whole ladder, so no integration hardcodes a rate.
+
+## Run a fleet
+
+Open ten agents, fund them with one signature, close them all:
+
+```python
+batch = ponk.create_agents([dict(body, name="fleet %d" % i, dry_run=True) for i in range(10)])
+ids = [it.agent_id for it in batch.items if it.ok]
+
+plan = ponk.fund_prepare(ids)     # UNSIGNED transfers, ten in one transaction
+print(plan.sign_urls)             # your wallet signs on ponk.exchange
+
+for row in ponk.iter_fleet():     # wallet balance, mandate expiry, value
+    print(row.agent.name, row.wallet and row.wallet.lamports)
+
+out = ponk.exit_agents(ids)       # close every position, sweep every wallet home
+while out.running:
+    out = ponk.get_batch(out.batch_id)
+```
+
+`fund_prepare` names agent ids, never addresses: the server resolves each
+agent's own wallet. Neither the SDK nor the server signs; the transfers come
+back unsigned for your wallet, on ponk.exchange or in wallet software you
+control. The full script is
+[`python/examples/fleet.py`](python/examples/fleet.py).
 
 ## Watch the market without a key
 

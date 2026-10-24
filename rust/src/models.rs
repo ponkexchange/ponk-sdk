@@ -297,6 +297,11 @@ pub struct AgentWallet {
     /// `per_agent` for the agent's own wallet, `shared` for the legacy
     /// per-user wallet.
     pub scope: Option<String>,
+    /// Native SOL a withdraw would actually send right now.
+    pub withdrawable_lamports: Option<u64>,
+    /// Token accounts holding a balance a sweep would move. `None` when the
+    /// read failed: treat tokens as unknown then, never as zero.
+    pub token_accounts_with_value: Option<u64>,
 }
 
 /// A token amount in base units, with the mint's decimals.
@@ -1583,6 +1588,587 @@ pub struct WalletActivity {
     pub items: Vec<WalletEvent>,
     pub next_before: Option<String>,
     pub last_ok_at: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// The agent fleet: batches, funding and the fleet read (0.6.0)
+// ---------------------------------------------------------------------------
+
+/// The answer to [`crate::Client::create_agent_wallet`]: the agent's own
+/// managed wallet.
+///
+/// `created` is true when this call made it and false when an existing active
+/// one came back, so calling twice is safe. An empty wallet grants no
+/// authority: nothing signs from it until the owner signs a custody mandate
+/// in the app.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentWalletCreated {
+    pub pubkey: Option<String>,
+    pub status: Option<String>,
+    /// RFC 3339.
+    pub created_at: Option<String>,
+    pub created: Option<bool>,
+}
+
+/// One agent's outcome inside a batch.
+///
+/// `outcome` is `done`, `failed` or `running`. `running` is not a failure:
+/// the work is still going on the server, detached from the request, and
+/// [`crate::Client::get_batch`] collects it. A `failed` item always carries
+/// `error` (a plain sentence) plus `status` and `code` to branch on.
+/// `result` is the single-agent call's own answer, verbatim: `{"agent",
+/// "wallet"}` (plus `wallet_error`) for a create, the [`Withdrawal`] shape
+/// for an exit or a withdraw.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FleetBatchItem {
+    pub index: Option<usize>,
+    /// `None` on a create that failed.
+    pub agent_id: Option<String>,
+    pub outcome: Option<String>,
+    pub ok: Option<bool>,
+    pub status: Option<u16>,
+    pub code: Option<String>,
+    pub error: Option<String>,
+    pub result: Option<serde_json::Value>,
+}
+
+impl FleetBatchItem {
+    /// The created agent on a create item.
+    pub fn agent(&self) -> Option<Agent> {
+        let a = self.result.as_ref()?.get("agent")?;
+        serde_json::from_value(a.clone()).ok()
+    }
+
+    /// The receipt on a done exit or withdraw item.
+    pub fn withdrawal(&self) -> Option<Withdrawal> {
+        let r = self.result.as_ref()?;
+        r.get("signature")?;
+        serde_json::from_value(r.clone()).ok()
+    }
+}
+
+/// A create, exit or withdraw over many agents.
+///
+/// `kind` is `create`, `exit` or `withdraw`, and `done + failed + running ==
+/// total`. The server answers once its fund deadline passes; whatever is
+/// still in flight then is `running`, and the batch keeps going after the
+/// response. Poll [`crate::Client::get_batch`] until `running == 0`. A
+/// finished batch is kept for 30 minutes.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FleetBatch {
+    pub batch_id: Option<String>,
+    pub kind: Option<String>,
+    pub total: usize,
+    pub done: usize,
+    pub failed: usize,
+    pub running: usize,
+    pub items: Vec<FleetBatchItem>,
+}
+
+/// One agent to fund in [`crate::Client::fund_prepare`]. The destination is
+/// never part of the request: the server resolves the agent's own wallet.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct FundRequest {
+    pub agent_id: String,
+    /// Exact lamports to send. `None` tops the wallet up to the venue's
+    /// recommended opening balance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lamports: Option<u64>,
+}
+
+impl FundRequest {
+    /// Top this agent's wallet up to its recommended opening balance.
+    pub fn top_up(agent_id: impl Into<String>) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            lamports: None,
+        }
+    }
+
+    /// Send exactly `lamports`.
+    pub fn exact(agent_id: impl Into<String>, lamports: u64) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            lamports: Some(lamports),
+        }
+    }
+}
+
+/// One agent in a funding plan.
+///
+/// `ok` false carries `refusal`, a sentence saying why the agent was left
+/// out. `needs_mandate` is true when the agent cannot act on these funds
+/// until its owner signs a custody mandate in the app.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FundItem {
+    pub agent_id: Option<String>,
+    pub ok: Option<bool>,
+    /// The agent's own managed wallet, resolved by the server.
+    pub wallet: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub lamports: Option<u64>,
+    pub current_lamports: Option<u64>,
+    pub recommended_open_lamports: Option<u64>,
+    pub needs_mandate: Option<bool>,
+    pub refusal: Option<String>,
+}
+
+/// One SystemProgram transfer inside a funding transaction.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FundTransfer {
+    pub agent_id: Option<String>,
+    pub to: Option<String>,
+    pub lamports: Option<u64>,
+}
+
+/// One UNSIGNED funding transaction: a legacy Solana transaction, base64 of
+/// the bincode wire format, with the owner's wallet as fee payer and only
+/// signer. Simulated against mainnet before it was returned. This crate
+/// never signs it.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FundTransaction {
+    pub index: Option<usize>,
+    pub unsigned_tx_b64: Option<String>,
+    pub transfers: Vec<FundTransfer>,
+    pub total_lamports: Option<u64>,
+    pub simulated: Option<bool>,
+    pub units_consumed: Option<u64>,
+}
+
+/// Unsigned transfers from your wallet to your agents' own wallets, packed
+/// into as few transactions as fit (ten agents fit in one).
+///
+/// `ok` false carries `refusal` and no transaction. To sign, open each of
+/// `sign_urls` on ponk.exchange with the wallet connected (the page also
+/// queues each mandate in `needs_mandate`), or sign `unsigned_tx_b64` in
+/// wallet software you control before `last_valid_block_height`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FundPlan {
+    /// The fee payer and the only signer.
+    pub owner: Option<String>,
+    pub ok: Option<bool>,
+    pub refusal: Option<String>,
+    pub balance_lamports: Option<u64>,
+    pub total_lamports: Option<u64>,
+    pub network_fee_lamports: Option<u64>,
+    pub recent_blockhash: Option<String>,
+    pub last_valid_block_height: Option<u64>,
+    pub transactions: Vec<FundTransaction>,
+    pub items: Vec<FundItem>,
+    pub needs_mandate: Vec<String>,
+    pub sign_urls: Vec<String>,
+}
+
+/// One agent with its wallet, mandate and performance.
+///
+/// A part that is `None` because its read FAILED, rather than because there
+/// is nothing, is named in `read_errors`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FleetRow {
+    pub agent: Agent,
+    /// `None` before the agent has its own wallet.
+    pub wallet: Option<AgentWallet>,
+    /// `None` when no mandate was ever signed.
+    pub mandate: Option<Mandate>,
+    pub performance: Option<AgentPerformance>,
+    pub read_errors: Vec<String>,
+}
+
+/// One page of the fleet. `next_offset` is `None` on the last page.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Fleet {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub next_offset: Option<usize>,
+    pub rows: Vec<FleetRow>,
+}
+
+// ---------------------------------------------------------------------------
+// /v1 account parity (0.6.0)
+// ---------------------------------------------------------------------------
+
+/// The body of [`crate::Client::rebalance`].
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RebalanceRequest {
+    pub new_lower_bin_id: i32,
+    pub new_upper_bin_id: i32,
+    /// The liquidity shape, for example `spot`.
+    pub strategy: String,
+    /// Basis points; the server default is 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_slippage_bps: Option<u16>,
+}
+
+/// The receipt for a managed manual rebalance. Read it like
+/// [`ActionReceipt`]: a refusal at signing time answers 200 with a failed
+/// `status` and `signature == None`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct RebalanceReceipt {
+    pub action_id: Option<String>,
+    pub signature: Option<String>,
+    pub status: Option<String>,
+    pub action_status: Option<String>,
+    /// The new position once one opened.
+    pub position_address: Option<String>,
+    pub compute_units_consumed: Option<u64>,
+    pub error_message: Option<String>,
+    pub risk_approved: Option<bool>,
+    pub risk_failed_checks: Vec<String>,
+}
+
+/// How long the position was in range. `pct` is `None` when nothing was
+/// observed, never zero.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TimeInRange {
+    pub in_range_secs: Option<i64>,
+    pub observed_secs: Option<i64>,
+    pub pct: Option<f64>,
+    pub readings: Option<i64>,
+}
+
+/// One cost of an action. `usd` is `None`, with `reason`, when not measured.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CostLeg {
+    pub usd: Option<String>,
+    pub reason: Option<String>,
+}
+
+/// What one action cost. `total_usd` is `None` unless every leg is known.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ActionCosts {
+    pub network: Option<CostLeg>,
+    pub swap: Option<CostLeg>,
+    pub rent: Option<CostLeg>,
+    pub ponk_fee: Option<CostLeg>,
+    pub total_usd: Option<String>,
+    pub modelled_usd: Option<String>,
+}
+
+/// One action the agent took, what it cost, and what it earned while held.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ProofAction {
+    pub kind: Option<String>,
+    pub at: Option<String>,
+    pub tx_signature: Option<String>,
+    pub trigger_key: Option<String>,
+    pub costs: Option<ActionCosts>,
+    pub earned_usd: Option<String>,
+    pub earned_reason: Option<String>,
+    pub held_secs: Option<i64>,
+    pub open: Option<bool>,
+    pub within_measured_range: Option<bool>,
+}
+
+/// Whether the agent's actions paid for themselves, from the ledger.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentProof {
+    pub window_hours: Option<i64>,
+    pub since: Option<String>,
+    pub time_in_range: Option<TimeInRange>,
+    pub gap_cap_secs: Option<i64>,
+    pub actions: Vec<ProofAction>,
+    pub earned_usd: Option<String>,
+    pub earned_known: Option<i64>,
+    pub earned_countable: Option<i64>,
+    pub measured_cost_usd: Option<String>,
+    pub cost_legs_known: Option<i64>,
+    pub cost_legs_total: Option<i64>,
+}
+
+/// One bucket of the range history.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct RangePoint {
+    pub t: Option<String>,
+    pub active: Option<i32>,
+    pub lower: Option<i32>,
+    pub upper: Option<i32>,
+    pub in_range: Option<bool>,
+    pub price: Option<f64>,
+    pub lower_price: Option<f64>,
+    pub upper_price: Option<f64>,
+}
+
+/// Where the price sat against the agent's range over time.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct RangeHistory {
+    pub range: Option<String>,
+    pub bucket_secs: Option<i64>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub price_now: Option<f64>,
+    pub active_now: Option<i32>,
+    pub in_range_share: Option<f64>,
+    pub points: Vec<RangePoint>,
+}
+
+/// One position in the portfolio summary. `None` is unpriced, not zero.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PortfolioPosition {
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub value_usd: Option<f64>,
+    pub cost_basis_usd: Option<f64>,
+    pub pnl_usd: Option<f64>,
+    pub pnl_pct: Option<f64>,
+    pub claimable_fees_usd: Option<f64>,
+    pub price_pnl_usd: Option<f64>,
+    pub fee_pnl_usd: Option<f64>,
+    pub il_usd: Option<f64>,
+    pub vs_hodl_usd: Option<f64>,
+    pub fee_apr_pct: Option<f64>,
+    pub fees_per_day_usd: Option<f64>,
+    pub fees_earned_usd: Option<f64>,
+}
+
+/// `t` is unix seconds.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PortfolioSeriesPoint {
+    pub t: Option<i64>,
+    pub value_usd: Option<f64>,
+}
+
+/// The account's LP portfolio summary.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Portfolio {
+    pub total_position_value_usd: Option<f64>,
+    pub all_time_deposit_usd: Option<f64>,
+    pub fees_claimed_usd: Option<f64>,
+    pub claimable_fees_usd: Option<f64>,
+    pub total_pnl_usd: Option<f64>,
+    pub total_pnl_pct: Option<f64>,
+    pub avg_invested_usd: Option<f64>,
+    pub win_rate_pct: Option<f64>,
+    pub biggest_win_usd: Option<f64>,
+    pub position_count: Option<i64>,
+    pub price_pnl_usd: Option<f64>,
+    pub fee_pnl_usd: Option<f64>,
+    pub il_usd: Option<f64>,
+    pub vs_hodl_usd: Option<f64>,
+    pub vs_hodl_measured: Option<i64>,
+    pub vs_hodl_positions: Option<i64>,
+    pub fee_apr_pct: Option<f64>,
+    pub positions: Vec<PortfolioPosition>,
+    pub series: Vec<PortfolioSeriesPoint>,
+}
+
+/// `value_usd` is `None` for a bucket holding an unpriced position.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PortfolioHistoryPoint {
+    pub t: Option<String>,
+    pub value_usd: Option<f64>,
+    pub fees_usd: Option<f64>,
+    pub realized_usd: Option<f64>,
+    pub unpriced: Option<u32>,
+}
+
+/// One UTC day of fees and realized PnL.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CalendarDay {
+    /// `YYYY-MM-DD`.
+    pub date: Option<String>,
+    pub fees_usd: Option<f64>,
+    pub realized_usd: Option<f64>,
+    pub pnl_usd: Option<f64>,
+    pub events: Option<u32>,
+    pub unpriced: Option<u32>,
+}
+
+/// The account's value over time, plus a daily calendar.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PortfolioHistory {
+    pub range: Option<String>,
+    pub bucket_secs: Option<i64>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub points: Vec<PortfolioHistoryPoint>,
+    pub incomplete_buckets: Option<usize>,
+    pub positions: Option<usize>,
+    pub days: Vec<CalendarDay>,
+    pub first_record_at: Option<String>,
+}
+
+/// One transaction an agent sent, with its on-chain outcome.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Transaction {
+    pub id: Option<String>,
+    pub agent_id: Option<String>,
+    pub agent_name: Option<String>,
+    pub signature: Option<String>,
+    pub status: Option<String>,
+    pub dex: Option<String>,
+    pub action_type: Option<String>,
+    pub priority_fee_lamports: Option<i64>,
+    pub compute_units: Option<i32>,
+    pub error_message: Option<String>,
+    pub created_at: Option<String>,
+    pub confirmed_at: Option<String>,
+    pub pnl_delta_usd: Option<String>,
+}
+
+/// Something the risk engine flagged or refused.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct RiskEvent {
+    pub id: Option<String>,
+    pub agent_id: Option<String>,
+    pub agent_name: Option<String>,
+    pub severity: Option<String>,
+    pub code: Option<String>,
+    pub message: Option<String>,
+    pub created_at: Option<String>,
+}
+
+/// One platform fee taken on claimed LP fees. Amounts are base-unit strings
+/// of `fee_token_mint`; USD is `None` when the token could not be priced.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FeeEvent {
+    pub id: Option<String>,
+    pub agent_id: Option<String>,
+    pub wallet_address: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub position_address: Option<String>,
+    pub fee_bps: Option<i32>,
+    pub fee_token_mint: Option<String>,
+    pub gross_fee_amount: Option<String>,
+    pub platform_fee_amount: Option<String>,
+    pub user_net_amount: Option<String>,
+    pub gross_fee_usd: Option<String>,
+    pub platform_fee_usd: Option<String>,
+    pub user_net_usd: Option<String>,
+    pub platform_fee_wallet: Option<String>,
+    pub platform_fee_signature: Option<String>,
+    pub status: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: Option<String>,
+    pub confirmed_at: Option<String>,
+}
+
+/// Totals over every fee event of the account, as decimal strings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FeeSummary {
+    pub total_platform_fees_usd: Option<String>,
+    pub total_claimed_fees_usd: Option<String>,
+    pub total_net_fees_usd: Option<String>,
+    pub event_count: Option<i32>,
+}
+
+/// One notification from the app's bell.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Notification {
+    pub id: Option<String>,
+    pub agent_id: Option<String>,
+    pub kind: Option<String>,
+    pub severity: Option<String>,
+    pub title: Option<String>,
+    pub message: Option<String>,
+    pub status: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub created_at: Option<String>,
+    pub read_at: Option<String>,
+    pub dismissed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct UnreadCount {
+    pub unread: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ReadAll {
+    pub marked: Option<u64>,
+}
+
+/// A recommendation an agent raised for its owner. Approving one flips its
+/// status only; no transaction is built or signed by the approval.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Recommendation {
+    pub id: Option<String>,
+    pub agent_id: Option<String>,
+    pub recommendation_type: Option<String>,
+    pub status: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub position_address: Option<String>,
+    pub reason: Option<String>,
+    pub strategy_snapshot: Option<serde_json::Value>,
+    pub risk_result: Option<serde_json::Value>,
+    pub transaction_preview: Option<serde_json::Value>,
+    pub created_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub acted_at: Option<String>,
+    pub dismissed_at: Option<String>,
+}
+
+/// Which Telegram messages the account receives. On a PUT, a `None` switch
+/// is left out and so left unchanged.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotifySettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebalance_telegram: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mandate_telegram: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weekly_recap_telegram: Option<bool>,
+}
+
+/// A saved agent preset. `overrides` is the normalized document the server
+/// stored; `dex` is `None` for any venue except Ponk Clouds.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Preset {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub overrides: Option<serde_json::Value>,
+    pub dex: Option<String>,
+    pub created_at: Option<String>,
+}
+
+/// The body of [`crate::Client::create_preset`] and
+/// [`crate::Client::update_preset`].
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NewPreset {
+    /// 1 to 60 characters.
+    pub name: String,
+    /// Validated and clamped by the server.
+    pub overrides: serde_json::Value,
+    pub dex: Option<String>,
 }
 
 #[cfg(test)]

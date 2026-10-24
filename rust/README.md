@@ -204,6 +204,32 @@ key can move your funds home. It cannot move them anywhere else.
 | `compound(id)` | `POST /v1/agents/{id}/compound` | `trade` |
 | `withdraw(id, lamports)` | `POST /v1/agents/{id}/withdraw` | `trade` |
 | `exit(id)` | `POST /v1/agents/{id}/exit` | `trade` |
+| `create_agents(&[NewAgent], create_wallets)` | `POST /v1/agents/batch` | `trade` |
+| `fund_prepare(&[FundRequest])` | `POST /v1/agents/fund/prepare`, unsigned transactions | `trade` |
+| `exit_agents(&ids)` / `exit_all_agents()` | `POST /v1/agents/batch/exit` | `trade` |
+| `withdraw_agents(&ids)` / `withdraw_all_agents()` | `POST /v1/agents/batch/withdraw` | `trade` |
+| `get_batch(batch_id)` | `GET /v1/agents/batch/{batch_id}` | `read` |
+| `fleet(offset, limit)` / `fleet_all(limit)` | `GET /v1/agents/fleet` | `read` |
+| `create_agent_wallet(id)` | `POST /v1/agents/{id}/wallet` | `trade` |
+| `rebalance(id, &RebalanceRequest)` | `POST /v1/agents/{id}/rebalance` | `trade` |
+| `collect_fees(id, destination)` | `POST /v1/agents/{id}/collect-fees` | `trade` |
+| `rename_agent(id, name)` / `delete_agent(id)` | `PATCH` / `DELETE /v1/agents/{id}` | `trade` |
+| `agent_proof(id, hours)` / `agent_range_history(id, range)` | `GET /v1/agents/{id}/proof`, `/range-history` | `read` |
+| `custody_withdraw(lamports)` / `custody_exit()` | `POST /v1/custody/withdraw`, `/exit` | `trade` |
+| `portfolio()` / `portfolio_history(range)` | `GET /v1/portfolio`, `/history` | `read` |
+| `list_transactions(limit)` / `list_risk_events(limit)` | `GET /v1/transactions`, `/v1/risk-events` | `read` |
+| `list_fees(limit)` / `fee_summary()` | `GET /v1/fees`, `/v1/fees/summary` | `read` |
+| `list_notifications(status, limit)` / `unread_notifications()` | `GET /v1/notifications`, `/unread-count` | `read` |
+| `mark_all_notifications_read()` / `mark_notification_read(id)` / `dismiss_notification(id)` | `POST /v1/notifications/...` | `trade` |
+| `list_recommendations(status, limit)` / `get_recommendation(id)` | `GET /v1/recommendations` | `read` |
+| `review_` / `approve_` / `dismiss_recommendation(id)` / `snooze_recommendation(id, minutes)` | `POST /v1/recommendations/{id}/...` | `trade` |
+| `notify_settings()` / `update_notify_settings(&NotifySettings)` | `GET` / `PUT /v1/notify-settings` | `read` / `trade` |
+| `list_presets()` / `create_preset(&NewPreset)` / `update_preset(id, &NewPreset)` / `delete_preset(id)` | `/v1/presets` | `read` / `trade` |
+
+`fund_prepare` returns UNSIGNED transactions and this crate never signs them:
+open each of `plan.sign_urls` on ponk.exchange with your wallet connected, or
+sign `unsigned_tx_b64` in wallet software you control. A batch keeps running
+on the server after its response; poll `get_batch` until `running == 0`.
 
 The first four need no key at all: `Client::public(base_url)` reaches them and
 nothing else. `pool`, `range_cost` and `ponk_perks` are rate limited per IP.

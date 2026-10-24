@@ -31,6 +31,17 @@ What a key cannot do, by construction rather than by configuration:
 Withdrawals and exits have no destination parameter and cannot be given one.
 The server locks the destination to the wallet that owns the agent.
 
+Fleets: many agents in one call
+-------------------------------
+
+`create_agents` creates many agents (each with its own wallet),
+`fund_prepare` returns the UNSIGNED transfers that fund them all from your
+wallet in as few transactions as fit (ten agents, one signature), `iter_fleet`
+reads every agent with its wallet, mandate and value, and `exit_agents` /
+`withdraw_agents` close them all at once. The funding transfers are signed by
+your wallet on ponk.exchange (`FundPlan.sign_urls`) or in wallet software you
+control; this client never signs and never asks for a private key.
+
 The mandate expires, and that is the failure to design for
 ---------------------------------------------------------
 
@@ -70,7 +81,7 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence
 
 from ._version import __version__
 from .errors import PonkTransportError, error_from_response
@@ -115,6 +126,26 @@ from .models import (
     ValueHistory,
     WhoAmI,
     Withdrawal,
+    AgentProof,
+    AgentWalletCreated,
+    FeeEvent,
+    FeeSummary,
+    Fleet,
+    FleetBatch,
+    FleetRow,
+    FundPlan,
+    Notification,
+    NotifySettings,
+    Portfolio,
+    PortfolioHistory,
+    Preset,
+    RangeHistory,
+    ReadAll,
+    RebalanceReceipt,
+    Recommendation,
+    RiskEvent,
+    Transaction,
+    UnreadCount,
 )
 
 __all__ = ["PonkClient", "DEFAULT_BASE_URL", "DEFAULT_TIMEOUT", "DEFAULT_FUND_TIMEOUT"]
@@ -1042,6 +1073,499 @@ class PonkClient:
                 timeout=self.fund_timeout,
             )
         )
+
+    # -- the agent fleet (0.6.0) ---------------------------------------------
+
+    def create_agents(
+        self,
+        agents: Sequence[Mapping[str, Any]],
+        *,
+        create_wallets: bool = True,
+    ) -> FleetBatch:
+        """`POST /v1/agents/batch`. Create many agents in one call.
+
+        Each element is a `create_agent` body (`name`, `dex`, `strategy`,
+        `config`, `pool_address`, `dry_run`). `wallet_address` may be left
+        out: the server fills in the key's own wallet, the only value a create
+        accepts. Each agent is created on its own through the same handler as
+        `create_agent`, so one bad pool refuses only that item.
+
+        `dry_run` is REQUIRED on every element, as in `create_agent`, because
+        an omitted `dry_run` on `/v1` creates a LIVE agent. An element without
+        a boolean `dry_run` raises `TypeError` before anything is sent.
+
+        `create_wallets=True` (the default) also makes each new agent's own
+        managed wallet, so the fleet is ready for `fund_prepare` in one step.
+        A wallet that could not be made is reported on its item
+        (`result["wallet_error"]`) and never undoes the create.
+
+        Read the returned `FleetBatch` per item. `item.agent()` is the created
+        agent; a `running` item is still going and `get_batch` collects it.
+        Needs a `trade` key. Takes the fund timeout.
+        """
+        bodies: List[Dict[str, Any]] = []
+        for i, a in enumerate(agents):
+            body = dict(a)
+            if not isinstance(body.get("dry_run"), bool):
+                raise TypeError(
+                    "agents[{0}] needs dry_run=True or False, got {1!r}. On /v1 an "
+                    "omitted dry_run means a LIVE agent, so this client makes you "
+                    "say which one you want.".format(i, body.get("dry_run"))
+                )
+            bodies.append(body)
+        if not bodies:
+            raise ValueError("agents must list at least one agent")
+        return FleetBatch.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/batch",
+                body={"agents": bodies, "create_wallets": create_wallets},
+                timeout=self.fund_timeout,
+            )
+        )
+
+    def fund_prepare(self, transfers: Sequence[Any]) -> FundPlan:
+        """`POST /v1/agents/fund/prepare`. Build the transfers that fund many agents.
+
+        Each element is an agent id (top its wallet up to the venue's
+        recommended opening balance), or a mapping
+        `{"agent_id": ..., "lamports": ...}` for an exact amount. List each
+        agent once.
+
+        The server resolves every destination itself, under the owner scope:
+        a request names agent ids, never addresses. It returns UNSIGNED
+        SystemProgram transfers from the key's own wallet, packed into as few
+        transactions as fit (ten agents fit in one, so one signature), each
+        simulated against mainnet first.
+
+        THIS CLIENT NEVER SIGNS, and neither does the server: it holds no key
+        for your wallet. Open each of `plan.sign_urls` on ponk.exchange with
+        your wallet connected and sign there, or sign
+        `plan.transactions[i].unsigned_tx_b64` in wallet software you already
+        control. `plan.needs_mandate` lists the agents that still need a
+        custody mandate signed in the app before they can act on the funds.
+
+        A plan the server refuses (balance short, a failed simulation) comes
+        back with `ok` false and `refusal` set, not as an exception. Needs a
+        `trade` key.
+        """
+        items: List[Dict[str, Any]] = []
+        for t in transfers:
+            if isinstance(t, str):
+                items.append({"agent_id": t})
+            elif isinstance(t, Mapping):
+                item: Dict[str, Any] = {"agent_id": t["agent_id"]}
+                if t.get("lamports") is not None:
+                    item["lamports"] = int(t["lamports"])
+                items.append(item)
+            else:
+                raise TypeError(
+                    "each transfer is an agent id or {'agent_id': ..., 'lamports': ...}, "
+                    "got {0!r}".format(t)
+                )
+        if not items:
+            raise ValueError("transfers must list at least one agent")
+        return FundPlan.from_dict(
+            self._request("POST", "/v1/agents/fund/prepare", body={"transfers": items})
+        )
+
+    def exit_agents(
+        self, agent_ids: Optional[Sequence[str]] = None, *, all_agents: bool = False
+    ) -> FleetBatch:
+        """`POST /v1/agents/batch/exit`. Exit many agents at once.
+
+        Each listed agent is halted, its position closed and its wallet swept
+        to the owner's own wallet, through the same detached, mandate-enforced
+        exit as `exit_agent`. One agent failing does not stop the others.
+        Pass `agent_ids`, or `all_agents=True` for every agent of this account
+        that has a managed wallet; not both.
+
+        The destination is locked to the owner's wallet by the server and
+        cannot be named. The batch keeps running after the response, so a
+        `running` item is not lost: poll `get_batch(batch.batch_id)`. Needs a
+        `trade` key. Takes the fund timeout.
+        """
+        return FleetBatch.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/batch/exit",
+                body=_batch_target(agent_ids, all_agents),
+                timeout=self.fund_timeout,
+            )
+        )
+
+    def withdraw_agents(
+        self, agent_ids: Optional[Sequence[str]] = None, *, all_agents: bool = False
+    ) -> FleetBatch:
+        """`POST /v1/agents/batch/withdraw`. Sweep many agent wallets' spendable SOL home.
+
+        The agents keep running; positions stay open. Same targeting and
+        polling as `exit_agents`. Needs a `trade` key. Takes the fund timeout.
+        """
+        return FleetBatch.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/batch/withdraw",
+                body=_batch_target(agent_ids, all_agents),
+                timeout=self.fund_timeout,
+            )
+        )
+
+    def get_batch(self, batch_id: str) -> FleetBatch:
+        """`GET /v1/agents/batch/{batch_id}`. The latest state of a batch this account started.
+
+        Another account's batch id is 404, like a missing one. A finished
+        batch is kept for 30 minutes.
+        """
+        return FleetBatch.from_dict(
+            self._request("GET", "/v1/agents/batch/{0}".format(_seg(batch_id)))
+        )
+
+    def fleet(self, offset: Optional[int] = None, limit: Optional[int] = None) -> Fleet:
+        """`GET /v1/agents/fleet?offset&limit`. One page of every agent with its wallet,
+        mandate expiry and value.
+
+        `limit` defaults to 25 and is clamped to 1 to 100 on the server. Pass
+        the page's `next_offset` as `offset` for the next one, or use
+        `iter_fleet` / `fleet_all`.
+        """
+        return Fleet.from_dict(
+            self._request("GET", "/v1/agents/fleet", params={"offset": offset, "limit": limit})
+        )
+
+    def iter_fleet(self, limit: Optional[int] = None) -> Iterator[FleetRow]:
+        """Every fleet row, following `next_offset` page by page.
+
+        One request per page, made only when the previous page is used up.
+        """
+        offset: Optional[int] = None
+        while True:
+            page = self.fleet(offset=offset, limit=limit)
+            for row in page.rows:
+                yield row
+            if page.next_offset is None or page.next_offset == offset:
+                return
+            offset = page.next_offset
+
+    def fleet_all(self, limit: Optional[int] = None) -> List[FleetRow]:
+        """`iter_fleet` collected into a list."""
+        return list(self.iter_fleet(limit=limit))
+
+    def create_agent_wallet(self, agent_id: str) -> AgentWalletCreated:
+        """`POST /v1/agents/{id}/wallet`. Create the agent's own managed wallet.
+
+        Idempotent: an agent that already has one gets it back with
+        `created=False`. An empty wallet grants no authority; nothing signs
+        from it until the owner signs a custody mandate in the app, which a
+        key cannot do. Needs a `trade` key.
+        """
+        return AgentWalletCreated.from_dict(
+            self._request("POST", "/v1/agents/{0}/wallet".format(_seg(agent_id)))
+        )
+
+    # -- agents, more actions (0.6.0) ----------------------------------------
+
+    def rebalance(
+        self,
+        agent_id: str,
+        *,
+        new_lower_bin_id: int,
+        new_upper_bin_id: int,
+        strategy: str,
+        max_slippage_bps: Optional[int] = None,
+    ) -> RebalanceReceipt:
+        """`POST /v1/agents/{id}/rebalance`. Close and reopen a managed agent's range now.
+
+        Managed agents only. The agent's wallet signs under its mandate, which
+        bounds the pool, slippage and value. `strategy` is the liquidity shape
+        (for example `spot`). `max_slippage_bps` defaults to 50 on the server.
+        A second call while one runs gets the running action back, and a
+        rebalance within 60 seconds of a confirmed one is refused.
+
+        RETURNING IS NOT SUCCEEDING, as for `compound`: read `signature` and
+        `status` on the receipt. Needs a `trade` key. Takes the fund timeout.
+        """
+        body: Dict[str, Any] = {
+            "new_lower_bin_id": new_lower_bin_id,
+            "new_upper_bin_id": new_upper_bin_id,
+            "strategy": strategy,
+        }
+        if max_slippage_bps is not None:
+            body["max_slippage_bps"] = max_slippage_bps
+        return RebalanceReceipt.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/{0}/rebalance".format(_seg(agent_id)),
+                body=body,
+                timeout=self.fund_timeout,
+            )
+        )
+
+    def collect_fees(self, agent_id: str, destination: Optional[str] = None) -> ActionReceipt:
+        """`POST /v1/agents/{id}/collect-fees`. Claim a managed agent's fees now.
+
+        `destination` is `agent` (keep them in the agent wallet so it can
+        redeploy them, the server default when omitted) or `connected` (pay
+        them out to the owner's wallet). It is a choice, not an address: the
+        server resolves the owner's wallet itself. Read `payout` on the
+        receipt; `None` means the fees are still in the agent wallet. Needs a
+        `trade` key. Takes the fund timeout.
+        """
+        if destination is not None and destination not in ("agent", "connected"):
+            raise ValueError("destination must be 'agent' or 'connected', got {0!r}".format(destination))
+        body = {"destination": destination} if destination is not None else None
+        return ActionReceipt.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/{0}/collect-fees".format(_seg(agent_id)),
+                body=body,
+                timeout=self.fund_timeout,
+            )
+        )
+
+    def rename_agent(self, agent_id: str, name: str) -> Agent:
+        """`PATCH /v1/agents/{id}`. Rename an agent (1 to 100 characters)."""
+        return Agent.from_dict(
+            self._request("PATCH", "/v1/agents/{0}".format(_seg(agent_id)), body={"name": name})
+        )
+
+    def delete_agent(self, agent_id: str) -> None:
+        """`DELETE /v1/agents/{id}`. Delete a finished agent.
+
+        Refused with `PonkConflictError` while the agent still holds an open
+        position or a balance: exit and withdraw first. Deleting never moves
+        funds. Needs a `trade` key.
+        """
+        self._request("DELETE", "/v1/agents/{0}".format(_seg(agent_id)))
+
+    def agent_proof(self, agent_id: str, hours: Optional[int] = None) -> AgentProof:
+        """`GET /v1/agents/{id}/proof?hours=`. What each action cost and earned.
+
+        `hours` defaults to 168 (7 days), clamped to 1 to 720.
+        """
+        return AgentProof.from_dict(
+            self._request(
+                "GET", "/v1/agents/{0}/proof".format(_seg(agent_id)), params={"hours": hours}
+            )
+        )
+
+    def agent_range_history(self, agent_id: str, range: Optional[str] = None) -> RangeHistory:
+        """`GET /v1/agents/{id}/range-history?range=`. The price against the range over time."""
+        return RangeHistory.from_dict(
+            self._request(
+                "GET",
+                "/v1/agents/{0}/range-history".format(_seg(agent_id)),
+                params={"range": range},
+            )
+        )
+
+    # -- the legacy shared wallet (0.6.0) ------------------------------------
+
+    def custody_withdraw(self, lamports: Optional[int] = None) -> Withdrawal:
+        """`POST /v1/custody/withdraw`. SOL out of the legacy per-user shared wallet.
+
+        Omit `lamports` to sweep what is spendable. The destination is the
+        owner's own wallet and cannot be named. Agents with their own wallet
+        use `withdraw` or `withdraw_agents`. Needs a `trade` key.
+        """
+        body: Dict[str, Any] = {}
+        if lamports is not None:
+            body["lamports"] = lamports
+        return Withdrawal.from_dict(
+            self._request("POST", "/v1/custody/withdraw", body=body, timeout=self.fund_timeout)
+        )
+
+    def custody_exit(self) -> Withdrawal:
+        """`POST /v1/custody/exit`. Exit every managed agent and sweep every managed wallet home.
+
+        Closes every managed position and sweeps every managed wallet of this
+        account, the shared one included, to the owner's own wallet. Needs a
+        `trade` key. Takes the fund timeout.
+        """
+        return Withdrawal.from_dict(
+            self._request("POST", "/v1/custody/exit", timeout=self.fund_timeout)
+        )
+
+    # -- account reads (0.6.0) -----------------------------------------------
+
+    def portfolio(self) -> Portfolio:
+        """`GET /v1/portfolio`. The account's LP portfolio summary."""
+        return Portfolio.from_dict(self._request("GET", "/v1/portfolio"))
+
+    def portfolio_history(self, range: Optional[str] = None) -> PortfolioHistory:
+        """`GET /v1/portfolio/history?range=`. `range` is `24h`, `7d`, `30d`, `90d` or `all`."""
+        return PortfolioHistory.from_dict(
+            self._request("GET", "/v1/portfolio/history", params={"range": range})
+        )
+
+    def list_transactions(self, limit: Optional[int] = None) -> List[Transaction]:
+        """`GET /v1/transactions?limit=`. Transactions the account's agents sent, newest first."""
+        return Transaction.from_list(
+            self._request("GET", "/v1/transactions", params={"limit": limit})
+        )
+
+    def list_risk_events(self, limit: Optional[int] = None) -> List[RiskEvent]:
+        """`GET /v1/risk-events?limit=`. What the risk engine flagged or refused."""
+        return RiskEvent.from_list(
+            self._request("GET", "/v1/risk-events", params={"limit": limit})
+        )
+
+    def list_fees(self, limit: Optional[int] = None) -> List[FeeEvent]:
+        """`GET /v1/fees?limit=`. Platform fee events on claimed LP fees, newest first."""
+        return FeeEvent.from_list(self._request("GET", "/v1/fees", params={"limit": limit}))
+
+    def fee_summary(self) -> FeeSummary:
+        """`GET /v1/fees/summary`. Fee totals for the account."""
+        return FeeSummary.from_dict(self._request("GET", "/v1/fees/summary"))
+
+    # -- notifications and recommendations (0.6.0) ---------------------------
+
+    def list_notifications(
+        self, status: Optional[str] = None, limit: Optional[int] = None
+    ) -> List[Notification]:
+        """`GET /v1/notifications?status&limit`. `limit` defaults to 50."""
+        return Notification.from_list(
+            self._request("GET", "/v1/notifications", params={"status": status, "limit": limit})
+        )
+
+    def unread_notifications(self) -> UnreadCount:
+        """`GET /v1/notifications/unread-count`."""
+        return UnreadCount.from_dict(self._request("GET", "/v1/notifications/unread-count"))
+
+    def mark_all_notifications_read(self) -> ReadAll:
+        """`POST /v1/notifications/read-all`. Needs a `trade` key."""
+        return ReadAll.from_dict(self._request("POST", "/v1/notifications/read-all"))
+
+    def mark_notification_read(self, notification_id: str) -> None:
+        """`POST /v1/notifications/{id}/read`. Needs a `trade` key."""
+        self._request("POST", "/v1/notifications/{0}/read".format(_seg(notification_id)))
+
+    def dismiss_notification(self, notification_id: str) -> None:
+        """`POST /v1/notifications/{id}/dismiss`. Needs a `trade` key."""
+        self._request("POST", "/v1/notifications/{0}/dismiss".format(_seg(notification_id)))
+
+    def list_recommendations(
+        self, status: Optional[str] = None, limit: Optional[int] = None
+    ) -> List[Recommendation]:
+        """`GET /v1/recommendations?status&limit`. `limit` defaults to 50."""
+        return Recommendation.from_list(
+            self._request("GET", "/v1/recommendations", params={"status": status, "limit": limit})
+        )
+
+    def get_recommendation(self, recommendation_id: str) -> Recommendation:
+        """`GET /v1/recommendations/{id}`."""
+        return Recommendation.from_dict(
+            self._request("GET", "/v1/recommendations/{0}".format(_seg(recommendation_id)))
+        )
+
+    def review_recommendation(self, recommendation_id: str) -> Recommendation:
+        """`POST /v1/recommendations/{id}/review`. Mark it seen. Needs a `trade` key."""
+        return self._recommendation_action(recommendation_id, "review")
+
+    def approve_recommendation(self, recommendation_id: str) -> Recommendation:
+        """`POST /v1/recommendations/{id}/approve`. Flips the status only.
+
+        No transaction is built or signed by approving. Needs a `trade` key.
+        """
+        return self._recommendation_action(recommendation_id, "approve")
+
+    def dismiss_recommendation(self, recommendation_id: str) -> Recommendation:
+        """`POST /v1/recommendations/{id}/dismiss`. Needs a `trade` key."""
+        return self._recommendation_action(recommendation_id, "dismiss")
+
+    def snooze_recommendation(
+        self, recommendation_id: str, minutes: Optional[int] = None
+    ) -> Recommendation:
+        """`POST /v1/recommendations/{id}/snooze`. `minutes` uses the server default when unset."""
+        return self._recommendation_action(
+            recommendation_id, "snooze", body={"minutes": minutes}
+        )
+
+    def _recommendation_action(
+        self, recommendation_id: str, action: str, body: Optional[Mapping[str, Any]] = None
+    ) -> Recommendation:
+        return Recommendation.from_dict(
+            self._request(
+                "POST",
+                "/v1/recommendations/{0}/{1}".format(_seg(recommendation_id), action),
+                body=body,
+            )
+        )
+
+    # -- settings: notifications and saved presets (0.6.0) -------------------
+
+    def notify_settings(self) -> NotifySettings:
+        """`GET /v1/notify-settings`. Which Telegram messages the account receives."""
+        return NotifySettings.from_dict(self._request("GET", "/v1/notify-settings"))
+
+    def update_notify_settings(
+        self,
+        *,
+        rebalance_telegram: Optional[bool] = None,
+        mandate_telegram: Optional[bool] = None,
+        weekly_recap_telegram: Optional[bool] = None,
+    ) -> NotifySettings:
+        """`PUT /v1/notify-settings`. Only the switches you pass are changed. Needs a `trade` key."""
+        body = {
+            k: v
+            for k, v in (
+                ("rebalance_telegram", rebalance_telegram),
+                ("mandate_telegram", mandate_telegram),
+                ("weekly_recap_telegram", weekly_recap_telegram),
+            )
+            if v is not None
+        }
+        return NotifySettings.from_dict(self._request("PUT", "/v1/notify-settings", body=body))
+
+    def list_presets(self) -> List[Preset]:
+        """`GET /v1/presets`. The account's saved agent presets."""
+        return Preset.from_list(self._request("GET", "/v1/presets"))
+
+    def create_preset(
+        self, name: str, overrides: Mapping[str, Any], dex: Optional[str] = None
+    ) -> Preset:
+        """`POST /v1/presets`. Save a preset (name 1 to 60 characters).
+
+        `overrides` is validated and clamped by the server, and the stored,
+        normalized document comes back. `dex` limits it to one venue; `None`
+        is any venue except Ponk Clouds, which presets cannot target. Needs a
+        `trade` key.
+        """
+        return Preset.from_dict(
+            self._request("POST", "/v1/presets", body=_preset_body(name, overrides, dex))
+        )
+
+    def update_preset(
+        self, preset_id: str, name: str, overrides: Mapping[str, Any], dex: Optional[str] = None
+    ) -> Preset:
+        """`PUT /v1/presets/{id}`. Replace a preset in place, keeping its id. Needs a `trade` key."""
+        return Preset.from_dict(
+            self._request(
+                "PUT",
+                "/v1/presets/{0}".format(_seg(preset_id)),
+                body=_preset_body(name, overrides, dex),
+            )
+        )
+
+    def delete_preset(self, preset_id: str) -> None:
+        """`DELETE /v1/presets/{id}`. Needs a `trade` key."""
+        self._request("DELETE", "/v1/presets/{0}".format(_seg(preset_id)))
+
+
+def _batch_target(agent_ids: Optional[Sequence[str]], all_agents: bool) -> Dict[str, Any]:
+    """The body of a batch exit or withdraw: named agents, or all of them, never both."""
+    if isinstance(agent_ids, str):
+        raise TypeError("agent_ids is a list of ids, not one string")
+    ids = list(agent_ids or [])
+    if ids and all_agents:
+        raise ValueError("pass agent_ids or all_agents=True, not both")
+    if not ids and not all_agents:
+        raise ValueError("name the agents in agent_ids, or pass all_agents=True")
+    return {"all": True} if all_agents else {"agent_ids": ids}
+
+
+def _preset_body(name: str, overrides: Mapping[str, Any], dex: Optional[str]) -> Dict[str, Any]:
+    return {"name": name, "overrides": dict(overrides), "dex": dex}
 
 
 def _seg(value: str) -> str:

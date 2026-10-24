@@ -12,9 +12,11 @@ endpoint. It never computes a number the server did not send.
 pip install ponk
 ```
 
-0.5.0 adds the X Tracker, the Wallet Tracker, live agents activity, the
-weekly Ponkillionaires race and referral tiers (see
-[Changes in 0.5.0](#changes-in-050)). To install from this repository
+0.6.0 adds agent fleets (create, fund, read and close many agents in one
+call) and `/v1` parity with the app's account surfaces: portfolio,
+transactions, fees, notifications, recommendations, presets and the managed
+rebalance and fee claim (see [Changes in 0.6.0](#changes-in-060)). To install
+from this repository
 instead:
 
 ```bash
@@ -285,6 +287,32 @@ if m is not None:
 | `compound(id)` | `POST /v1/agents/{id}/compound` | `trade` |
 | `withdraw(id, lamports)` | `POST /v1/agents/{id}/withdraw` | `trade` |
 | `exit_agent(id)` | `POST /v1/agents/{id}/exit` | `trade` |
+| `create_agents(agents, create_wallets=True)` | `POST /v1/agents/batch` | `trade` |
+| `fund_prepare(transfers)` | `POST /v1/agents/fund/prepare`, unsigned transactions | `trade` |
+| `exit_agents(agent_ids, all_agents=False)` | `POST /v1/agents/batch/exit` | `trade` |
+| `withdraw_agents(agent_ids, all_agents=False)` | `POST /v1/agents/batch/withdraw` | `trade` |
+| `get_batch(batch_id)` | `GET /v1/agents/batch/{batch_id}` | `read` |
+| `fleet(offset=None, limit=None)` / `iter_fleet(limit)` / `fleet_all(limit)` | `GET /v1/agents/fleet` | `read` |
+| `create_agent_wallet(id)` | `POST /v1/agents/{id}/wallet` | `trade` |
+| `rebalance(id, new_lower_bin_id=, new_upper_bin_id=, strategy=, max_slippage_bps=None)` | `POST /v1/agents/{id}/rebalance` | `trade` |
+| `collect_fees(id, destination=None)` | `POST /v1/agents/{id}/collect-fees` | `trade` |
+| `rename_agent(id, name)` | `PATCH /v1/agents/{id}` | `trade` |
+| `delete_agent(id)` | `DELETE /v1/agents/{id}` | `trade` |
+| `agent_proof(id, hours=None)` | `GET /v1/agents/{id}/proof` | `read` |
+| `agent_range_history(id, range=None)` | `GET /v1/agents/{id}/range-history` | `read` |
+| `custody_withdraw(lamports=None)` | `POST /v1/custody/withdraw` | `trade` |
+| `custody_exit()` | `POST /v1/custody/exit` | `trade` |
+| `portfolio()` | `GET /v1/portfolio` | `read` |
+| `portfolio_history(range=None)` | `GET /v1/portfolio/history` | `read` |
+| `list_transactions(limit)` | `GET /v1/transactions` | `read` |
+| `list_risk_events(limit)` | `GET /v1/risk-events` | `read` |
+| `list_fees(limit)` / `fee_summary()` | `GET /v1/fees`, `GET /v1/fees/summary` | `read` |
+| `list_notifications(status, limit)` / `unread_notifications()` | `GET /v1/notifications`, `/unread-count` | `read` |
+| `mark_all_notifications_read()` / `mark_notification_read(id)` / `dismiss_notification(id)` | `POST /v1/notifications/read-all`, `/{id}/read`, `/{id}/dismiss` | `trade` |
+| `list_recommendations(status, limit)` / `get_recommendation(id)` | `GET /v1/recommendations`, `/{id}` | `read` |
+| `review_recommendation` / `approve_recommendation` / `dismiss_recommendation` / `snooze_recommendation(id, minutes)` | `POST /v1/recommendations/{id}/{review,approve,dismiss,snooze}` | `trade` |
+| `notify_settings()` / `update_notify_settings(...)` | `GET` / `PUT /v1/notify-settings` | `read` / `trade` |
+| `list_presets()` / `create_preset` / `update_preset` / `delete_preset` | `GET` / `POST /v1/presets`, `PUT` / `DELETE /v1/presets/{id}` | `read` / `trade` |
 
 Receiver-side, needing no key and no network:
 
@@ -386,6 +414,48 @@ print("holding $PONK would make that", perks.api_agent_fee.holder_percent, "%")
 
 `agent.managed_fee_bps` is the rate that specific agent's skim actually
 charges, before any $PONK holder discount.
+
+## Changes in 0.6.0
+
+* **Agent fleets.** `create_agents([...])` creates many agents in one call,
+  each with its own wallet. `fund_prepare(agent_ids)` returns the UNSIGNED
+  transfers that fund them all from your wallet, packed into as few
+  transactions as fit: ten agents, one signature. `iter_fleet()` reads every
+  agent with its wallet balance, mandate expiry and value, page by page.
+  `exit_agents(ids)` and `withdraw_agents(ids)` (or `all_agents=True`) close
+  them all at once. A batch keeps running on the server after the response;
+  `get_batch(batch_id)` collects what was still `running`.
+* **The client never signs.** Your wallet signs the funding transfers, on
+  ponk.exchange (`plan.sign_urls`, which also queues each custody mandate an
+  agent still needs) or in wallet software you control
+  (`plan.transactions[i].unsigned_tx_b64`). The SDK holds no key and asks for
+  none.
+* **`/v1` parity with the app:** `rebalance`, `collect_fees`, `rename_agent`,
+  `delete_agent`, `create_agent_wallet`, `agent_proof`, `agent_range_history`,
+  `custody_withdraw`, `custody_exit`, `portfolio`, `portfolio_history`,
+  `list_transactions`, `list_risk_events`, `list_fees`, `fee_summary`, the
+  notifications, the recommendations, `notify_settings` and the saved presets.
+* `AgentWallet` gained `withdrawable_lamports` and `token_accounts_with_value`
+  (`None` means the token read failed, never zero tokens).
+
+```python
+batch = ponk.create_agents([
+    {"name": "fleet %d" % i, "dex": "meteora_dlmm", "pool_address": POOL,
+     "strategy": "bin_rebalancer", "dry_run": True,
+     "config": {"kind": "bin_rebalancer", "bin_range_width": 20, "rebalance_threshold_bins": 5}}
+    for i in range(10)
+])
+ids = [it.agent_id for it in batch.items if it.ok]
+plan = ponk.fund_prepare(ids)            # unsigned; sign at plan.sign_urls
+for row in ponk.iter_fleet():
+    print(row.agent.name, row.wallet and row.wallet.lamports, row.mandate and row.mandate.status)
+ponk.exit_agents(ids)
+```
+
+The whole flow, with polling, is [`examples/fleet.py`](examples/fleet.py).
+
+Still app only: minting a custody mandate, API keys and webhooks. A key
+cannot produce a wallet signature, so these stay behind a wallet sign-in.
 
 ## Changes in 0.5.0
 

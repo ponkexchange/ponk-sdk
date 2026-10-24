@@ -752,6 +752,394 @@ impl Client {
         .await
     }
 
+    // -- the agent fleet (0.6.0) ---------------------------------------------
+
+    /// `POST /v1/agents/batch`. Create many agents in one call.
+    ///
+    /// Each [`NewAgent`] is created on its own through the same handler as
+    /// [`Client::create_agent`], so one bad pool refuses only that item. As
+    /// there, an unset `dry_run` makes a LIVE agent. `create_wallets` also
+    /// makes each agent's own managed wallet, ready for
+    /// [`Client::fund_prepare`]; a wallet that could not be made is reported
+    /// on its item and never undoes the create. Needs a `trade` key.
+    pub async fn create_agents(&self, agents: &[NewAgent], create_wallets: bool) -> Result<FleetBatch> {
+        self.post(
+            "/v1/agents/batch",
+            Some(&serde_json::json!({ "agents": agents, "create_wallets": create_wallets })),
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/agents/fund/prepare`. UNSIGNED transfers from your wallet to
+    /// each listed agent's own wallet, in as few transactions as fit.
+    ///
+    /// The request names agent ids, never addresses: the server resolves
+    /// every destination under the owner scope. Neither this crate nor the
+    /// server signs. Open each of [`FundPlan::sign_urls`] on ponk.exchange
+    /// with the wallet connected, or sign `unsigned_tx_b64` in wallet software
+    /// you control. A refused plan is `Ok` with `ok == Some(false)` and
+    /// `refusal` set. Needs a `trade` key.
+    pub async fn fund_prepare(&self, transfers: &[FundRequest]) -> Result<FundPlan> {
+        self.post(
+            "/v1/agents/fund/prepare",
+            Some(&serde_json::json!({ "transfers": transfers })),
+            self.timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/agents/batch/exit` for the listed agents: halt each one,
+    /// close its position and sweep its wallet to the owner's own wallet. One
+    /// failing does not stop the others. `running` items keep going on the
+    /// server; collect them with [`Client::get_batch`]. Needs a `trade` key.
+    pub async fn exit_agents(&self, agent_ids: &[&str]) -> Result<FleetBatch> {
+        self.post(
+            "/v1/agents/batch/exit",
+            Some(&serde_json::json!({ "agent_ids": agent_ids })),
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/agents/batch/exit` with `all: true`: every agent of this
+    /// account that has a managed wallet.
+    pub async fn exit_all_agents(&self) -> Result<FleetBatch> {
+        self.post(
+            "/v1/agents/batch/exit",
+            Some(&serde_json::json!({ "all": true })),
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/agents/batch/withdraw` for the listed agents: sweep each
+    /// wallet's spendable SOL home. The agents keep running.
+    pub async fn withdraw_agents(&self, agent_ids: &[&str]) -> Result<FleetBatch> {
+        self.post(
+            "/v1/agents/batch/withdraw",
+            Some(&serde_json::json!({ "agent_ids": agent_ids })),
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/agents/batch/withdraw` with `all: true`.
+    pub async fn withdraw_all_agents(&self) -> Result<FleetBatch> {
+        self.post(
+            "/v1/agents/batch/withdraw",
+            Some(&serde_json::json!({ "all": true })),
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `GET /v1/agents/batch/{batch_id}`. The latest state of a batch this
+    /// account started. Kept for 30 minutes after it finishes.
+    pub async fn get_batch(&self, batch_id: &str) -> Result<FleetBatch> {
+        self.get(&format!("/v1/agents/batch/{}", seg(batch_id))).await
+    }
+
+    /// `GET /v1/agents/fleet?offset&limit`. One page of every agent with its
+    /// wallet, mandate and value. `limit` defaults to 25, at most 100.
+    pub async fn fleet(&self, offset: Option<usize>, limit: Option<usize>) -> Result<Fleet> {
+        self.get(&with_query(
+            "/v1/agents/fleet",
+            &[
+                ("offset", offset.map(|n| n.to_string())),
+                ("limit", limit.map(|n| n.to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// Every fleet row, following `next_offset` page by page.
+    pub async fn fleet_all(&self, limit: Option<usize>) -> Result<Vec<FleetRow>> {
+        let mut rows = Vec::new();
+        let mut offset = None;
+        loop {
+            let page = self.fleet(offset, limit).await?;
+            rows.extend(page.rows);
+            match page.next_offset {
+                Some(next) if Some(next) != offset => offset = Some(next),
+                _ => return Ok(rows),
+            }
+        }
+    }
+
+    /// `POST /v1/agents/{id}/wallet`. Create the agent's own managed wallet,
+    /// or get the existing one back (`created == Some(false)`). An empty
+    /// wallet grants no authority. Needs a `trade` key.
+    pub async fn create_agent_wallet(&self, agent_id: &str) -> Result<AgentWalletCreated> {
+        self.post(
+            &format!("/v1/agents/{}/wallet", seg(agent_id)),
+            None::<&()>,
+            self.timeout,
+        )
+        .await
+    }
+
+    // -- agents, more actions (0.6.0) ----------------------------------------
+
+    /// `POST /v1/agents/{id}/rebalance`. Close and reopen a managed agent's
+    /// range now, signed by the agent's wallet under its mandate. Read the
+    /// receipt: a refusal is `Ok` with `signature == None`. Needs a `trade`
+    /// key.
+    pub async fn rebalance(&self, agent_id: &str, request: &RebalanceRequest) -> Result<RebalanceReceipt> {
+        self.post(
+            &format!("/v1/agents/{}/rebalance", seg(agent_id)),
+            Some(request),
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/agents/{id}/collect-fees`. Claim a managed agent's fees.
+    /// `destination` is `Some("agent")` (keep them in the agent wallet, the
+    /// default) or `Some("connected")` (pay them to the owner's wallet). It
+    /// is a choice, not an address. Needs a `trade` key.
+    pub async fn collect_fees(&self, agent_id: &str, destination: Option<&str>) -> Result<ActionReceipt> {
+        let path = format!("/v1/agents/{}/collect-fees", seg(agent_id));
+        match destination {
+            Some(d) => {
+                self.post(&path, Some(&serde_json::json!({ "destination": d })), self.fund_timeout)
+                    .await
+            }
+            None => self.post(&path, None::<&()>, self.fund_timeout).await,
+        }
+    }
+
+    /// `PATCH /v1/agents/{id}`. Rename an agent (1 to 100 characters).
+    pub async fn rename_agent(&self, agent_id: &str, name: &str) -> Result<Agent> {
+        let path = format!("/v1/agents/{}", seg(agent_id));
+        let request = self
+            .http
+            .patch(self.url(&path))
+            .timeout(self.timeout)
+            .json(&serde_json::json!({ "name": name }));
+        self.send(request, &path, &[]).await
+    }
+
+    /// `DELETE /v1/agents/{id}`. Delete a finished agent. Refused (409) while
+    /// it still holds a position or a balance. Moves no funds.
+    pub async fn delete_agent(&self, agent_id: &str) -> Result<()> {
+        self.delete::<Option<serde_json::Value>>(&format!("/v1/agents/{}", seg(agent_id)))
+            .await
+            .map(|_| ())
+    }
+
+    /// `GET /v1/agents/{id}/proof?hours=`. What each action cost and earned.
+    pub async fn agent_proof(&self, agent_id: &str, hours: Option<i64>) -> Result<AgentProof> {
+        self.get(&with_query(
+            &format!("/v1/agents/{}/proof", seg(agent_id)),
+            &[("hours", hours.map(|n| n.to_string()))],
+        ))
+        .await
+    }
+
+    /// `GET /v1/agents/{id}/range-history?range=`.
+    pub async fn agent_range_history(&self, agent_id: &str, range: Option<&str>) -> Result<RangeHistory> {
+        self.get(&with_query(
+            &format!("/v1/agents/{}/range-history", seg(agent_id)),
+            &[("range", range.map(str::to_string))],
+        ))
+        .await
+    }
+
+    // -- the legacy shared wallet (0.6.0) ------------------------------------
+
+    /// `POST /v1/custody/withdraw`. SOL out of the legacy per-user shared
+    /// wallet, to the owner's own wallet only. `None` sweeps what is
+    /// spendable.
+    pub async fn custody_withdraw(&self, lamports: Option<u64>) -> Result<Withdrawal> {
+        let body = match lamports {
+            Some(n) => serde_json::json!({ "lamports": n }),
+            None => serde_json::json!({}),
+        };
+        self.post("/v1/custody/withdraw", Some(&body), self.fund_timeout).await
+    }
+
+    /// `POST /v1/custody/exit`. Exit every managed agent and sweep every
+    /// managed wallet, the shared one included, to the owner's own wallet.
+    pub async fn custody_exit(&self) -> Result<Withdrawal> {
+        self.post("/v1/custody/exit", None::<&()>, self.fund_timeout).await
+    }
+
+    // -- account reads (0.6.0) -----------------------------------------------
+
+    /// `GET /v1/portfolio`.
+    pub async fn portfolio(&self) -> Result<Portfolio> {
+        self.get("/v1/portfolio").await
+    }
+
+    /// `GET /v1/portfolio/history?range=` (`24h`, `7d`, `30d`, `90d`, `all`).
+    pub async fn portfolio_history(&self, range: Option<&str>) -> Result<PortfolioHistory> {
+        self.get(&with_query(
+            "/v1/portfolio/history",
+            &[("range", range.map(str::to_string))],
+        ))
+        .await
+    }
+
+    /// `GET /v1/transactions?limit=`.
+    pub async fn list_transactions(&self, limit: Option<i64>) -> Result<Vec<Transaction>> {
+        self.get(&with_query("/v1/transactions", &[("limit", limit.map(|n| n.to_string()))]))
+            .await
+    }
+
+    /// `GET /v1/risk-events?limit=`.
+    pub async fn list_risk_events(&self, limit: Option<i64>) -> Result<Vec<RiskEvent>> {
+        self.get(&with_query("/v1/risk-events", &[("limit", limit.map(|n| n.to_string()))]))
+            .await
+    }
+
+    /// `GET /v1/fees?limit=`.
+    pub async fn list_fees(&self, limit: Option<i64>) -> Result<Vec<FeeEvent>> {
+        self.get(&with_query("/v1/fees", &[("limit", limit.map(|n| n.to_string()))]))
+            .await
+    }
+
+    /// `GET /v1/fees/summary`.
+    pub async fn fee_summary(&self) -> Result<FeeSummary> {
+        self.get("/v1/fees/summary").await
+    }
+
+    // -- notifications and recommendations (0.6.0) ---------------------------
+
+    /// `GET /v1/notifications?status&limit`.
+    pub async fn list_notifications(&self, status: Option<&str>, limit: Option<i64>) -> Result<Vec<Notification>> {
+        self.get(&with_query(
+            "/v1/notifications",
+            &[
+                ("status", status.map(str::to_string)),
+                ("limit", limit.map(|n| n.to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /v1/notifications/unread-count`.
+    pub async fn unread_notifications(&self) -> Result<UnreadCount> {
+        self.get("/v1/notifications/unread-count").await
+    }
+
+    /// `POST /v1/notifications/read-all`.
+    pub async fn mark_all_notifications_read(&self) -> Result<ReadAll> {
+        self.post("/v1/notifications/read-all", None::<&()>, self.timeout).await
+    }
+
+    /// `POST /v1/notifications/{id}/read`.
+    pub async fn mark_notification_read(&self, notification_id: &str) -> Result<()> {
+        self.post::<(), Option<serde_json::Value>>(
+            &format!("/v1/notifications/{}/read", seg(notification_id)),
+            None,
+            self.timeout,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// `POST /v1/notifications/{id}/dismiss`.
+    pub async fn dismiss_notification(&self, notification_id: &str) -> Result<()> {
+        self.post::<(), Option<serde_json::Value>>(
+            &format!("/v1/notifications/{}/dismiss", seg(notification_id)),
+            None,
+            self.timeout,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// `GET /v1/recommendations?status&limit`.
+    pub async fn list_recommendations(&self, status: Option<&str>, limit: Option<i64>) -> Result<Vec<Recommendation>> {
+        self.get(&with_query(
+            "/v1/recommendations",
+            &[
+                ("status", status.map(str::to_string)),
+                ("limit", limit.map(|n| n.to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /v1/recommendations/{id}`.
+    pub async fn get_recommendation(&self, recommendation_id: &str) -> Result<Recommendation> {
+        self.get(&format!("/v1/recommendations/{}", seg(recommendation_id))).await
+    }
+
+    /// `POST /v1/recommendations/{id}/review`. Mark it seen.
+    pub async fn review_recommendation(&self, recommendation_id: &str) -> Result<Recommendation> {
+        self.recommendation_action(recommendation_id, "review").await
+    }
+
+    /// `POST /v1/recommendations/{id}/approve`. Flips the status only; it
+    /// builds and signs no transaction.
+    pub async fn approve_recommendation(&self, recommendation_id: &str) -> Result<Recommendation> {
+        self.recommendation_action(recommendation_id, "approve").await
+    }
+
+    /// `POST /v1/recommendations/{id}/dismiss`.
+    pub async fn dismiss_recommendation(&self, recommendation_id: &str) -> Result<Recommendation> {
+        self.recommendation_action(recommendation_id, "dismiss").await
+    }
+
+    async fn recommendation_action(&self, recommendation_id: &str, action: &str) -> Result<Recommendation> {
+        self.post(
+            &format!("/v1/recommendations/{}/{}", seg(recommendation_id), seg(action)),
+            None::<&()>,
+            self.timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/recommendations/{id}/snooze`. `None` uses the server default.
+    pub async fn snooze_recommendation(&self, recommendation_id: &str, minutes: Option<i64>) -> Result<Recommendation> {
+        self.post(
+            &format!("/v1/recommendations/{}/snooze", seg(recommendation_id)),
+            Some(&serde_json::json!({ "minutes": minutes })),
+            self.timeout,
+        )
+        .await
+    }
+
+    // -- settings: notifications and saved presets (0.6.0) -------------------
+
+    /// `GET /v1/notify-settings`.
+    pub async fn notify_settings(&self) -> Result<NotifySettings> {
+        self.get("/v1/notify-settings").await
+    }
+
+    /// `PUT /v1/notify-settings`. Only the switches set to `Some` change.
+    pub async fn update_notify_settings(&self, settings: &NotifySettings) -> Result<NotifySettings> {
+        let path = "/v1/notify-settings";
+        let request = self.http.put(self.url(path)).timeout(self.timeout).json(settings);
+        self.send(request, path, &[]).await
+    }
+
+    /// `GET /v1/presets`.
+    pub async fn list_presets(&self) -> Result<Vec<Preset>> {
+        self.get("/v1/presets").await
+    }
+
+    /// `POST /v1/presets`. The stored, normalized preset comes back.
+    pub async fn create_preset(&self, preset: &NewPreset) -> Result<Preset> {
+        self.post("/v1/presets", Some(preset), self.timeout).await
+    }
+
+    /// `PUT /v1/presets/{id}`. Replace a preset in place, keeping its id.
+    pub async fn update_preset(&self, preset_id: &str, preset: &NewPreset) -> Result<Preset> {
+        let path = format!("/v1/presets/{}", seg(preset_id));
+        let request = self.http.put(self.url(&path)).timeout(self.timeout).json(preset);
+        self.send(request, &path, &[]).await
+    }
+
+    /// `DELETE /v1/presets/{id}`.
+    pub async fn delete_preset(&self, preset_id: &str) -> Result<()> {
+        self.delete::<Option<serde_json::Value>>(&format!("/v1/presets/{}", seg(preset_id)))
+            .await
+            .map(|_| ())
+    }
+
     // -- transport ---------------------------------------------------------
 
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
@@ -803,6 +1191,9 @@ impl Client {
                 return Err(Error::Api(ApiError::from_body(status.as_u16(), Some(body))));
             }
         }
+        // A 204 has no body. Decode it as JSON null, so a `()` or `Option`
+        // result reads it as "nothing", not as a decode failure.
+        let body = if body.trim().is_empty() { "null".to_string() } else { body };
         serde_json::from_str(&body).map_err(|e| Error::Decode {
             path: path.to_string(),
             message: e.to_string(),
@@ -1263,5 +1654,105 @@ mod tests {
         assert!(raw.starts_with("POST /v1/referral/handle HTTP/1.1\r\n"), "{raw}");
         let body = &raw[raw.find("\r\n\r\n").unwrap() + 4..];
         assert_eq!(serde_json::from_str::<serde_json::Value>(body).unwrap(), serde_json::json!({ "handle": "kader" }));
+    }
+
+    fn body_of(raw: &str) -> serde_json::Value {
+        serde_json::from_str(&raw[raw.find("\r\n\r\n").unwrap() + 4..]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_agents_posts_the_batch() {
+        let (base, server) = one_shot(
+            r#"{"batch_id":"b","kind":"create","total":1,"done":1,"failed":0,"running":0,
+            "items":[{"index":0,"agent_id":"a1","outcome":"done","ok":true,"status":200,
+            "result":{"agent":{"id":"a1","name":"fleet 1"},"wallet":{"pubkey":"W"}}}]}"#,
+        );
+        let c = Client::new(base, "k").unwrap();
+        let agent = NewAgent::new("fleet 1", "OWNER", "meteora_dlmm", "bin_rebalancer", serde_json::json!({}))
+            .pool_address("P")
+            .dry_run(true);
+        let b = c.create_agents(&[agent], true).await.unwrap();
+        assert_eq!((b.total, b.done, b.running), (1, 1, 0));
+        assert_eq!(b.items[0].agent().unwrap().name.as_deref(), Some("fleet 1"));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/agents/batch HTTP/1.1\r\n"), "{raw}");
+        let body = body_of(&raw);
+        assert_eq!(body["create_wallets"], true);
+        assert_eq!(body["agents"][0]["dry_run"], true);
+    }
+
+    #[tokio::test]
+    async fn fund_prepare_sends_agent_ids_and_reads_the_plan() {
+        let (base, server) = one_shot(
+            r#"{"owner":"OWNER","ok":true,"total_lamports":2,"network_fee_lamports":5000,
+            "transactions":[{"index":0,"unsigned_tx_b64":"AQAB","transfers":[{"agent_id":"a1","to":"W1","lamports":1},
+            {"agent_id":"a2","to":"W2","lamports":1}],"total_lamports":2,"simulated":true}],
+            "items":[],"needs_mandate":["a1","a2"],"sign_urls":["https://ponk.exchange/agents/fund?a=a1:1,a2:1"]}"#,
+        );
+        let c = Client::new(base, "k").unwrap();
+        let plan = c
+            .fund_prepare(&[FundRequest::top_up("a1"), FundRequest::exact("a2", 1)])
+            .await
+            .unwrap();
+        assert_eq!(plan.transactions[0].transfers.len(), 2);
+        assert_eq!(plan.needs_mandate, vec!["a1", "a2"]);
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/agents/fund/prepare HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(
+            body_of(&raw),
+            serde_json::json!({ "transfers": [{ "agent_id": "a1" }, { "agent_id": "a2", "lamports": 1 }] })
+        );
+    }
+
+    #[tokio::test]
+    async fn exit_all_agents_sends_all_true() {
+        let (base, server) = one_shot(r#"{"batch_id":"b","kind":"exit","total":0,"items":[]}"#);
+        let c = Client::new(base, "k").unwrap();
+        c.exit_all_agents().await.unwrap();
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/agents/batch/exit HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(body_of(&raw), serde_json::json!({ "all": true }));
+    }
+
+    #[tokio::test]
+    async fn the_fleet_page_decodes_typed_parts() {
+        let (base, server) = one_shot(
+            r#"{"total":1,"offset":0,"limit":25,"next_offset":null,"rows":[{"agent":{"id":"a1"},
+            "wallet":{"pubkey":"W","lamports":10,"withdrawable_lamports":5},"mandate":null,
+            "performance":{"pnl_usd":null},"read_errors":[]}]}"#,
+        );
+        let c = Client::new(base, "k").unwrap();
+        let rows = c.fleet_all(Some(25)).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].wallet.as_ref().unwrap().withdrawable_lamports, Some(5));
+        assert!(rows[0].mandate.is_none());
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("GET /v1/agents/fleet?limit=25 HTTP/1.1\r\n"), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_204_style_body_is_ok_for_delete() {
+        let (base, server) = one_shot("");
+        let c = Client::new(base, "k").unwrap();
+        c.delete_agent("a1").await.unwrap();
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("DELETE /v1/agents/a1 HTTP/1.1\r\n"), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn update_notify_settings_puts_only_the_set_switches() {
+        let (base, server) = one_shot(r#"{"rebalance_telegram":false,"mandate_telegram":true,"weekly_recap_telegram":true}"#);
+        let c = Client::new(base, "k").unwrap();
+        let s = c
+            .update_notify_settings(&NotifySettings {
+                rebalance_telegram: Some(false),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(s.mandate_telegram, Some(true));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("PUT /v1/notify-settings HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(body_of(&raw), serde_json::json!({ "rebalance_telegram": false }));
     }
 }
