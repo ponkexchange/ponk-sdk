@@ -118,7 +118,7 @@ pub mod webhooks;
 
 pub use client::{
     Client, ClientBuilder, WalletFeedQuery, XFeedQuery, DEFAULT_BASE_URL, DEFAULT_FUND_TIMEOUT,
-    DEFAULT_TIMEOUT,
+    DEFAULT_TIMEOUT, JUPITER_SESSION_HEADER,
 };
 pub use error::{ApiError, Error, ErrorKind};
 pub use models::{
@@ -137,6 +137,15 @@ pub use models::{
     PortfolioHistoryPoint, PortfolioPosition, PortfolioSeriesPoint, Preset, ProofAction,
     RangeHistory, RangePoint, ReadAll, RebalanceReceipt, RebalanceRequest, Recommendation,
     RiskEvent, TimeInRange, Transaction, UnreadCount,
+};
+pub use models::{
+    AgentVisibility, BatchOutcome, BatchResult, Call, CallPreview, CardLook, CopyFollow,
+    CopyFollows, CopyLog, CopyLogEntry, CopyReferralAttach, CopyReferralOffer, DcaBand,
+    DepositCraft, FollowLeader, FollowOffer, FollowStatus, JupiterChallenge, JupiterSession,
+    LeaderboardPrivacy, LogsCleared, MarkedTx, NotCopied, OrderBatch, OrderBatchItem,
+    OrderCancel, OrderCreated, OrderIntent, OrderPlan, OrderRef, Prepared, PresetRank,
+    PrivacyRequest, PushSettings, PushTest, RankRequest, StrandedPositions, TelegramShared,
+    TelegramStatus, WalletFollow, WalletFollowRequest,
 };
 pub use models::{
     ActivityEvent, AgentsActivity, CuratedWallet, CuratedWallets, LastWeek, PonkillionairesWeek,

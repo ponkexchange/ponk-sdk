@@ -18,6 +18,10 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// each confirmation, so they get their own, longer timeout.
 pub const DEFAULT_FUND_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// The header that carries the caller's Jupiter access token on the order
+/// calls. The token is sent on the one request it is given to, never stored.
+pub const JUPITER_SESSION_HEADER: &str = "x-jupiter-session";
+
 type Result<T> = std::result::Result<T, Error>;
 
 /// A client for the ponk public API.
@@ -230,6 +234,41 @@ impl Client {
     pub async fn x_callers(&self, days: Option<i64>) -> Result<XCallers> {
         self.get(&with_query("/public/x/callers", &[("days", days.map(|n| n.to_string()))]))
             .await
+    }
+
+    /// `GET /public/calls`. The Ponk Calls feed, newest first. `source` is
+    /// `ponk` (default), `x` or `all`; `before` an RFC 3339 cursor. Public.
+    pub async fn calls_feed(
+        &self,
+        source: Option<&str>,
+        mint: Option<&str>,
+        before: Option<&str>,
+        limit: Option<i64>,
+    ) -> Result<serde_json::Value> {
+        self.get(&with_query(
+            "/public/calls",
+            &[
+                ("source", source.map(str::to_string)),
+                ("mint", mint.map(str::to_string)),
+                ("before", before.map(str::to_string)),
+                ("limit", limit.map(|n| n.to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /public/calls/callers`. The callers board. Public.
+    pub async fn callers_board(&self, days: Option<i64>, source: Option<&str>) -> Result<serde_json::Value> {
+        self.get(&with_query(
+            "/public/calls/callers",
+            &[("days", days.map(|n| n.to_string())), ("source", source.map(str::to_string))],
+        ))
+        .await
+    }
+
+    /// `GET /public/calls/caller/{who}`. One caller's profile and calls. Public.
+    pub async fn caller(&self, who: &str) -> Result<serde_json::Value> {
+        self.get(&format!("/public/calls/caller/{}", seg(who))).await
     }
 
     /// `GET /public/x/token/{mint}`. Every tracked mention of one token. 400
@@ -1140,7 +1179,614 @@ impl Client {
             .map(|_| ())
     }
 
+    // -- swap orders: Jupiter Trigger V2 and Recurring (0.7.0) ---------------
+    //
+    // Two doors, and neither signs. `plan_orders` returns one link on
+    // ponk.exchange where the owner's wallet signs every order (the site's
+    // own builders run there). A program that holds its own wallet key uses
+    // the self-sign steps: `orders_challenge` and `orders_verify` for a
+    // Jupiter session, `craft_order_deposit` for an UNSIGNED deposit, then
+    // `create_price_order` / `create_dca_order` with it signed; `cancel_order`
+    // for an UNSIGNED withdrawal and `confirm_order_cancel` to land it.
+    //
+    // The Jupiter access token is an argument of each call, sent as the
+    // `X-Jupiter-Session` header and never kept. Every wallet field is the
+    // key owner's: the server fills it in and refuses another. Ponk adds no
+    // fee to orders.
+    //
+    // OUTCOME UNKNOWN: create and confirm land a transaction during the
+    // request. A 504 with code `outcome_unknown` means it may have landed.
+    // Read `list_orders` first and never retry the same create blindly.
+
+    /// `POST /v1/orders/plan`. Validate up to ten orders (and any cancels) and
+    /// get the one link where the owner signs them. Nothing is created.
+    pub async fn plan_orders(
+        &self,
+        orders: &[OrderIntent],
+        cancel: &[OrderRef],
+        cancel_all: bool,
+    ) -> Result<OrderPlan> {
+        let body = serde_json::json!({ "orders": orders, "cancel": cancel, "cancel_all": cancel_all });
+        self.post("/v1/orders/plan", Some(&body), self.timeout).await
+    }
+
+    /// `POST /v1/orders/auth/challenge`. `kind` is `message` or `transaction`.
+    pub async fn orders_challenge(&self, kind: &str) -> Result<JupiterChallenge> {
+        self.post("/v1/orders/auth/challenge", Some(&serde_json::json!({ "type": kind })), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/orders/auth/verify` with the wallet's base58 signature of a
+    /// message challenge.
+    pub async fn orders_verify_message(&self, signature: &str) -> Result<JupiterSession> {
+        let body = serde_json::json!({ "type": "message", "signature": signature });
+        self.post("/v1/orders/auth/verify", Some(&body), self.timeout).await
+    }
+
+    /// `POST /v1/orders/auth/verify` with a signed transaction challenge (base64).
+    pub async fn orders_verify_transaction(&self, signed_transaction: &str) -> Result<JupiterSession> {
+        let body = serde_json::json!({ "type": "transaction", "signedTransaction": signed_transaction });
+        self.post("/v1/orders/auth/verify", Some(&body), self.timeout).await
+    }
+
+    /// `POST /v1/orders/auth/refresh`.
+    pub async fn orders_refresh(&self, refresh_token: &str) -> Result<JupiterSession> {
+        let body = serde_json::json!({ "refreshToken": refresh_token });
+        self.post("/v1/orders/auth/refresh", Some(&body), self.timeout).await
+    }
+
+    /// `POST /v1/orders/auth/logout`.
+    pub async fn orders_logout(&self, refresh_token: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({ "refreshToken": refresh_token });
+        self.post("/v1/orders/auth/logout", Some(&body), self.timeout).await
+    }
+
+    /// `GET /v1/orders/mint-support?mints=`. Per mint, null when usable in an
+    /// order, else the reason Jupiter's deposit would refuse it.
+    pub async fn order_mint_support(&self, mints: &[&str]) -> Result<serde_json::Value> {
+        self.get(&with_query("/v1/orders/mint-support", &[("mints", Some(mints.join(",")))]))
+            .await
+    }
+
+    /// `POST /v1/orders/deposit/craft`. The UNSIGNED deposit. `order_type` is
+    /// `price` (with `order_sub_type` `single`, `oco` or `otoco`) or `dca`;
+    /// `amount` is base units (for DCA, per order times the count).
+    pub async fn craft_order_deposit(
+        &self,
+        jupiter_session: &str,
+        input_mint: &str,
+        output_mint: &str,
+        amount: u64,
+        order_type: &str,
+        order_sub_type: Option<&str>,
+    ) -> Result<DepositCraft> {
+        let mut body = serde_json::json!({
+            "inputMint": input_mint,
+            "outputMint": output_mint,
+            "amount": amount.to_string(),
+            "orderType": order_type,
+        });
+        if let Some(sub) = order_sub_type {
+            body["orderSubType"] = sub.into();
+        }
+        self.post_jupiter("/v1/orders/deposit/craft", jupiter_session, Some(&body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/orders/price`. Create a limit, trailing, OCO or OTOCO order:
+    /// Jupiter's create body with `depositRequestId` and `depositSignedTx`.
+    /// Takes the fund timeout. Never retry an `outcome_unknown` blindly.
+    pub async fn create_price_order(&self, jupiter_session: &str, body: &serde_json::Value) -> Result<OrderCreated> {
+        self.post_jupiter("/v1/orders/price", jupiter_session, Some(body), self.fund_timeout)
+            .await
+    }
+
+    /// `POST /v1/orders/dca`. Create a DCA plan (`time_based`, or
+    /// `price_conditional` with `triggerMint` and a min and/or max USD
+    /// price). Takes the fund timeout.
+    pub async fn create_dca_order(&self, jupiter_session: &str, body: &serde_json::Value) -> Result<OrderCreated> {
+        self.post_jupiter("/v1/orders/dca", jupiter_session, Some(body), self.fund_timeout)
+            .await
+    }
+
+    /// `POST /v1/orders/{family}/{id}/cancel`. Stop an order and get its
+    /// UNSIGNED withdrawal. `family` is `price` or `dca`.
+    pub async fn cancel_order(&self, jupiter_session: &str, family: &str, order_id: &str) -> Result<OrderCancel> {
+        let path = format!("/v1/orders/{}/{}/cancel", seg(family), seg(order_id));
+        self.post_jupiter::<serde_json::Value, _>(&path, jupiter_session, None, self.timeout)
+            .await
+    }
+
+    /// `POST /v1/orders/{family}/{id}/confirm-cancel`. Land the signed
+    /// withdrawal; the funds return to the owner's wallet. Takes the fund timeout.
+    pub async fn confirm_order_cancel(
+        &self,
+        jupiter_session: &str,
+        family: &str,
+        order_id: &str,
+        signed_transaction: &str,
+        cancel_request_id: &str,
+    ) -> Result<OrderCancel> {
+        let path = format!("/v1/orders/{}/{}/confirm-cancel", seg(family), seg(order_id));
+        let body = serde_json::json!({ "signedTransaction": signed_transaction, "cancelRequestId": cancel_request_id });
+        self.post_jupiter(&path, jupiter_session, Some(&body), self.fund_timeout)
+            .await
+    }
+
+    /// `GET /v1/orders`. Jupiter's order history as it sent it: one family
+    /// (`{"orders": [...]}`), or both as `{"price", "dca"}` when `family` is
+    /// `None`. `state` is `active` (open orders) or `past`.
+    pub async fn list_orders(
+        &self,
+        jupiter_session: &str,
+        family: Option<&str>,
+        state: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<serde_json::Value> {
+        let path = with_query(
+            "/v1/orders",
+            &[
+                ("family", family.map(str::to_string)),
+                ("state", state.map(str::to_string)),
+                ("limit", limit.map(|l| l.to_string())),
+            ],
+        );
+        let request = self
+            .http
+            .get(self.url(&path))
+            .timeout(self.timeout)
+            .header(JUPITER_SESSION_HEADER, jupiter_session);
+        self.send(request, &path, &[]).await
+    }
+
+    /// `POST /v1/orders/cancel`. Cancel step one for many orders, or every
+    /// open one with `all`. Each item carries its UNSIGNED withdrawal.
+    pub async fn cancel_orders(&self, jupiter_session: &str, orders: &[OrderRef], all: bool) -> Result<OrderBatch> {
+        let body = serde_json::json!({ "orders": orders, "all": all });
+        self.post_jupiter("/v1/orders/cancel", jupiter_session, Some(&body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/orders/confirm-cancel`. Land up to ten signed withdrawals;
+    /// each item is `{family, id, signedTransaction, cancelRequestId}`.
+    /// Takes the fund timeout.
+    pub async fn confirm_order_cancels(&self, jupiter_session: &str, items: &[serde_json::Value]) -> Result<OrderBatch> {
+        let body = serde_json::json!({ "items": items });
+        self.post_jupiter("/v1/orders/confirm-cancel", jupiter_session, Some(&body), self.fund_timeout)
+            .await
+    }
+
+    // -- copy, live follow and Copy LP (0.7.0) --------------------------------
+
+    /// `POST /v1/agents/{id}/copy-source`. Record that this agent copies a
+    /// board agent (`source` is the row's key) and optionally follow it live.
+    pub async fn copy_source(
+        &self,
+        agent_id: &str,
+        source: &str,
+        follow: bool,
+        auto_follow_pool_moves: bool,
+    ) -> Result<FollowStatus> {
+        let body = serde_json::json!({ "source": source, "follow": follow, "auto_follow_pool_moves": auto_follow_pool_moves });
+        self.post(&format!("/v1/agents/{}/copy-source", seg(agent_id)), Some(&body), self.timeout)
+            .await
+    }
+
+    /// `GET /v1/agents/{id}/follow`.
+    pub async fn follow_status(&self, agent_id: &str) -> Result<FollowStatus> {
+        self.get(&format!("/v1/agents/{}/follow", seg(agent_id))).await
+    }
+
+    /// `POST /v1/agents/{id}/follow`. Follow, live, the agent this copy came
+    /// from. Config only, never funds.
+    pub async fn follow_leader(&self, agent_id: &str, auto_follow_pool_moves: bool) -> Result<FollowStatus> {
+        let body = serde_json::json!({ "auto_follow_pool_moves": auto_follow_pool_moves });
+        self.post(&format!("/v1/agents/{}/follow", seg(agent_id)), Some(&body), self.timeout)
+            .await
+    }
+
+    /// `PATCH /v1/agents/{id}/follow`. `patch` takes `auto_follow_pool_moves`,
+    /// `resume_keys` and `pause_keys`.
+    pub async fn update_follow(&self, agent_id: &str, patch: &serde_json::Value) -> Result<FollowStatus> {
+        let path = format!("/v1/agents/{}/follow", seg(agent_id));
+        let request = self.http.patch(self.url(&path)).timeout(self.timeout).json(patch);
+        self.send(request, &path, &[]).await
+    }
+
+    /// `DELETE /v1/agents/{id}/follow`.
+    pub async fn unfollow_leader(&self, agent_id: &str) -> Result<FollowStatus> {
+        self.delete(&format!("/v1/agents/{}/follow", seg(agent_id))).await
+    }
+
+    /// `POST /v1/agents/{id}/follow/offer`. Accept or decline a leader's pool
+    /// move or exit.
+    pub async fn answer_follow_offer(&self, agent_id: &str, accept: bool) -> Result<FollowStatus> {
+        let body = serde_json::json!({ "accept": accept });
+        self.post(&format!("/v1/agents/{}/follow/offer", seg(agent_id)), Some(&body), self.timeout)
+            .await
+    }
+
+    /// `GET /v1/copy-follows`.
+    pub async fn list_copy_follows(&self) -> Result<CopyFollows> {
+        self.get("/v1/copy-follows").await
+    }
+
+    /// `POST /v1/agents/follow/batch`. Live follow (or unfollow) many copies.
+    pub async fn follow_leaders(
+        &self,
+        agent_ids: &[&str],
+        auto_follow_pool_moves: bool,
+        unfollow: bool,
+    ) -> Result<BatchResult> {
+        let items: Vec<serde_json::Value> = agent_ids
+            .iter()
+            .map(|a| serde_json::json!({ "agent_id": a, "auto_follow_pool_moves": auto_follow_pool_moves }))
+            .collect();
+        let body = serde_json::json!({ "items": items, "unfollow": unfollow });
+        self.post("/v1/agents/follow/batch", Some(&body), self.timeout).await
+    }
+
+    /// `POST /v1/follows/batch`. Follow (or unfollow) many shared agents by slug.
+    pub async fn follow_many(&self, slugs: &[&str], unfollow: bool) -> Result<BatchResult> {
+        let body = serde_json::json!({ "slugs": slugs, "unfollow": unfollow });
+        self.post("/v1/follows/batch", Some(&body), self.timeout).await
+    }
+
+    /// `GET /v1/agents/{id}/copy-log`.
+    pub async fn copy_log(&self, agent_id: &str) -> Result<CopyLog> {
+        self.get(&format!("/v1/agents/{}/copy-log", seg(agent_id))).await
+    }
+
+    /// `POST /v1/agents/{id}/wallet-follow`. Mirror a wallet's LP moves.
+    pub async fn wallet_follow(&self, agent_id: &str, request: &WalletFollowRequest) -> Result<CopyLog> {
+        self.post(&format!("/v1/agents/{}/wallet-follow", seg(agent_id)), Some(request), self.timeout)
+            .await
+    }
+
+    /// `DELETE /v1/agents/{id}/wallet-follow`.
+    pub async fn unfollow_wallet(&self, agent_id: &str) -> Result<CopyLog> {
+        self.delete(&format!("/v1/agents/{}/wallet-follow", seg(agent_id))).await
+    }
+
+    /// `POST /v1/agents/{id}/wallet-follow/offer`.
+    pub async fn answer_wallet_offer(&self, agent_id: &str, accept: bool) -> Result<CopyLog> {
+        let body = serde_json::json!({ "accept": accept });
+        self.post(&format!("/v1/agents/{}/wallet-follow/offer", seg(agent_id)), Some(&body), self.timeout)
+            .await
+    }
+
+    /// `GET /v1/copy-referral/{key}`.
+    pub async fn copy_referral(&self, key: &str) -> Result<CopyReferralOffer> {
+        self.get(&format!("/v1/copy-referral/{}", seg(key))).await
+    }
+
+    /// `POST /v1/copy-referral/{key}`.
+    pub async fn attach_copy_referral(&self, key: &str) -> Result<CopyReferralAttach> {
+        self.post::<serde_json::Value, _>(&format!("/v1/copy-referral/{}", seg(key)), None, self.timeout)
+            .await
+    }
+
+    // -- the self-custody loop: prepare, sign in your wallet, mark (0.7.0) ----
+    //
+    // Every prepare returns UNSIGNED transactions for the key owner's own
+    // wallet. Sign in wallet software you control, send, then report the
+    // signature with the matching mark call. Bodies are the session routes'
+    // own, passed through as JSON.
+
+    /// `POST /v1/agents/{id}/rebalance/prepare`.
+    pub async fn agent_rebalance_prepare(&self, agent_id: &str, body: &serde_json::Value) -> Result<Prepared> {
+        self.post(&format!("/v1/agents/{}/rebalance/prepare", seg(agent_id)), Some(body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/agents/{id}/rebalance/prepare-split[?simulate=true]`.
+    pub async fn agent_rebalance_prepare_split(
+        &self,
+        agent_id: &str,
+        body: &serde_json::Value,
+        simulate: bool,
+    ) -> Result<Prepared> {
+        let mut path = format!("/v1/agents/{}/rebalance/prepare-split", seg(agent_id));
+        if simulate {
+            path.push_str("?simulate=true");
+        }
+        self.post(&path, Some(body), self.timeout).await
+    }
+
+    /// `POST /v1/agents/{id}/rebalance/prepare-open`. The open leg; sign `open_tx_b64`.
+    pub async fn agent_rebalance_prepare_open(&self, agent_id: &str, body: &serde_json::Value) -> Result<Prepared> {
+        self.post(&format!("/v1/agents/{}/rebalance/prepare-open", seg(agent_id)), Some(body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/agents/{id}/rebalance/mark-signature`.
+    pub async fn agent_rebalance_mark(&self, agent_id: &str, body: &serde_json::Value) -> Result<MarkedTx> {
+        self.post(&format!("/v1/agents/{}/rebalance/mark-signature", seg(agent_id)), Some(body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/agents/{id}/collect-fees/prepare`.
+    pub async fn agent_fees_prepare(&self, agent_id: &str) -> Result<Prepared> {
+        self.post::<serde_json::Value, _>(&format!("/v1/agents/{}/collect-fees/prepare", seg(agent_id)), None, self.timeout)
+            .await
+    }
+
+    /// `POST /v1/agents/{id}/collect-fees/mark-signature`.
+    pub async fn agent_fees_mark(&self, agent_id: &str, draft_event_ids: &[&str], signature: &str) -> Result<MarkedTx> {
+        let body = serde_json::json!({ "draft_event_ids": draft_event_ids, "signature": signature });
+        self.post(&format!("/v1/agents/{}/collect-fees/mark-signature", seg(agent_id)), Some(&body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/agents/{id}/collect-fees/confirm`.
+    pub async fn agent_fees_confirm(&self, agent_id: &str, signature: &str, fee_token_mints: &[&str]) -> Result<MarkedTx> {
+        let body = serde_json::json!({ "signature": signature, "fee_token_mints": fee_token_mints });
+        self.post(&format!("/v1/agents/{}/collect-fees/confirm", seg(agent_id)), Some(&body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/positions/open/prepare`.
+    pub async fn position_open_prepare(&self, body: &serde_json::Value) -> Result<Prepared> {
+        self.post("/v1/positions/open/prepare", Some(body), self.timeout).await
+    }
+
+    /// `POST /v1/positions/mark-tx`.
+    pub async fn position_mark_tx(&self, body: &serde_json::Value) -> Result<MarkedTx> {
+        self.post("/v1/positions/mark-tx", Some(body), self.timeout).await
+    }
+
+    /// `POST /v1/positions/{position}/rebalance/prepare-split`.
+    pub async fn position_rebalance_split(&self, position: &str, body: &serde_json::Value) -> Result<Prepared> {
+        self.post(&format!("/v1/positions/{}/rebalance/prepare-split", seg(position)), Some(body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/positions/{position}/rebalance/prepare-open`.
+    pub async fn position_rebalance_open(&self, position: &str, body: &serde_json::Value) -> Result<Prepared> {
+        self.post(&format!("/v1/positions/{}/rebalance/prepare-open", seg(position)), Some(body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/positions/{position}/rebalance/prepare`. Orca or Raydium recenter.
+    pub async fn position_rebalance_tick(&self, position: &str, body: &serde_json::Value) -> Result<Prepared> {
+        self.post(&format!("/v1/positions/{}/rebalance/prepare", seg(position)), Some(body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/positions/{position}/compound/prepare`.
+    pub async fn position_compound_prepare(&self, position: &str) -> Result<Prepared> {
+        self.post::<serde_json::Value, _>(&format!("/v1/positions/{}/compound/prepare", seg(position)), None, self.timeout)
+            .await
+    }
+
+    /// `POST /v1/positions/{position}/claim-fees/prepare`.
+    pub async fn position_claim_prepare(&self, position: &str) -> Result<Prepared> {
+        self.post::<serde_json::Value, _>(&format!("/v1/positions/{}/claim-fees/prepare", seg(position)), None, self.timeout)
+            .await
+    }
+
+    /// `POST /v1/lp/{dex}/withdraw/prepare`. `dex` is `meteora_dlmm`, `orca`,
+    /// `raydium` or `ponk_clouds`; `bps_to_remove` 1 to 10000.
+    pub async fn lp_withdraw_prepare(
+        &self,
+        dex: &str,
+        pool_address: &str,
+        position: &str,
+        bps_to_remove: u16,
+    ) -> Result<Prepared> {
+        let body = serde_json::json!({ "pool_address": pool_address, "position": position, "bps_to_remove": bps_to_remove });
+        self.post(&format!("/v1/lp/{}/withdraw/prepare", seg(dex)), Some(&body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/wallet/reclaim-wsol/prepare`.
+    pub async fn reclaim_wsol_prepare(&self) -> Result<Prepared> {
+        self.post::<serde_json::Value, _>("/v1/wallet/reclaim-wsol/prepare", None, self.timeout)
+            .await
+    }
+
+    /// `GET /v1/wallet/stranded-positions`.
+    pub async fn stranded_positions(&self) -> Result<StrandedPositions> {
+        self.get("/v1/wallet/stranded-positions").await
+    }
+
+    /// `POST /v1/wallet/cleanup-position/prepare`.
+    pub async fn cleanup_position_prepare(&self, position_address: &str) -> Result<Prepared> {
+        let body = serde_json::json!({ "position_address": position_address });
+        self.post("/v1/wallet/cleanup-position/prepare", Some(&body), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/positions/sync`. `filter` may name `pool_address`,
+    /// `position_address` and `dex`.
+    pub async fn positions_sync(&self, filter: &serde_json::Value) -> Result<Vec<Position>> {
+        self.post("/v1/positions/sync", Some(filter), self.timeout).await
+    }
+
+    /// `POST /v1/positions/share-telegram`. Post a PnL card to the linked Telegram.
+    pub async fn share_position_telegram(&self, card: &serde_json::Value) -> Result<TelegramShared> {
+        self.post("/v1/positions/share-telegram", Some(card), self.timeout).await
+    }
+
+    /// `GET /v1/clouds/referrals`.
+    pub async fn clouds_referrals(&self) -> Result<serde_json::Value> {
+        self.get("/v1/clouds/referrals").await
+    }
+
+    /// `POST /v1/clouds/referrals/claim/prepare`. One pool's accrual, unsigned.
+    pub async fn clouds_referral_claim_prepare(&self, pool: &str) -> Result<Prepared> {
+        let body = serde_json::json!({ "pool": pool });
+        self.post("/v1/clouds/referrals/claim/prepare", Some(&body), self.timeout)
+            .await
+    }
+
+    // -- account: calls, push, cards, referral, privacy, logs (0.7.0) --------
+
+    /// `GET /v1/calls/preview?mint=`.
+    pub async fn call_preview(&self, mint: &str) -> Result<CallPreview> {
+        self.get(&with_query("/v1/calls/preview", &[("mint", Some(mint.to_string()))]))
+            .await
+    }
+
+    /// `POST /v1/calls`. The server reads your position from chain itself.
+    pub async fn post_call(&self, mint: &str, text: &str) -> Result<Call> {
+        let body = serde_json::json!({ "mint": mint, "text": text });
+        self.post("/v1/calls", Some(&body), self.timeout).await
+    }
+
+    /// `DELETE /v1/calls/{id}`.
+    pub async fn delete_call(&self, call_id: &str) -> Result<serde_json::Value> {
+        self.delete(&format!("/v1/calls/{}", seg(call_id))).await
+    }
+
+    /// `GET /v1/push[?endpoint=]`.
+    pub async fn push_settings(&self, endpoint: Option<&str>) -> Result<PushSettings> {
+        self.get(&with_query("/v1/push", &[("endpoint", endpoint.map(str::to_string))]))
+            .await
+    }
+
+    /// `PUT /v1/push/prefs`. Only the keys in `prefs` change.
+    pub async fn set_push_prefs(&self, prefs: &serde_json::Value) -> Result<serde_json::Value> {
+        self.put_json("/v1/push/prefs", prefs).await
+    }
+
+    /// `POST /v1/push/subscriptions`. A browser push service endpoint only.
+    pub async fn push_subscribe(&self, endpoint: &str, p256dh: &str, auth: &str) -> Result<()> {
+        let body = serde_json::json!({ "endpoint": endpoint, "keys": { "p256dh": p256dh, "auth": auth } });
+        self.post::<_, Option<serde_json::Value>>("/v1/push/subscriptions", Some(&body), self.timeout)
+            .await
+            .map(|_| ())
+    }
+
+    /// `DELETE /v1/push/subscriptions`.
+    pub async fn push_unsubscribe(&self, endpoint: &str) -> Result<()> {
+        let path = "/v1/push/subscriptions";
+        let body = serde_json::json!({ "endpoint": endpoint });
+        let request = self.http.delete(self.url(path)).timeout(self.timeout).json(&body);
+        self.send::<Option<serde_json::Value>>(request, path, &[]).await.map(|_| ())
+    }
+
+    /// `POST /v1/push/test`. Once a minute.
+    pub async fn push_test(&self) -> Result<PushTest> {
+        self.post::<serde_json::Value, _>("/v1/push/test", None, self.timeout).await
+    }
+
+    /// `GET /v1/pnl-card`.
+    pub async fn pnl_card(&self) -> Result<CardLook> {
+        self.get("/v1/pnl-card").await
+    }
+
+    /// `PUT /v1/pnl-card`.
+    pub async fn set_pnl_card(&self, prefs: &serde_json::Value) -> Result<CardLook> {
+        self.put_json("/v1/pnl-card", prefs).await
+    }
+
+    /// `GET /v1/referral-card`.
+    pub async fn referral_card(&self) -> Result<CardLook> {
+        self.get("/v1/referral-card").await
+    }
+
+    /// `PUT /v1/referral-card`.
+    pub async fn set_referral_card(&self, prefs: &serde_json::Value) -> Result<CardLook> {
+        self.put_json("/v1/referral-card", prefs).await
+    }
+
+    /// `POST /v1/referral/code`. Claim the code this account was referred by.
+    pub async fn set_referral_code(&self, code: &str) -> Result<Referral> {
+        self.post("/v1/referral/code", Some(&serde_json::json!({ "code": code })), self.timeout)
+            .await
+    }
+
+    /// `POST /v1/referral/codes`.
+    pub async fn add_referral_code(&self, code: &str, label: Option<&str>) -> Result<Referral> {
+        let body = serde_json::json!({ "code": code, "label": label });
+        self.post("/v1/referral/codes", Some(&body), self.timeout).await
+    }
+
+    /// `POST /v1/referral/creator/apply`.
+    pub async fn apply_creator(&self, handle: Option<&str>, note: Option<&str>) -> Result<Referral> {
+        let body = serde_json::json!({ "handle": handle, "note": note });
+        self.post("/v1/referral/creator/apply", Some(&body), self.timeout).await
+    }
+
+    /// `GET /v1/leaderboard-privacy`.
+    pub async fn leaderboard_privacy(&self) -> Result<LeaderboardPrivacy> {
+        self.get("/v1/leaderboard-privacy").await
+    }
+
+    /// `PUT /v1/leaderboard-privacy`.
+    pub async fn set_leaderboard_privacy(&self, request: &PrivacyRequest) -> Result<LeaderboardPrivacy> {
+        self.put_json("/v1/leaderboard-privacy", request).await
+    }
+
+    /// `GET /v1/agents/{id}/leaderboard-visibility`.
+    pub async fn agent_visibility(&self, agent_id: &str) -> Result<AgentVisibility> {
+        self.get(&format!("/v1/agents/{}/leaderboard-visibility", seg(agent_id))).await
+    }
+
+    /// `PUT /v1/agents/{id}/leaderboard-visibility`.
+    pub async fn set_agent_visibility(&self, agent_id: &str, hidden: bool) -> Result<AgentVisibility> {
+        self.put_json(
+            &format!("/v1/agents/{}/leaderboard-visibility", seg(agent_id)),
+            &serde_json::json!({ "hidden": hidden }),
+        )
+        .await
+    }
+
+    /// `DELETE /v1/logs`. Hides the log up to now; the fund ledger is never deleted.
+    pub async fn clear_logs(&self) -> Result<LogsCleared> {
+        self.delete("/v1/logs").await
+    }
+
+    /// `GET /v1/recap/weekly`.
+    pub async fn weekly_recap(&self) -> Result<serde_json::Value> {
+        self.get("/v1/recap/weekly").await
+    }
+
+    /// `GET /v1/ponkillionaires`. Your standing in this week's race.
+    pub async fn my_ponkillionaires(&self) -> Result<serde_json::Value> {
+        self.get("/v1/ponkillionaires").await
+    }
+
+    /// `GET /v1/telegram`. Linking itself is done in the app.
+    pub async fn telegram_status(&self) -> Result<TelegramStatus> {
+        self.get("/v1/telegram").await
+    }
+
+    /// `POST /v1/presets/rank`. Every wizard preset and your saved models,
+    /// replayed by the site's Plot engine on one pool's window and ranked.
+    /// Six a minute per account; a repeat is cached.
+    pub async fn rank_presets(&self, request: &RankRequest) -> Result<PresetRank> {
+        self.post("/v1/presets/rank", Some(request), self.timeout).await
+    }
+
     // -- transport ---------------------------------------------------------
+
+    async fn put_json<B: Serialize + ?Sized, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
+        let request = self.http.put(self.url(path)).timeout(self.timeout).json(body);
+        self.send(request, path, &[]).await
+    }
+
+    /// A POST that carries the caller's Jupiter session in
+    /// `X-Jupiter-Session`. The token is used for this one request only.
+    async fn post_jupiter<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        jupiter_session: &str,
+        body: Option<&B>,
+        timeout: Duration,
+    ) -> Result<T> {
+        let request = self
+            .http
+            .post(self.url(path))
+            .timeout(timeout)
+            .header(JUPITER_SESSION_HEADER, jupiter_session);
+        let request = match body {
+            Some(b) => request.json(b),
+            None => request.json(&serde_json::json!({})),
+        };
+        self.send(request, path, &[]).await
+    }
 
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let request = self.http.get(self.url(path)).timeout(self.timeout);
@@ -1754,5 +2400,129 @@ mod tests {
         let raw = server.join().unwrap();
         assert!(raw.starts_with("PUT /v1/notify-settings HTTP/1.1\r\n"), "{raw}");
         assert_eq!(body_of(&raw), serde_json::json!({ "rebalance_telegram": false }));
+    }
+
+    #[test]
+    fn an_order_intent_serializes_to_the_servers_wire_shape() {
+        let v = serde_json::to_value(OrderIntent::limit("USDC", "SOL", 25_000_000, 150.0)).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "kind": "limit", "input_mint": "USDC", "output_mint": "SOL", "amount": "25000000", "target_usd": 150.0 })
+        );
+        let d = serde_json::to_value(OrderIntent::dca("USDC", "SOL", 10, 5, 86_400)).unwrap();
+        assert_eq!(d["kind"], "dca");
+        assert_eq!(d["count"], 5);
+        assert!(d.get("band").is_none());
+        let t = serde_json::to_value(OrderIntent::trailing("SOL", "USDC", 1, 500)).unwrap();
+        assert_eq!(t["trailing_bps"], 500);
+        assert!(t.get("target_usd").is_none());
+    }
+
+    #[tokio::test]
+    async fn plan_orders_posts_intents_and_reads_the_link() {
+        let (base, server) = one_shot(
+            r#"{"sign_url":"https://ponk.exchange/orders/sign?w=W&c=all","wallet":"W","orders":[],"cancel":[],"cancel_all":true,"signatures":"x","notes":["n"]}"#,
+        );
+        let c = Client::new(base, "k").unwrap();
+        let plan = c
+            .plan_orders(&[OrderIntent::limit("USDC", "SOL", 1, 1.0)], &[], true)
+            .await
+            .unwrap();
+        assert!(plan.sign_url.unwrap().starts_with("https://ponk.exchange/orders/sign"));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/orders/plan HTTP/1.1\r\n"), "{raw}");
+        let body = body_of(&raw);
+        assert_eq!(body["cancel_all"], true);
+        assert_eq!(body["orders"][0]["kind"], "limit");
+    }
+
+    #[tokio::test]
+    async fn an_order_call_sends_the_jupiter_session_header() {
+        let (base, server) = one_shot(r#"{"transaction":"AQ","requestId":"rq","mint":"USDC","amount":"25"}"#);
+        let c = Client::new(base, "ponk_live_k").unwrap();
+        let craft = c
+            .craft_order_deposit("eyJhbGciOiJIUzI1NiJ9.x.sig", "USDC", "SOL", 25, "price", Some("single"))
+            .await
+            .unwrap();
+        assert_eq!(craft.request_id.as_deref(), Some("rq"));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/orders/deposit/craft HTTP/1.1\r\n"), "{raw}");
+        let lower = raw.to_ascii_lowercase();
+        assert!(lower.contains("x-jupiter-session: eyjhbgcioijiuzi1nij9.x.sig"), "{raw}");
+        assert!(lower.contains("authorization: bearer ponk_live_k"), "{raw}");
+        let body = body_of(&raw);
+        assert_eq!(body["amount"], "25");
+        assert_eq!(body["orderSubType"], "single");
+        assert!(body.get("userAddress").is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_all_orders_sends_all_true() {
+        let (base, server) = one_shot(
+            r#"{"total":1,"prepared":1,"failed":0,"items":[{"family":"price","id":"ord-1","ok":true,"result":{"id":"ord-1","transaction":"AQ","requestId":"rq"}}]}"#,
+        );
+        let c = Client::new(base, "k").unwrap();
+        let b = c.cancel_orders("tokentokentoken1", &[], true).await.unwrap();
+        assert_eq!(b.items[0].cancel().unwrap().request_id.as_deref(), Some("rq"));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/orders/cancel HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(body_of(&raw), serde_json::json!({ "orders": [], "all": true }));
+    }
+
+    #[tokio::test]
+    async fn follow_leaders_batches_the_agents() {
+        let (base, server) = one_shot(r#"{"total":1,"succeeded":1,"failed":0,"items":[{"key":"a1","ok":true}]}"#);
+        let c = Client::new(base, "k").unwrap();
+        let r = c.follow_leaders(&["a1"], false, false).await.unwrap();
+        assert_eq!(r.succeeded, Some(1));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/agents/follow/batch HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(
+            body_of(&raw),
+            serde_json::json!({ "items": [{ "agent_id": "a1", "auto_follow_pool_moves": false }], "unfollow": false })
+        );
+    }
+
+    #[tokio::test]
+    async fn the_clouds_withdraw_names_no_owner() {
+        let (base, server) = one_shot(r#"{"unsigned_tx_b64":"AQAB","recent_blockhash":"H"}"#);
+        let c = Client::new(base, "k").unwrap();
+        let p = c.lp_withdraw_prepare("ponk_clouds", "P", "POS", 10_000).await.unwrap();
+        assert_eq!(p.unsigned_tx_b64.as_deref(), Some("AQAB"));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/lp/ponk_clouds/withdraw/prepare HTTP/1.1\r\n"), "{raw}");
+        let body = body_of(&raw);
+        assert!(body.get("owner").is_none());
+        assert_eq!(body["bps_to_remove"], 10_000);
+    }
+
+    #[tokio::test]
+    async fn clear_logs_is_a_delete() {
+        let (base, server) = one_shot(r#"{"deleted":3,"hidden":3,"cleared_before":"2026-10-23T00:00:00Z"}"#);
+        let c = Client::new(base, "k").unwrap();
+        let r = c.clear_logs().await.unwrap();
+        assert_eq!(r.hidden, Some(3));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("DELETE /v1/logs HTTP/1.1\r\n"), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn rank_presets_posts_only_set_fields() {
+        let (base, server) = one_shot(r#"{"rows":[{"id":"t1"}],"cached":false,"window_days":7}"#);
+        let c = Client::new(base, "k").unwrap();
+        let r = c
+            .rank_presets(&RankRequest {
+                dex: "meteora_dlmm".into(),
+                pool: "POOL".into(),
+                window_days: Some(7),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.extra["window_days"], 7);
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/presets/rank HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(body_of(&raw), serde_json::json!({ "dex": "meteora_dlmm", "pool": "POOL", "window_days": 7 }));
     }
 }

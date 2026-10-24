@@ -3,6 +3,70 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.7.0 (2026-10-23)
+
+Everything a user can do on ponk.exchange, now from a key. Added, in both the
+Python and the Rust client:
+
+- **Swap orders** (Jupiter Trigger V2 limit, trailing, take-profit and
+  stop-loss brackets, and Jupiter Recurring DCA, time based or inside a price
+  or market cap band). Two doors, neither signs:
+  - `plan_orders` (`POST /v1/orders/plan`): validate up to ten orders and any
+    cancels and get ONE link on ponk.exchange where your wallet signs them
+    all. Python helpers `limit_order`, `tp_sl_order`, `dca_order` (Rust:
+    `OrderIntent::limit`, `::trailing`, `::dca`) build the intents.
+  - Self-sign, for a program that holds its own wallet key:
+    `orders_challenge` / `orders_verify` (Rust: `orders_verify_message`,
+    `orders_verify_transaction`), `orders_refresh`, `orders_logout`,
+    `order_mint_support`, `craft_order_deposit` (an UNSIGNED deposit),
+    `create_price_order`, `create_dca_order`, `cancel_order` (an UNSIGNED
+    withdrawal), `confirm_order_cancel`, `list_orders`, and the batches
+    `cancel_orders` (by id or all) and `confirm_order_cancels`. Python adds
+    `orders_sign_in(sign_message)` and `place_order(..., sign_transaction)`,
+    which take YOUR signing callback; the SDK still holds no key.
+  - The Jupiter access token is an argument of each call, sent as
+    `X-Jupiter-Session`, never stored. The wallet is always the key's own.
+    Create and confirm take the fund timeout; a 504 `outcome_unknown` there
+    means the transaction may have landed, so read `list_orders` and never
+    retry blindly. Ponk adds no fee to orders, as on the site.
+- **Copy and follow:** `copy_source`, `follow_status`, `follow_leader`,
+  `update_follow`, `unfollow_leader`, `answer_follow_offer`,
+  `list_copy_follows`, `follow_leaders` (batch, `POST /v1/agents/follow/batch`),
+  `follow_many` (batch slug follows, `POST /v1/follows/batch`), and Copy LP:
+  `wallet_follow` (size %, cap, pool filter, auto or ask), `unfollow_wallet`,
+  `answer_wallet_offer`, `copy_log`, `copy_referral`, `attach_copy_referral`.
+- **The self-custody loop** (unsigned builds for your own wallet, then a mark
+  call with the signature): `agent_rebalance_prepare`,
+  `agent_rebalance_prepare_split`, `agent_rebalance_prepare_open`,
+  `agent_rebalance_mark`, `agent_fees_prepare`, `agent_fees_mark`,
+  `agent_fees_confirm`, `position_open_prepare`, `position_mark_tx`,
+  `position_rebalance_split`, `position_rebalance_open`,
+  `position_rebalance_tick`, `position_compound_prepare`,
+  `position_claim_prepare`, `lp_withdraw_prepare` (Meteora, Orca, Raydium and
+  Ponk Clouds; Clouds is withdraw only while it is closed to new liquidity),
+  `reclaim_wsol_prepare`, `stranded_positions`, `cleanup_position_prepare`,
+  `positions_sync`, `share_position_telegram`, `clouds_referrals`,
+  `clouds_referral_claim_prepare`.
+- **Public Ponk Calls reads:** `calls_feed`, `callers_board`, `caller`
+  (Python also `call`), no key needed.
+- **Account:** Ponk Calls (`call_preview`, `post_call`, `delete_call`), Web
+  Push (`push_settings`, `set_push_prefs`, `push_subscribe`,
+  `push_unsubscribe`, `push_test`), the share-card looks (`pnl_card`,
+  `set_pnl_card`, `referral_card`, `set_referral_card`), referral codes and the
+  Creator application (`set_referral_code`, `add_referral_code`,
+  `apply_creator`), leaderboard privacy (`leaderboard_privacy`,
+  `set_leaderboard_privacy`, `agent_visibility`, `set_agent_visibility`),
+  `clear_logs` (`DELETE /v1/logs`; the fund ledger is never deleted),
+  `weekly_recap`, `my_ponkillionaires`, `telegram_status`.
+- **`rank_presets`** (`POST /v1/presets/rank`): every wizard preset and your
+  saved models replayed on one pool's window by the site's own Plot engine,
+  ranked by net result, in one call. Six a minute per account, cached.
+
+Still app only, by design: minting a custody mandate, API keys, webhooks and
+linking Telegram.
+
+Versions: Python and Rust 0.6.0 to 0.7.0.
+
 ## 0.6.0 (2026-10-23)
 
 Added, in both the Python and the Rust client:

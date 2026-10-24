@@ -81,7 +81,7 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence
 
 from ._version import __version__
 from .errors import PonkTransportError, error_from_response
@@ -146,9 +146,44 @@ from .models import (
     RiskEvent,
     Transaction,
     UnreadCount,
+    OrderPlan,
+    JupiterChallenge,
+    JupiterSession,
+    DepositCraft,
+    OrderCreated,
+    OrderCancel,
+    OrderBatch,
+    FollowStatus,
+    CopyFollows,
+    CopyLog,
+    CopyReferralOffer,
+    CopyReferralAttach,
+    BatchResult,
+    Prepared,
+    MarkedTx,
+    StrandedPositions,
+    CallPreview,
+    Call,
+    PushSettings,
+    PushTest,
+    CardLook,
+    LeaderboardPrivacy,
+    AgentVisibility,
+    LogsCleared,
+    TelegramStatus,
+    TelegramShared,
+    PresetRank,
 )
 
-__all__ = ["PonkClient", "DEFAULT_BASE_URL", "DEFAULT_TIMEOUT", "DEFAULT_FUND_TIMEOUT"]
+__all__ = [
+    "PonkClient",
+    "DEFAULT_BASE_URL",
+    "DEFAULT_TIMEOUT",
+    "DEFAULT_FUND_TIMEOUT",
+    "limit_order",
+    "tp_sl_order",
+    "dca_order",
+]
 
 DEFAULT_BASE_URL = "https://ponk.exchange/api"
 
@@ -203,6 +238,7 @@ class PonkClient:
         params: Optional[Mapping[str, Any]] = None,
         timeout: Optional[float] = None,
         allow_statuses: tuple = (),
+        headers: Optional[Mapping[str, str]] = None,
     ) -> Any:
         url = self.base_url + path
         if params:
@@ -211,12 +247,15 @@ class PonkClient:
                 url = url + "?" + urllib.parse.urlencode(query)
 
         data = None
+        extra_headers = headers
         headers = {"Accept": "application/json", "User-Agent": _USER_AGENT}
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
         if self.api_key:
             headers["Authorization"] = "Bearer " + self.api_key
+        if extra_headers:
+            headers.update(extra_headers)
 
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
@@ -436,6 +475,35 @@ class PonkClient:
         return XCallers.from_dict(
             self._request("GET", "/public/x/callers", params={"days": days})
         )
+
+    def calls_feed(
+        self,
+        source: Optional[str] = None,
+        mint: Optional[str] = None,
+        wallet: Optional[str] = None,
+        before: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> Any:
+        """`GET /public/calls`. The Ponk Calls feed, newest first. `source` is
+        `ponk` (default), `x` or `all`; `before` an RFC 3339 cursor. Public."""
+        return self._request(
+            "GET",
+            "/public/calls",
+            params={"source": source, "mint": mint, "wallet": wallet, "before": before, "limit": limit},
+        )
+
+    def callers_board(self, days: Optional[int] = None, source: Optional[str] = None) -> Any:
+        """`GET /public/calls/callers`. The callers board, ranked by median 24h
+        multiple, then calls. Public."""
+        return self._request("GET", "/public/calls/callers", params={"days": days, "source": source})
+
+    def caller(self, who: str) -> Any:
+        """`GET /public/calls/caller/{who}`. One caller's profile and calls. Public."""
+        return self._request("GET", "/public/calls/caller/" + _seg(who))
+
+    def call(self, call_id: str) -> Any:
+        """`GET /public/calls/{id}`. One call with its outcome so far. Public."""
+        return self._request("GET", "/public/calls/" + _seg(call_id))
 
     def x_token(self, mint: str) -> XToken:
         """`GET /public/x/token/{mint}`. Every tracked mention of one token.
@@ -1550,6 +1618,1018 @@ class PonkClient:
     def delete_preset(self, preset_id: str) -> None:
         """`DELETE /v1/presets/{id}`. Needs a `trade` key."""
         self._request("DELETE", "/v1/presets/{0}".format(_seg(preset_id)))
+
+
+    # -- swap orders: Jupiter Trigger V2 and Recurring (0.7.0) ---------------
+    #
+    # Two doors, and neither signs. `plan_orders` validates orders and returns
+    # one link on ponk.exchange where the owner's wallet signs them all (the
+    # site's own order builders run there). A program that holds its own
+    # wallet key uses the self-sign steps instead: `orders_challenge` and
+    # `orders_verify` for a Jupiter session, `craft_order_deposit` for an
+    # UNSIGNED deposit, `create_price_order` / `create_dca_order` with the
+    # signed deposit, `cancel_order` for an UNSIGNED withdrawal and
+    # `confirm_order_cancel` to land it.
+    #
+    # The Jupiter access token is an argument of each call, sent as the
+    # X-Jupiter-Session header. This client never keeps it.
+    #
+    # Every wallet field is the key owner's: the server fills it in and
+    # refuses a body that names another wallet. Ponk adds no fee to orders.
+    #
+    # OUTCOME UNKNOWN. The create and confirm calls land a transaction during
+    # the request. A 504 with code `outcome_unknown` (raised as
+    # `PonkServerError`) means it may have landed: read `list_orders` before
+    # doing anything else, and never retry the same create blindly, or the
+    # same order can be funded twice.
+
+    def plan_orders(
+        self,
+        orders: Optional[Sequence[Mapping[str, Any]]] = None,
+        *,
+        cancel: Optional[Sequence[Mapping[str, Any]]] = None,
+        cancel_all: bool = False,
+    ) -> OrderPlan:
+        """`POST /v1/orders/plan`. Validate orders and get the one link to sign them.
+
+        `orders` are intents built with `limit_order`, `tp_sl_order` or
+        `dca_order` (at most ten per link). `cancel` lists
+        `{"family": "price"|"dca", "id": ...}`; `cancel_all=True` cancels every
+        open order and active DCA plan, read fresh on the page. Nothing is
+        created, signed or sent. A read key is enough: the wallet approves
+        every deposit on the page.
+        """
+        body: Dict[str, Any] = {
+            "orders": [dict(o) for o in (orders or [])],
+            "cancel": [dict(c) for c in (cancel or [])],
+            "cancel_all": bool(cancel_all),
+        }
+        return OrderPlan.from_dict(self._request("POST", "/v1/orders/plan", body=body))
+
+    def orders_challenge(self, type: str = "message") -> JupiterChallenge:
+        """`POST /v1/orders/auth/challenge`. Jupiter's sign-in challenge for the key's wallet.
+
+        `type` is `message` (sign the text) or `transaction` (a memo-only
+        transaction that is never sent, for wallets that cannot sign text).
+        """
+        return JupiterChallenge.from_dict(
+            self._request("POST", "/v1/orders/auth/challenge", body={"type": type})
+        )
+
+    def orders_verify(
+        self, *, signature: Optional[str] = None, signed_transaction: Optional[str] = None
+    ) -> JupiterSession:
+        """`POST /v1/orders/auth/verify`. Trade the wallet's signature of the challenge
+        for a Jupiter session.
+
+        Give `signature` (base58, for a message challenge) or
+        `signed_transaction` (base64, for a transaction challenge), not both.
+        """
+        if (signature is None) == (signed_transaction is None):
+            raise ValueError("give signature (message) or signed_transaction (transaction), exactly one")
+        body: Dict[str, Any] = (
+            {"type": "message", "signature": signature}
+            if signature is not None
+            else {"type": "transaction", "signedTransaction": signed_transaction}
+        )
+        return JupiterSession.from_dict(self._request("POST", "/v1/orders/auth/verify", body=body))
+
+    def orders_refresh(self, refresh_token: str) -> JupiterSession:
+        """`POST /v1/orders/auth/refresh`. A fresh access token for the session."""
+        return JupiterSession.from_dict(
+            self._request("POST", "/v1/orders/auth/refresh", body={"refreshToken": refresh_token})
+        )
+
+    def orders_logout(self, refresh_token: str) -> Any:
+        """`POST /v1/orders/auth/logout`. End the Jupiter session."""
+        return self._request("POST", "/v1/orders/auth/logout", body={"refreshToken": refresh_token})
+
+    def order_mint_support(self, mints: Sequence[str]) -> Dict[str, Any]:
+        """`GET /v1/orders/mint-support?mints=a,b`. Per mint, `None` when it can be
+        used in an order, else the reason Jupiter's deposit would refuse it
+        (`"unknown"` when the chain read failed). One to four mints.
+        """
+        if isinstance(mints, str):
+            raise TypeError("mints is a list of mint addresses, not one string")
+        return self._request("GET", "/v1/orders/mint-support", params={"mints": ",".join(mints)})
+
+    def craft_order_deposit(
+        self,
+        jupiter_session: str,
+        *,
+        input_mint: str,
+        output_mint: str,
+        amount: str,
+        order_type: str,
+        order_sub_type: Optional[str] = None,
+    ) -> DepositCraft:
+        """`POST /v1/orders/deposit/craft`. The UNSIGNED deposit for an order.
+
+        `amount` is base units of `input_mint` (for DCA, per order times the
+        count). `order_type` is `price` or `dca`; a price order also takes
+        `order_sub_type` `single`, `oco` or `otoco`, which must match the
+        create call. The vault is resolved (and registered on first use)
+        first. Sign `transaction` with the wallet, then create the order.
+        Needs a `trade` key.
+        """
+        body: Dict[str, Any] = {
+            "inputMint": input_mint,
+            "outputMint": output_mint,
+            "amount": str(amount),
+            "orderType": order_type,
+        }
+        if order_sub_type is not None:
+            body["orderSubType"] = order_sub_type
+        return DepositCraft.from_dict(
+            self._request(
+                "POST", "/v1/orders/deposit/craft", body=body, headers=_jupiter(jupiter_session)
+            )
+        )
+
+    def create_price_order(self, jupiter_session: str, body: Mapping[str, Any]) -> OrderCreated:
+        """`POST /v1/orders/price`. Create a limit, trailing, OCO or OTOCO order.
+
+        `body` is Jupiter's create-order body with the signed deposit
+        (`depositRequestId`, `depositSignedTx`), for example `orderType`,
+        `inputMint`, `outputMint`, `inputAmount`, `triggerMint`, `expiresAt`
+        (ms), `triggerCondition` with `triggerPriceUsd` or `trailingBps`,
+        `slippageBps`, and `tpPriceUsd` / `slPriceUsd` for a bracket.
+        `userPubkey` is filled in by the server. Jupiter lands the deposit
+        during this call: on `outcome_unknown` read `list_orders`, never retry
+        blindly. Needs a `trade` key. Takes the fund timeout.
+        """
+        return OrderCreated.from_dict(
+            self._request(
+                "POST",
+                "/v1/orders/price",
+                body=dict(body),
+                headers=_jupiter(jupiter_session),
+                timeout=self.fund_timeout,
+            )
+        )
+
+    def create_dca_order(self, jupiter_session: str, body: Mapping[str, Any]) -> OrderCreated:
+        """`POST /v1/orders/dca`. Create a DCA plan with the signed deposit.
+
+        `body`: `inputMint`, `outputMint`, `inputAmount` (per order times
+        `orderCount`), `orderCount`, `intervalSeconds`, `orderType`
+        (`time_based`, or `price_conditional` with `triggerMint` and
+        `minPriceUsd` and/or `maxPriceUsd`), `depositRequestId`,
+        `depositSignedTx`. Same outcome-unknown rule as `create_price_order`.
+        Needs a `trade` key. Takes the fund timeout.
+        """
+        return OrderCreated.from_dict(
+            self._request(
+                "POST",
+                "/v1/orders/dca",
+                body=dict(body),
+                headers=_jupiter(jupiter_session),
+                timeout=self.fund_timeout,
+            )
+        )
+
+    def cancel_order(self, jupiter_session: str, family: str, order_id: str) -> OrderCancel:
+        """`POST /v1/orders/{family}/{id}/cancel`. Stop an order and get its UNSIGNED withdrawal.
+
+        `family` is `price` or `dca`. An expired price order is withdrawn the
+        same way. Calling it again on a half-done cancel re-crafts the
+        withdrawal. Needs a `trade` key.
+        """
+        return OrderCancel.from_dict(
+            self._request(
+                "POST",
+                "/v1/orders/{0}/{1}/cancel".format(_family(family), _seg(order_id)),
+                headers=_jupiter(jupiter_session),
+            )
+        )
+
+    def confirm_order_cancel(
+        self,
+        jupiter_session: str,
+        family: str,
+        order_id: str,
+        *,
+        signed_transaction: str,
+        cancel_request_id: str,
+    ) -> OrderCancel:
+        """`POST /v1/orders/{family}/{id}/confirm-cancel`. Land the signed withdrawal.
+
+        The funds return to the owner's wallet. On `outcome_unknown` read
+        `list_orders`; the withdrawal may have landed. Needs a `trade` key.
+        Takes the fund timeout.
+        """
+        return OrderCancel.from_dict(
+            self._request(
+                "POST",
+                "/v1/orders/{0}/{1}/confirm-cancel".format(_family(family), _seg(order_id)),
+                body={"signedTransaction": signed_transaction, "cancelRequestId": cancel_request_id},
+                headers=_jupiter(jupiter_session),
+                timeout=self.fund_timeout,
+            )
+        )
+
+    def list_orders(
+        self,
+        jupiter_session: str,
+        *,
+        family: Optional[str] = None,
+        state: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        mint: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """`GET /v1/orders`. Open orders (`state="active"`) and history (`"past"`).
+
+        With `family` (`price` or `dca`) the body is Jupiter's history for
+        that family (`{"orders": [...]}`); without it, both, as
+        `{"price": ..., "dca": ...}`. Jupiter's own shape, returned as is.
+        """
+        params = {"family": family, "state": state, "limit": limit, "offset": offset, "mint": mint}
+        return self._request("GET", "/v1/orders", params=params, headers=_jupiter(jupiter_session))
+
+    def cancel_orders(
+        self,
+        jupiter_session: str,
+        orders: Optional[Sequence[Mapping[str, Any]]] = None,
+        *,
+        all_orders: bool = False,
+    ) -> OrderBatch:
+        """`POST /v1/orders/cancel`. Cancel step one for many orders at once.
+
+        `orders` lists `{"family", "id"}` (at most 50), or `all_orders=True`
+        cancels every open order, expired price order and active DCA plan,
+        read fresh. Each item carries its UNSIGNED withdrawal
+        (`item.cancel().transaction`); nothing moves until
+        `confirm_order_cancels`. Needs a `trade` key.
+        """
+        body: Dict[str, Any] = {"orders": [dict(o) for o in (orders or [])], "all": bool(all_orders)}
+        if not body["orders"] and not all_orders:
+            raise ValueError("name the orders, or pass all_orders=True")
+        return OrderBatch.from_dict(
+            self._request("POST", "/v1/orders/cancel", body=body, headers=_jupiter(jupiter_session))
+        )
+
+    def confirm_order_cancels(
+        self, jupiter_session: str, items: Sequence[Mapping[str, Any]]
+    ) -> OrderBatch:
+        """`POST /v1/orders/confirm-cancel`. Land up to ten signed withdrawals.
+
+        Each item is `{"family", "id", "signedTransaction",
+        "cancelRequestId"}`. An item whose answer was lost reports
+        `outcome_unknown`, never retried here. Needs a `trade` key. Takes the
+        fund timeout.
+        """
+        return OrderBatch.from_dict(
+            self._request(
+                "POST",
+                "/v1/orders/confirm-cancel",
+                body={"items": [dict(i) for i in items]},
+                headers=_jupiter(jupiter_session),
+                timeout=self.fund_timeout,
+            )
+        )
+
+    def orders_sign_in(self, sign_message: Callable[[str], str]) -> JupiterSession:
+        """Challenge, sign and verify in one call.
+
+        `sign_message` takes Jupiter's challenge text and returns the wallet's
+        base58 ed25519 signature of its UTF-8 bytes. Your code signs; this
+        client never sees a key. Check the text says it authenticates the
+        wallet you expect before signing.
+        """
+        c = self.orders_challenge("message")
+        if not c.challenge:
+            raise ValueError("Jupiter sent no challenge text")
+        return self.orders_verify(signature=sign_message(c.challenge))
+
+    def place_order(
+        self,
+        jupiter_session: str,
+        family: str,
+        body: Mapping[str, Any],
+        sign_transaction: Callable[[str], str],
+    ) -> OrderCreated:
+        """Craft the deposit, have your code sign it, create the order.
+
+        `body` is the create body WITHOUT the deposit fields (see
+        `create_price_order` / `create_dca_order`); `inputAmount`,
+        `inputMint`, `outputMint` and, for a price order, `orderType` are read
+        from it for the craft. `sign_transaction` takes the UNSIGNED base64
+        deposit and returns it signed, base64. The crafted amount and mint are
+        checked against `body` before your signer is called.
+        """
+        fam = _family(family)
+        sub = body.get("orderType") if fam == "price" else None
+        craft = self.craft_order_deposit(
+            jupiter_session,
+            input_mint=str(body["inputMint"]),
+            output_mint=str(body["outputMint"]),
+            amount=str(body["inputAmount"]),
+            order_type=fam,
+            order_sub_type=sub,
+        )
+        if craft.amount != str(body["inputAmount"]) or craft.mint != str(body["inputMint"]):
+            raise ValueError("Jupiter's deposit does not match this order. Nothing was signed.")
+        signed = sign_transaction(str(craft.transaction))
+        full = dict(body, depositRequestId=craft.request_id, depositSignedTx=signed)
+        if fam == "price":
+            return self.create_price_order(jupiter_session, full)
+        return self.create_dca_order(jupiter_session, full)
+
+    # -- copy, live follow and Copy LP (0.7.0) --------------------------------
+
+    def copy_source(
+        self,
+        agent_id: str,
+        source: str,
+        *,
+        follow: bool = False,
+        auto_follow_pool_moves: bool = False,
+    ) -> FollowStatus:
+        """`POST /v1/agents/{id}/copy-source`. Record that this agent copies a board agent.
+
+        `source` is the board row's key (`LeaderboardRow` `copy` block). Every
+        mirrored setting the create body did not carry is brought over, and
+        `follow=True` links it so the leader's config changes follow live.
+        Config only, never funds. Needs a `trade` key.
+        """
+        body = {"source": source, "follow": follow, "auto_follow_pool_moves": auto_follow_pool_moves}
+        return FollowStatus.from_dict(
+            self._request("POST", "/v1/agents/{0}/copy-source".format(_seg(agent_id)), body=body)
+        )
+
+    def follow_status(self, agent_id: str) -> FollowStatus:
+        """`GET /v1/agents/{id}/follow`. Whether this copy follows its leader, and what is paused."""
+        return FollowStatus.from_dict(self._request("GET", "/v1/agents/{0}/follow".format(_seg(agent_id))))
+
+    def follow_leader(self, agent_id: str, *, auto_follow_pool_moves: bool = False) -> FollowStatus:
+        """`POST /v1/agents/{id}/follow`. Follow, live, the agent this copy came from.
+
+        `auto_follow_pool_moves=True` acts on the leader's pool moves and
+        exits (through the managed close and self-open, every gate) instead of
+        only offering them. Needs a `trade` key.
+        """
+        return FollowStatus.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/{0}/follow".format(_seg(agent_id)),
+                body={"auto_follow_pool_moves": auto_follow_pool_moves},
+            )
+        )
+
+    def update_follow(
+        self,
+        agent_id: str,
+        *,
+        auto_follow_pool_moves: Optional[bool] = None,
+        resume_keys: Optional[Sequence[str]] = None,
+        pause_keys: Optional[Sequence[str]] = None,
+    ) -> FollowStatus:
+        """`PATCH /v1/agents/{id}/follow`. Change the follow: pool moves, or pause and
+        resume mirrored keys. Needs a `trade` key."""
+        body: Dict[str, Any] = {}
+        if auto_follow_pool_moves is not None:
+            body["auto_follow_pool_moves"] = auto_follow_pool_moves
+        if resume_keys is not None:
+            body["resume_keys"] = list(resume_keys)
+        if pause_keys is not None:
+            body["pause_keys"] = list(pause_keys)
+        return FollowStatus.from_dict(
+            self._request("PATCH", "/v1/agents/{0}/follow".format(_seg(agent_id)), body=body)
+        )
+
+    def unfollow_leader(self, agent_id: str) -> FollowStatus:
+        """`DELETE /v1/agents/{id}/follow`. Stop following; the copy keeps its config. Needs a `trade` key."""
+        return FollowStatus.from_dict(self._request("DELETE", "/v1/agents/{0}/follow".format(_seg(agent_id))))
+
+    def answer_follow_offer(self, agent_id: str, accept: bool) -> FollowStatus:
+        """`POST /v1/agents/{id}/follow/offer`. Accept or decline the leader's pool move or exit.
+
+        Accept runs the managed close into the agent's own wallet and, for a
+        move, the self-open on the new pool, under the mandate and every gate.
+        Decline changes nothing. Needs a `trade` key.
+        """
+        return FollowStatus.from_dict(
+            self._request(
+                "POST", "/v1/agents/{0}/follow/offer".format(_seg(agent_id)), body={"accept": bool(accept)}
+            )
+        )
+
+    def list_copy_follows(self) -> CopyFollows:
+        """`GET /v1/copy-follows`. Every copy of this account and its follow state."""
+        return CopyFollows.from_dict(self._request("GET", "/v1/copy-follows"))
+
+    def follow_leaders(
+        self,
+        agent_ids: Sequence[str],
+        *,
+        auto_follow_pool_moves: bool = False,
+        unfollow: bool = False,
+    ) -> BatchResult:
+        """`POST /v1/agents/follow/batch`. Live follow (or `unfollow=True`) for many copies.
+
+        At most 50. Each runs through the single-agent handler; one refusal
+        does not stop the others. Needs a `trade` key.
+        """
+        if isinstance(agent_ids, str):
+            raise TypeError("agent_ids is a list of ids, not one string")
+        items = [{"agent_id": a, "auto_follow_pool_moves": auto_follow_pool_moves} for a in agent_ids]
+        return BatchResult.from_dict(
+            self._request("POST", "/v1/agents/follow/batch", body={"items": items, "unfollow": unfollow})
+        )
+
+    def follow_many(self, slugs: Sequence[str], *, unfollow: bool = False) -> BatchResult:
+        """`POST /v1/follows/batch`. Follow (or unfollow) many shared agents by slug for
+        their alerts. Nothing is mirrored or moved. Needs a `trade` key."""
+        if isinstance(slugs, str):
+            raise TypeError("slugs is a list, not one string")
+        return BatchResult.from_dict(
+            self._request("POST", "/v1/follows/batch", body={"slugs": list(slugs), "unfollow": unfollow})
+        )
+
+    def copy_log(self, agent_id: str) -> CopyLog:
+        """`GET /v1/agents/{id}/copy-log`. The Copy LP mirror and what it did or declined."""
+        return CopyLog.from_dict(self._request("GET", "/v1/agents/{0}/copy-log".format(_seg(agent_id))))
+
+    def wallet_follow(
+        self,
+        agent_id: str,
+        *,
+        leader: Optional[str] = None,
+        position: Optional[str] = None,
+        size_pct: Optional[float] = None,
+        max_usd_per_action: Optional[float] = None,
+        pools: Optional[Sequence[str]] = None,
+        min_tvl_usd: Optional[float] = None,
+        auto_mirror: bool = False,
+    ) -> CopyLog:
+        """`POST /v1/agents/{id}/wallet-follow`. Mirror a wallet's LP moves with this agent.
+
+        `leader` is required the first time; naming another wallet later
+        starts over from its newest action. `size_pct` of the leader's size,
+        capped at `max_usd_per_action`; `pools` and `min_tvl_usd` filter;
+        `auto_mirror=False` (ask) offers each move, `True` acts on it under
+        the mandate. Moves no funds by itself. Needs a `trade` key.
+        """
+        body: Dict[str, Any] = {"auto_mirror": bool(auto_mirror)}
+        for k, v in (
+            ("leader", leader),
+            ("position", position),
+            ("size_pct", size_pct),
+            ("max_usd_per_action", max_usd_per_action),
+            ("min_tvl_usd", min_tvl_usd),
+        ):
+            if v is not None:
+                body[k] = v
+        if pools is not None:
+            body["pools"] = list(pools)
+        return CopyLog.from_dict(
+            self._request("POST", "/v1/agents/{0}/wallet-follow".format(_seg(agent_id)), body=body)
+        )
+
+    def unfollow_wallet(self, agent_id: str) -> CopyLog:
+        """`DELETE /v1/agents/{id}/wallet-follow`. Stop mirroring. Needs a `trade` key."""
+        return CopyLog.from_dict(self._request("DELETE", "/v1/agents/{0}/wallet-follow".format(_seg(agent_id))))
+
+    def answer_wallet_offer(self, agent_id: str, accept: bool) -> CopyLog:
+        """`POST /v1/agents/{id}/wallet-follow/offer`. Act on (or decline) a mirrored move
+        waiting in ask mode. Needs a `trade` key."""
+        return CopyLog.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/{0}/wallet-follow/offer".format(_seg(agent_id)),
+                body={"accept": bool(accept)},
+            )
+        )
+
+    def copy_referral(self, key: str) -> CopyReferralOffer:
+        """`GET /v1/copy-referral/{key}`. Whether a copied board row offers its owner's referral."""
+        return CopyReferralOffer.from_dict(self._request("GET", "/v1/copy-referral/{0}".format(_seg(key))))
+
+    def attach_copy_referral(self, key: str) -> CopyReferralAttach:
+        """`POST /v1/copy-referral/{key}`. Attach the copied owner's referral. Needs a `trade` key."""
+        return CopyReferralAttach.from_dict(self._request("POST", "/v1/copy-referral/{0}".format(_seg(key))))
+
+    # -- the self-custody loop: prepare, sign in your wallet, mark (0.7.0) ----
+    #
+    # Every prepare returns UNSIGNED transactions for the key owner's own
+    # wallet (the server reads the wallet from the account, never from the
+    # body). Sign in wallet software you control, send, then report the
+    # signature with the matching mark call, which re-reads the chain before
+    # it believes it. Each needs a `trade` key.
+
+    def agent_rebalance_prepare(
+        self,
+        agent_id: str,
+        *,
+        new_lower_bin_id: int,
+        new_upper_bin_id: int,
+        strategy: str,
+        max_slippage_bps: int,
+        **extra: Any,
+    ) -> Prepared:
+        """`POST /v1/agents/{id}/rebalance/prepare`. A self-custody agent's rebalance, unsigned."""
+        body = dict(
+            extra,
+            new_lower_bin_id=new_lower_bin_id,
+            new_upper_bin_id=new_upper_bin_id,
+            strategy=strategy,
+            max_slippage_bps=max_slippage_bps,
+        )
+        return Prepared.from_dict(
+            self._request("POST", "/v1/agents/{0}/rebalance/prepare".format(_seg(agent_id)), body=body)
+        )
+
+    def agent_rebalance_prepare_split(
+        self,
+        agent_id: str,
+        *,
+        new_lower_bin_id: int,
+        new_upper_bin_id: int,
+        strategy: str,
+        max_slippage_bps: int,
+        simulate: bool = False,
+        **extra: Any,
+    ) -> Prepared:
+        """`POST /v1/agents/{id}/rebalance/prepare-split`. The close leg of a split rebalance.
+
+        Send it, then build the open leg with `agent_rebalance_prepare_open`
+        against a fresh blockhash. `simulate=True` simulates both legs first.
+        """
+        body = dict(
+            extra,
+            new_lower_bin_id=new_lower_bin_id,
+            new_upper_bin_id=new_upper_bin_id,
+            strategy=strategy,
+            max_slippage_bps=max_slippage_bps,
+        )
+        return Prepared.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/{0}/rebalance/prepare-split".format(_seg(agent_id)),
+                body=body,
+                params={"simulate": "true"} if simulate else None,
+            )
+        )
+
+    def agent_rebalance_prepare_open(self, agent_id: str, body: Mapping[str, Any]) -> Prepared:
+        """`POST /v1/agents/{id}/rebalance/prepare-open`. The open leg, after the close confirmed.
+
+        `body`: `close_signature`, `new_lower_bin_id`, `new_upper_bin_id`,
+        `strategy`, `max_slippage_bps`, `fee_event_ids`. Sign `open_tx_b64`.
+        """
+        return Prepared.from_dict(
+            self._request(
+                "POST", "/v1/agents/{0}/rebalance/prepare-open".format(_seg(agent_id)), body=dict(body)
+            )
+        )
+
+    def agent_rebalance_mark(
+        self,
+        agent_id: str,
+        *,
+        signature: str,
+        new_position_address: str,
+        close_signature: Optional[str] = None,
+    ) -> MarkedTx:
+        """`POST /v1/agents/{id}/rebalance/mark-signature`. Report the rebalance your wallet sent."""
+        body: Dict[str, Any] = {"signature": signature, "new_position_address": new_position_address}
+        if close_signature is not None:
+            body["close_signature"] = close_signature
+        return MarkedTx.from_dict(
+            self._request("POST", "/v1/agents/{0}/rebalance/mark-signature".format(_seg(agent_id)), body=body)
+        )
+
+    def agent_fees_prepare(self, agent_id: str) -> Prepared:
+        """`POST /v1/agents/{id}/collect-fees/prepare`. The fee claim, unsigned, with the
+        platform fee split shown and `draft_event_ids` to mark."""
+        return Prepared.from_dict(
+            self._request("POST", "/v1/agents/{0}/collect-fees/prepare".format(_seg(agent_id)))
+        )
+
+    def agent_fees_mark(self, agent_id: str, *, draft_event_ids: Sequence[str], signature: str) -> MarkedTx:
+        """`POST /v1/agents/{id}/collect-fees/mark-signature`. Attach the claim's signature
+        to its draft fee events."""
+        return MarkedTx.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/{0}/collect-fees/mark-signature".format(_seg(agent_id)),
+                body={"draft_event_ids": list(draft_event_ids), "signature": signature},
+            )
+        )
+
+    def agent_fees_confirm(self, agent_id: str, *, signature: str, fee_token_mints: Sequence[str]) -> MarkedTx:
+        """`POST /v1/agents/{id}/collect-fees/confirm`. Confirm the fee events once the claim landed."""
+        return MarkedTx.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/{0}/collect-fees/confirm".format(_seg(agent_id)),
+                body={"signature": signature, "fee_token_mints": list(fee_token_mints)},
+            )
+        )
+
+    def position_open_prepare(self, body: Mapping[str, Any]) -> Prepared:
+        """`POST /v1/positions/open/prepare`. Open a position from the key's wallet, unsigned.
+
+        `body`: `pool_address`, `dex`, `amount_x`, `amount_y` (base units),
+        `lower_bin_id`, `width`, `strategy`, and the route's optional fields.
+        """
+        return Prepared.from_dict(self._request("POST", "/v1/positions/open/prepare", body=dict(body)))
+
+    def position_mark_tx(
+        self,
+        *,
+        signature: str,
+        action_type: str,
+        dex: str,
+        position_address: Optional[str] = None,
+        **extra: Any,
+    ) -> MarkedTx:
+        """`POST /v1/positions/mark-tx`. Record a transaction your wallet sent (open, claim,
+        compound, rebalance, withdraw) so the ledger, PnL and fee events see it.
+        Pass `fee_event_ids` and the route's other fields through `extra`."""
+        body = dict(extra, signature=signature, action_type=action_type, dex=dex)
+        if position_address is not None:
+            body["position_address"] = position_address
+        return MarkedTx.from_dict(self._request("POST", "/v1/positions/mark-tx", body=body))
+
+    def position_rebalance_split(self, position_address: str, body: Mapping[str, Any]) -> Prepared:
+        """`POST /v1/positions/{position}/rebalance/prepare-split`. Close leg of a Meteora rebalance.
+
+        `body`: `new_lower_bin_id`, `new_upper_bin_id`, `strategy`,
+        `max_slippage_bps`, and the route's optional fields.
+        """
+        return Prepared.from_dict(
+            self._request(
+                "POST",
+                "/v1/positions/{0}/rebalance/prepare-split".format(_seg(position_address)),
+                body=dict(body),
+            )
+        )
+
+    def position_rebalance_open(self, position_address: str, body: Mapping[str, Any]) -> Prepared:
+        """`POST /v1/positions/{position}/rebalance/prepare-open`. The open leg after the close.
+
+        `body`: `pool_address` plus the reopen fields (`close_signature`,
+        `new_lower_bin_id`, `new_upper_bin_id`, `strategy`,
+        `max_slippage_bps`, `fee_event_ids`).
+        """
+        return Prepared.from_dict(
+            self._request(
+                "POST",
+                "/v1/positions/{0}/rebalance/prepare-open".format(_seg(position_address)),
+                body=dict(body),
+            )
+        )
+
+    def position_rebalance_tick(
+        self, position_address: str, *, new_lower: int, new_upper: int, max_slippage_bps: int, **extra: Any
+    ) -> Prepared:
+        """`POST /v1/positions/{position}/rebalance/prepare`. Orca or Raydium recenter, one transaction."""
+        body = dict(extra, new_lower=new_lower, new_upper=new_upper, max_slippage_bps=max_slippage_bps)
+        return Prepared.from_dict(
+            self._request(
+                "POST", "/v1/positions/{0}/rebalance/prepare".format(_seg(position_address)), body=body
+            )
+        )
+
+    def position_compound_prepare(self, position_address: str) -> Prepared:
+        """`POST /v1/positions/{position}/compound/prepare`. Claim and re-deposit, unsigned."""
+        return Prepared.from_dict(
+            self._request("POST", "/v1/positions/{0}/compound/prepare".format(_seg(position_address)))
+        )
+
+    def position_claim_prepare(self, position_address: str) -> Prepared:
+        """`POST /v1/positions/{position}/claim-fees/prepare`. Claim fees, unsigned."""
+        return Prepared.from_dict(
+            self._request("POST", "/v1/positions/{0}/claim-fees/prepare".format(_seg(position_address)))
+        )
+
+    def lp_withdraw_prepare(
+        self, dex: str, *, pool_address: str, position: str, bps_to_remove: int
+    ) -> Prepared:
+        """`POST /v1/lp/{dex}/withdraw/prepare`. Withdraw from your own position, unsigned.
+
+        `dex` is `meteora_dlmm`, `orca`, `raydium` or `ponk_clouds` (Ponk
+        Clouds is closed to new liquidity and a held position can always be
+        withdrawn). `bps_to_remove` 1 to 10000; 10000 removes everything and
+        closes the position. The owner is the key's wallet.
+        """
+        body = {"pool_address": pool_address, "position": position, "bps_to_remove": int(bps_to_remove)}
+        return Prepared.from_dict(
+            self._request("POST", "/v1/lp/{0}/withdraw/prepare".format(_seg(dex)), body=body)
+        )
+
+    def reclaim_wsol_prepare(self) -> Prepared:
+        """`POST /v1/wallet/reclaim-wsol/prepare`. Unwrap the wallet's wSOL and reclaim its rent."""
+        return Prepared.from_dict(self._request("POST", "/v1/wallet/reclaim-wsol/prepare"))
+
+    def stranded_positions(self) -> StrandedPositions:
+        """`GET /v1/wallet/stranded-positions`. Empty positions still holding rent."""
+        return StrandedPositions.from_dict(self._request("GET", "/v1/wallet/stranded-positions"))
+
+    def cleanup_position_prepare(self, position_address: str) -> Prepared:
+        """`POST /v1/wallet/cleanup-position/prepare`. Close a stranded position, unsigned."""
+        return Prepared.from_dict(
+            self._request(
+                "POST", "/v1/wallet/cleanup-position/prepare", body={"position_address": position_address}
+            )
+        )
+
+    def positions_sync(
+        self,
+        *,
+        pool_address: Optional[str] = None,
+        position_address: Optional[str] = None,
+        dex: Optional[str] = None,
+    ) -> List[Position]:
+        """`POST /v1/positions/sync`. Re-read the wallet's positions from chain. Needs a `trade` key."""
+        body = {
+            k: v
+            for k, v in (("pool_address", pool_address), ("position_address", position_address), ("dex", dex))
+            if v is not None
+        }
+        return Position.from_list(self._request("POST", "/v1/positions/sync", body=body))
+
+    def share_position_telegram(self, card: Mapping[str, Any]) -> TelegramShared:
+        """`POST /v1/positions/share-telegram`. Post a PnL card to your linked Telegram.
+
+        `card`: `win`, `fee_pct`, and the optional figures (`pnl_usd`,
+        `pnl_pct`, `fees_usd`, `il_usd`, `capital_usd`, `bin_step`,
+        `held_d`, `held_h`, `held_m`, `referral_code`). Linking Telegram
+        itself is done in the app. Needs a `trade` key.
+        """
+        return TelegramShared.from_dict(self._request("POST", "/v1/positions/share-telegram", body=dict(card)))
+
+    def clouds_referrals(self) -> Dict[str, Any]:
+        """`GET /v1/clouds/referrals`. Your Ponk Clouds referral accruals, read from chain."""
+        return self._request("GET", "/v1/clouds/referrals")
+
+    def clouds_referral_claim_prepare(self, pool: str) -> Prepared:
+        """`POST /v1/clouds/referrals/claim/prepare`. Claim one pool's referral accrual, unsigned."""
+        return Prepared.from_dict(
+            self._request("POST", "/v1/clouds/referrals/claim/prepare", body={"pool": pool})
+        )
+
+    # -- account: calls, push, cards, referral, privacy, logs (0.7.0) --------
+
+    def call_preview(self, mint: str) -> CallPreview:
+        """`GET /v1/calls/preview?mint=`. What a call on this token would attach."""
+        return CallPreview.from_dict(self._request("GET", "/v1/calls/preview", params={"mint": mint}))
+
+    def post_call(self, mint: str, text: str) -> Call:
+        """`POST /v1/calls`. Post a Ponk Call. The server reads your position from chain
+        and stores what it found. Needs a `trade` key."""
+        return Call.from_dict(self._request("POST", "/v1/calls", body={"mint": mint, "text": text}))
+
+    def delete_call(self, call_id: str) -> Any:
+        """`DELETE /v1/calls/{id}`. Delete your own call. Needs a `trade` key."""
+        return self._request("DELETE", "/v1/calls/{0}".format(_seg(call_id)))
+
+    def push_settings(self, endpoint: Optional[str] = None) -> PushSettings:
+        """`GET /v1/push?endpoint=`. Web Push switches and how many devices are subscribed."""
+        return PushSettings.from_dict(self._request("GET", "/v1/push", params={"endpoint": endpoint}))
+
+    def set_push_prefs(self, prefs: Mapping[str, Any]) -> Dict[str, Any]:
+        """`PUT /v1/push/prefs`. Switch push kinds on or off; only the keys passed change.
+        Needs a `trade` key."""
+        return self._request("PUT", "/v1/push/prefs", body=dict(prefs))
+
+    def push_subscribe(self, endpoint: str, *, p256dh: str, auth: str) -> None:
+        """`POST /v1/push/subscriptions`. Register a browser push subscription (only a
+        browser push service's endpoint is accepted). Needs a `trade` key."""
+        self._request(
+            "POST", "/v1/push/subscriptions", body={"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}}
+        )
+
+    def push_unsubscribe(self, endpoint: str) -> None:
+        """`DELETE /v1/push/subscriptions`. Remove one subscription. Needs a `trade` key."""
+        self._request("DELETE", "/v1/push/subscriptions", body={"endpoint": endpoint})
+
+    def push_test(self) -> PushTest:
+        """`POST /v1/push/test`. Send a test push to every device (once a minute). Needs a `trade` key."""
+        return PushTest.from_dict(self._request("POST", "/v1/push/test"))
+
+    def pnl_card(self) -> CardLook:
+        """`GET /v1/pnl-card`. The PnL share card's saved look."""
+        return CardLook.from_dict(self._request("GET", "/v1/pnl-card"))
+
+    def set_pnl_card(self, prefs: Mapping[str, Any]) -> CardLook:
+        """`PUT /v1/pnl-card`. Save the PnL card look (`background`, `fields`, `units`,
+        `identity`, `custom_name`, `avatar`, `show_referral`, `show_qr`, `accent`).
+        Needs a `trade` key."""
+        return CardLook.from_dict(self._request("PUT", "/v1/pnl-card", body=dict(prefs)))
+
+    def referral_card(self) -> CardLook:
+        """`GET /v1/referral-card`. The referral card's saved look."""
+        return CardLook.from_dict(self._request("GET", "/v1/referral-card"))
+
+    def set_referral_card(self, prefs: Mapping[str, Any]) -> CardLook:
+        """`PUT /v1/referral-card`. Save the referral card look. Needs a `trade` key."""
+        return CardLook.from_dict(self._request("PUT", "/v1/referral-card", body=dict(prefs)))
+
+    def set_referral_code(self, code: str) -> Referral:
+        """`POST /v1/referral/code`. Claim the referral code this account was referred by.
+        Needs a `trade` key."""
+        return Referral.from_dict(self._request("POST", "/v1/referral/code", body={"code": code}))
+
+    def add_referral_code(self, code: str, label: Optional[str] = None) -> Referral:
+        """`POST /v1/referral/codes`. Add one of your own referral codes. Needs a `trade` key."""
+        return Referral.from_dict(
+            self._request("POST", "/v1/referral/codes", body={"code": code, "label": label})
+        )
+
+    def apply_creator(self, *, handle: Optional[str] = None, note: Optional[str] = None) -> Referral:
+        """`POST /v1/referral/creator/apply`. Apply for the Creator tier. Needs a `trade` key."""
+        return Referral.from_dict(
+            self._request("POST", "/v1/referral/creator/apply", body={"handle": handle, "note": note})
+        )
+
+    def leaderboard_privacy(self) -> LeaderboardPrivacy:
+        """`GET /v1/leaderboard-privacy`. How your agents appear on the public board."""
+        return LeaderboardPrivacy.from_dict(self._request("GET", "/v1/leaderboard-privacy"))
+
+    def set_leaderboard_privacy(
+        self, *, visible: bool, show_name: bool, show_wallet: bool, display_name: Optional[str] = None
+    ) -> LeaderboardPrivacy:
+        """`PUT /v1/leaderboard-privacy`. Needs a `trade` key."""
+        body = {"visible": visible, "show_name": show_name, "show_wallet": show_wallet, "display_name": display_name}
+        return LeaderboardPrivacy.from_dict(self._request("PUT", "/v1/leaderboard-privacy", body=body))
+
+    def agent_visibility(self, agent_id: str) -> AgentVisibility:
+        """`GET /v1/agents/{id}/leaderboard-visibility`."""
+        return AgentVisibility.from_dict(
+            self._request("GET", "/v1/agents/{0}/leaderboard-visibility".format(_seg(agent_id)))
+        )
+
+    def set_agent_visibility(self, agent_id: str, hidden: bool) -> AgentVisibility:
+        """`PUT /v1/agents/{id}/leaderboard-visibility`. Keep one agent off the board. Needs a `trade` key."""
+        return AgentVisibility.from_dict(
+            self._request(
+                "PUT", "/v1/agents/{0}/leaderboard-visibility".format(_seg(agent_id)), body={"hidden": bool(hidden)}
+            )
+        )
+
+    def clear_logs(self) -> LogsCleared:
+        """`DELETE /v1/logs`. Hide the activity log up to now. The fund ledger is never
+        deleted. Needs a `trade` key."""
+        return LogsCleared.from_dict(self._request("DELETE", "/v1/logs"))
+
+    def weekly_recap(self) -> Dict[str, Any]:
+        """`GET /v1/recap/weekly`. The weekly recap card's figures."""
+        return self._request("GET", "/v1/recap/weekly")
+
+    def my_ponkillionaires(self) -> Dict[str, Any]:
+        """`GET /v1/ponkillionaires`. Your standing in this week's race."""
+        return self._request("GET", "/v1/ponkillionaires")
+
+    def telegram_status(self) -> TelegramStatus:
+        """`GET /v1/telegram`. Whether Telegram is linked. Linking is done in the app."""
+        return TelegramStatus.from_dict(self._request("GET", "/v1/telegram"))
+
+    # -- rank presets (0.7.0) ----------------------------------------------------
+
+    def rank_presets(
+        self,
+        dex: str,
+        pool: str,
+        *,
+        window_days: Optional[int] = None,
+        capital_usd: Optional[float] = None,
+        include_mine: Optional[bool] = None,
+    ) -> PresetRank:
+        """`POST /v1/presets/rank`. Every wizard preset, and your saved models, replayed on
+        one pool's window by the site's Plot engine and ranked by net result.
+
+        `dex` is `meteora_dlmm`, `orca` or `raydium`; `window_days` 7, 14, 30
+        or 90. A pure simulation: nothing moves. Six ranks a minute per
+        account (429 `PonkRateLimitedError` past that); a repeat for the same
+        pool and window is cached.
+        """
+        body = {
+            "dex": dex,
+            "pool": pool,
+            "window_days": window_days,
+            "capital_usd": capital_usd,
+            "include_mine": include_mine,
+        }
+        return PresetRank.from_dict(self._request("POST", "/v1/presets/rank", body=body))
+
+
+def _jupiter(token: str) -> Dict[str, str]:
+    """The X-Jupiter-Session header for one call. The token is not kept."""
+    if not token or not isinstance(token, str):
+        raise ValueError("jupiter_session is the access token from orders_verify / orders_sign_in")
+    return {"X-Jupiter-Session": token}
+
+
+def _family(family: str) -> str:
+    if family not in ("price", "dca"):
+        raise ValueError("family must be 'price' or 'dca', got {0!r}".format(family))
+    return family
+
+
+def _drop_none(d: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in d.items() if v is not None}
+
+
+def limit_order(
+    input_mint: str,
+    output_mint: str,
+    amount: Any,
+    *,
+    target_usd: Optional[float] = None,
+    target_mc_usd: Optional[float] = None,
+    trailing_bps: Optional[int] = None,
+    tp_usd: Optional[float] = None,
+    sl_usd: Optional[float] = None,
+    slippage_bps: Optional[int] = None,
+    expires_in_secs: Optional[int] = None,
+) -> Dict[str, Any]:
+    """An order intent for `plan_orders`: a limit (`target_usd` or
+    `target_mc_usd`) or a trailing order (`trailing_bps`, 50 to 9000), exactly
+    one. `tp_usd` with `sl_usd` arms a take-profit and stop-loss on what it
+    buys. `amount` is base units of `input_mint`. Expiry defaults to 7 days
+    from signing, at most 30."""
+    return _drop_none(
+        {
+            "kind": "limit",
+            "input_mint": input_mint,
+            "output_mint": output_mint,
+            "amount": str(amount),
+            "target_usd": target_usd,
+            "target_mc_usd": target_mc_usd,
+            "trailing_bps": trailing_bps,
+            "tp_usd": tp_usd,
+            "sl_usd": sl_usd,
+            "slippage_bps": slippage_bps,
+            "expires_in_secs": expires_in_secs,
+        }
+    )
+
+
+def tp_sl_order(
+    input_mint: str,
+    output_mint: str,
+    amount: Any,
+    *,
+    tp_usd: Optional[float] = None,
+    sl_usd: Optional[float] = None,
+    expires_in_secs: Optional[int] = None,
+) -> Dict[str, Any]:
+    """An intent to sell `amount` of a held `input_mint` into `output_mint` at
+    a take-profit, a stop-loss, or both (one fills, the other cancels)."""
+    return _drop_none(
+        {
+            "kind": "tp_sl",
+            "input_mint": input_mint,
+            "output_mint": output_mint,
+            "amount": str(amount),
+            "tp_usd": tp_usd,
+            "sl_usd": sl_usd,
+            "expires_in_secs": expires_in_secs,
+        }
+    )
+
+
+def dca_order(
+    input_mint: str,
+    output_mint: str,
+    per_order_amount: Any,
+    count: int,
+    interval_seconds: int,
+    *,
+    band_trigger_mint: Optional[str] = None,
+    min_price_usd: Optional[float] = None,
+    max_price_usd: Optional[float] = None,
+    min_mc_usd: Optional[float] = None,
+    max_mc_usd: Optional[float] = None,
+) -> Dict[str, Any]:
+    """A DCA intent: `count` rounds (2 to 1000) of `per_order_amount`, every
+    `interval_seconds` (60 to one year). A band (`band_trigger_mint` plus a
+    min and/or max price, or a min and/or max market cap, one kind) makes a
+    round fill only while the trigger mint is inside it."""
+    intent: Dict[str, Any] = {
+        "kind": "dca",
+        "input_mint": input_mint,
+        "output_mint": output_mint,
+        "per_order_amount": str(per_order_amount),
+        "count": int(count),
+        "interval_seconds": int(interval_seconds),
+    }
+    bounds = _drop_none(
+        {
+            "min_price_usd": min_price_usd,
+            "max_price_usd": max_price_usd,
+            "min_mc_usd": min_mc_usd,
+            "max_mc_usd": max_mc_usd,
+        }
+    )
+    if band_trigger_mint is not None or bounds:
+        if band_trigger_mint is None:
+            raise ValueError("a band needs band_trigger_mint (the volatile leg)")
+        intent["band"] = dict(bounds, trigger_mint=band_trigger_mint)
+    return intent
 
 
 def _batch_target(agent_ids: Optional[Sequence[str]], all_agents: bool) -> Dict[str, Any]:

@@ -137,6 +137,41 @@ __all__ = [
     "XTokenRef",
     "XTrending",
     "XTrendingToken",
+    "OrderPlan",
+    "JupiterChallenge",
+    "JupiterSession",
+    "DepositCraft",
+    "OrderCreated",
+    "OrderCancel",
+    "OrderBatchItem",
+    "OrderBatch",
+    "FollowLeader",
+    "FollowOffer",
+    "NotCopied",
+    "FollowStatus",
+    "CopyFollow",
+    "CopyFollows",
+    "WalletFollow",
+    "CopyLogEntry",
+    "CopyLog",
+    "CopyReferralOffer",
+    "CopyReferralAttach",
+    "BatchOutcome",
+    "BatchResult",
+    "Prepared",
+    "MarkedTx",
+    "StrandedPositions",
+    "CallPreview",
+    "Call",
+    "PushSettings",
+    "PushTest",
+    "CardLook",
+    "LeaderboardPrivacy",
+    "AgentVisibility",
+    "LogsCleared",
+    "TelegramStatus",
+    "TelegramShared",
+    "PresetRank",
 ]
 
 T = TypeVar("T", bound="Model")
@@ -2331,3 +2366,429 @@ class Preset(Model):
     overrides: Optional[Any] = None
     dex: Optional[str] = None
     created_at: Optional[str] = None
+
+
+# --------------------------------------------------------------------------
+# 0.7.0: swap orders (Jupiter Trigger V2 and Recurring), routes/v1_orders.rs
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class OrderPlan(Model):
+    """`POST /v1/orders/plan`: the orders, validated, and the one link where
+    the owner's wallet signs them all. Nothing was created or signed.
+
+    Open `sign_url` with the wallet named in `wallet` connected. Expiry counts
+    from when the page is signed. Jupiter's 10 USD minimum per order and per
+    DCA round is checked there at the live price, before any signature.
+    """
+
+    sign_url: Optional[str] = None
+    wallet: Optional[str] = None
+    orders: Optional[List[Any]] = None
+    cancel: Optional[List[Any]] = None
+    cancel_all: Optional[bool] = None
+    signatures: Optional[str] = None
+    notes: Optional[List[str]] = None
+
+
+@dataclass
+class JupiterChallenge(Model):
+    """Jupiter's sign-in challenge. Sign `challenge` (a text message) with the
+    wallet, or for `type == "transaction"` sign `transaction` (a memo-only
+    transaction that is never sent). Signing it moves nothing."""
+
+    type: Optional[str] = None
+    challenge: Optional[str] = None
+    transaction: Optional[str] = None
+
+
+@dataclass
+class JupiterSession(Model):
+    """The wallet's Jupiter session. Pass `access_token` as `jupiter_session`
+    to every order call. It lapses after about 15 minutes: `orders_refresh`
+    with `refresh_token` gives a new one. This client never stores either."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+@dataclass
+class DepositCraft(Model):
+    """An UNSIGNED deposit transaction (base64) for the owner's wallet, and the
+    `request_id` to create the order with. Check `amount` and `mint` against
+    what you asked for before signing."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    transaction: Optional[str] = None
+    request_id: Optional[str] = None
+    receiver_address: Optional[str] = None
+    mint: Optional[str] = None
+    amount: Optional[str] = None
+    token_decimals: Optional[int] = None
+
+
+@dataclass
+class OrderCreated(Model):
+    """A created order. `tx_signature` is the deposit Jupiter landed."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    id: Optional[str] = None
+    tx_signature: Optional[str] = None
+    deposit_confirmed: Optional[bool] = None
+
+
+@dataclass
+class OrderCancel(Model):
+    """Cancel step one: the order is stopped and its withdrawal comes back as
+    an UNSIGNED transaction plus `request_id`. Step two
+    (`confirm_order_cancel`) lands it, and `tx_signature` is set then."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    id: Optional[str] = None
+    transaction: Optional[str] = None
+    request_id: Optional[str] = None
+    refund_amount: Optional[str] = None
+    tx_signature: Optional[str] = None
+
+
+@dataclass
+class OrderBatchItem(Model):
+    """One order in a batch cancel or confirm. `result` is Jupiter's answer
+    (typed by `cancel()`); `error` carries `code`, `message` and the HTTP
+    `status`. A code of `outcome_unknown` means the withdrawal may have
+    landed: read the orders, never retry blindly."""
+
+    family: Optional[str] = None
+    id: Optional[str] = None
+    ok: Optional[bool] = None
+    result: Optional[Any] = None
+    error: Optional[Any] = None
+
+    def cancel(self) -> Optional["OrderCancel"]:
+        return OrderCancel.from_dict(self.result) if isinstance(self.result, Mapping) else None
+
+
+@dataclass
+class OrderBatch(Model):
+    """A batch cancel (`prepared`) or a batch confirm (`confirmed`)."""
+
+    total: Optional[int] = None
+    prepared: Optional[int] = None
+    confirmed: Optional[int] = None
+    failed: Optional[int] = None
+    items: List[OrderBatchItem] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"items": (OrderBatchItem,)}
+
+
+# --------------------------------------------------------------------------
+# 0.7.0: copy, live follow and Copy LP (routes/copy_follow.rs, copy_mirror.rs)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class FollowLeader(Model):
+    """The leader as the board already names it. Never its id or wallet."""
+
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    key: Optional[str] = None
+
+
+@dataclass
+class FollowOffer(Model):
+    """A pending pool move or exit the follower may accept or decline."""
+
+    kind: Optional[str] = None
+    pool_address: Optional[str] = None
+    at: Optional[str] = None
+
+
+@dataclass
+class NotCopied(Model):
+    keys: Optional[List[str]] = None
+    reason: Optional[str] = None
+
+
+@dataclass
+class FollowStatus(Model):
+    """A copy's link to the agent it copied. It mirrors CONFIG, never funds."""
+
+    copied: Optional[bool] = None
+    following: Optional[bool] = None
+    leader: Optional[FollowLeader] = None
+    auto_follow_pool_moves: Optional[bool] = None
+    pool_moves_enabled: Optional[bool] = None
+    mirrored_keys: Optional[List[str]] = None
+    paused_keys: Optional[List[str]] = None
+    offer: Optional[FollowOffer] = None
+    last_mirrored_at: Optional[str] = None
+    last_error: Optional[str] = None
+    not_copied: List[NotCopied] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "leader": FollowLeader,
+        "offer": FollowOffer,
+        "not_copied": (NotCopied,),
+    }
+
+
+@dataclass
+class CopyFollow(Model):
+    agent_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    status: Optional[FollowStatus] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"status": FollowStatus}
+
+
+@dataclass
+class CopyFollows(Model):
+    follows: List[CopyFollow] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"follows": (CopyFollow,)}
+
+
+@dataclass
+class WalletFollow(Model):
+    """A Copy LP mirror: which wallet, how big (`size_pct` of the leader,
+    capped by `max_usd_per_action`), which pools, and auto or ask."""
+
+    leader_address: Optional[str] = None
+    leader_position: Optional[str] = None
+    size_pct: Optional[float] = None
+    max_usd_per_action: Optional[float] = None
+    pools: Optional[List[str]] = None
+    min_tvl_usd: Optional[float] = None
+    auto_mirror: Optional[bool] = None
+    pool_moves_enabled: Optional[bool] = None
+    managed: Optional[bool] = None
+    offer_log_id: Optional[int] = None
+    last_mirrored_at: Optional[str] = None
+
+
+@dataclass
+class CopyLogEntry(Model):
+    id: Optional[int] = None
+    source: Optional[str] = None
+    signature: Optional[str] = None
+    leader_kind: Optional[str] = None
+    pool: Optional[str] = None
+    leader_position: Optional[str] = None
+    leader_usd: Optional[float] = None
+    target_usd: Optional[float] = None
+    outcome: Optional[str] = None
+    reason_code: Optional[str] = None
+    reason: Optional[str] = None
+    leader_at: Optional[str] = None
+    at: Optional[str] = None
+
+
+@dataclass
+class CopyLog(Model):
+    """The wallet follow (or `None`) and what the mirror did or declined."""
+
+    follow: Optional[WalletFollow] = None
+    entries: List[CopyLogEntry] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"follow": WalletFollow, "entries": (CopyLogEntry,)}
+
+
+@dataclass
+class CopyReferralOffer(Model):
+    offer: Optional[bool] = None
+    name: Optional[str] = None
+
+
+@dataclass
+class CopyReferralAttach(Model):
+    attached: Optional[bool] = None
+
+
+@dataclass
+class BatchOutcome(Model):
+    """One item of an account batch. `key` is the agent id or the slug."""
+
+    key: Optional[str] = None
+    ok: Optional[bool] = None
+    result: Optional[Any] = None
+    error_code: Optional[str] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class BatchResult(Model):
+    total: Optional[int] = None
+    succeeded: Optional[int] = None
+    failed: Optional[int] = None
+    items: List[BatchOutcome] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"items": (BatchOutcome,)}
+
+
+# --------------------------------------------------------------------------
+# 0.7.0: the self-custody loop (prepare, sign in your wallet, mark)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class Prepared(Model):
+    """An UNSIGNED build for the key owner's own wallet.
+
+    Every prepare route has its own shape; the fields they share are named
+    here and the rest is in `raw_json`. The transaction to sign is
+    `unsigned_tx_b64` (or `open_tx_b64` for the reopen leg). Nothing was
+    signed or sent: sign it in wallet software you control, send it, then
+    report the signature with the matching mark call.
+    """
+
+    unsigned_tx_b64: Optional[str] = None
+    open_tx_b64: Optional[str] = None
+    recent_blockhash: Optional[str] = None
+    last_valid_block_height: Optional[int] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    position_address: Optional[str] = None
+    current_position: Optional[str] = None
+    new_position_address: Optional[str] = None
+    new_lower_bin_id: Optional[int] = None
+    new_upper_bin_id: Optional[int] = None
+    fee_event_ids: Optional[List[str]] = None
+    draft_event_ids: Optional[List[str]] = None
+
+
+@dataclass
+class MarkedTx(Model):
+    """What a mark call recorded. Which fields are set depends on the route:
+    `tx_id` and `fee_events_confirmed` (position mark-tx), `updated` (fee
+    signature), `status` and `confirmed` (fee confirm), `position_address`
+    (rebalance mark)."""
+
+    tx_id: Optional[str] = None
+    pnl_delta_usd: Optional[str] = None
+    fee_events_confirmed: Optional[int] = None
+    agent_id: Optional[str] = None
+    position_address: Optional[str] = None
+    updated: Optional[int] = None
+    status: Optional[str] = None
+    confirmed: Optional[int] = None
+
+
+@dataclass
+class StrandedPositions(Model):
+    positions: Optional[List[Any]] = None
+    total_rent_lamports: Optional[int] = None
+
+
+# --------------------------------------------------------------------------
+# 0.7.0: calls, push, cards, privacy, logs, Telegram, ranking
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class CallPreview(Model):
+    mint: Optional[str] = None
+    symbol: Optional[str] = None
+    price_usd: Optional[float] = None
+    wallet: Optional[str] = None
+    attached: Optional[Any] = None
+    has_position: Optional[bool] = None
+
+
+@dataclass
+class Call(Model):
+    """A posted call. `attached` is the position the server read from chain."""
+
+    id: Optional[str] = None
+    caller: Optional[Any] = None
+    mint: Optional[str] = None
+    symbol: Optional[str] = None
+    text: Optional[str] = None
+    at: Optional[str] = None
+    price_usd: Optional[float] = None
+    mcap_usd: Optional[float] = None
+    price_now_usd: Optional[float] = None
+    mcap_now_usd: Optional[float] = None
+    multiple_now: Optional[float] = None
+    peak_multiple: Optional[float] = None
+    peak_at: Optional[str] = None
+    attached: Optional[Any] = None
+
+
+@dataclass
+class PushSettings(Model):
+    enabled: Optional[bool] = None
+    prefs: Optional[Any] = None
+    devices: Optional[int] = None
+    this_device: Optional[bool] = None
+
+
+@dataclass
+class PushTest(Model):
+    delivered: Optional[int] = None
+
+
+@dataclass
+class CardLook(Model):
+    """A share card's saved look (the PnL card or the referral card)."""
+
+    prefs: Optional[Any] = None
+    saved: Optional[bool] = None
+
+
+@dataclass
+class LeaderboardPrivacy(Model):
+    privacy: Optional[Any] = None
+    saved: Optional[bool] = None
+    creator_handle: Optional[str] = None
+    wallet: Optional[str] = None
+    owner_key: Optional[str] = None
+    named_key: Optional[str] = None
+    anon_key: Optional[str] = None
+    agents: Optional[int] = None
+    agents_hidden: Optional[int] = None
+
+
+@dataclass
+class AgentVisibility(Model):
+    hidden: Optional[bool] = None
+
+
+@dataclass
+class LogsCleared(Model):
+    """Rows hidden from the activity log. The fund ledger is never deleted."""
+
+    deleted: Optional[int] = None
+    hidden: Optional[int] = None
+    cleared_before: Optional[str] = None
+
+
+@dataclass
+class TelegramStatus(Model):
+    linked: Optional[bool] = None
+    telegram_username: Optional[str] = None
+    linked_at: Optional[str] = None
+
+
+@dataclass
+class TelegramShared(Model):
+    sent: Optional[bool] = None
+
+
+@dataclass
+class PresetRank(Model):
+    """Every wizard preset (and your saved models) replayed on one pool's
+    window by the site's own Plot engine, ranked by net result. A row the
+    engine could not answer carries its reason and no number. The row shape
+    is the site ranker's; read `rows` and `raw_json`."""
+
+    rows: Optional[List[Any]] = None
+    reasons: Optional[Any] = None
+    cached: Optional[bool] = None

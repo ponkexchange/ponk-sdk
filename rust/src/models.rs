@@ -2171,6 +2171,568 @@ pub struct NewPreset {
     pub dex: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Swap orders: Jupiter Trigger V2 and Recurring (0.7.0)
+// ---------------------------------------------------------------------------
+
+/// A DCA price or market cap band. Give price bounds or market cap bounds,
+/// one kind, at least one bound. `trigger_mint` is the volatile leg.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DcaBand {
+    pub trigger_mint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_price_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_price_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_mc_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_mc_usd: Option<f64>,
+}
+
+/// One order for [`crate::Client::plan_orders`], exactly the wire shape the
+/// server validates (`kind` tagged, snake_case). Amounts are base units of
+/// the input mint, as strings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OrderIntent {
+    /// A limit (`target_usd` or `target_mc_usd`) or a trailing order
+    /// (`trailing_bps`, 50 to 9000), exactly one. `tp_usd` with `sl_usd`
+    /// arms a take-profit and stop-loss on what it buys.
+    Limit {
+        input_mint: String,
+        output_mint: String,
+        amount: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_usd: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_mc_usd: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trailing_bps: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tp_usd: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sl_usd: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slippage_bps: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_in_secs: Option<u64>,
+    },
+    /// Sell `amount` of a held `input_mint` at a take-profit, a stop-loss or both.
+    TpSl {
+        input_mint: String,
+        output_mint: String,
+        amount: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tp_usd: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sl_usd: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_in_secs: Option<u64>,
+    },
+    /// `count` rounds (2 to 1000) of `per_order_amount` every
+    /// `interval_seconds`, optionally only inside a band.
+    Dca {
+        input_mint: String,
+        output_mint: String,
+        per_order_amount: String,
+        count: u32,
+        interval_seconds: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        band: Option<DcaBand>,
+    },
+}
+
+impl OrderIntent {
+    /// A plain limit order at a USD trigger price.
+    pub fn limit(input_mint: &str, output_mint: &str, amount: u64, target_usd: f64) -> Self {
+        OrderIntent::Limit {
+            input_mint: input_mint.to_string(),
+            output_mint: output_mint.to_string(),
+            amount: amount.to_string(),
+            target_usd: Some(target_usd),
+            target_mc_usd: None,
+            trailing_bps: None,
+            tp_usd: None,
+            sl_usd: None,
+            slippage_bps: None,
+            expires_in_secs: None,
+        }
+    }
+
+    /// A trailing order.
+    pub fn trailing(input_mint: &str, output_mint: &str, amount: u64, trailing_bps: u32) -> Self {
+        OrderIntent::Limit {
+            input_mint: input_mint.to_string(),
+            output_mint: output_mint.to_string(),
+            amount: amount.to_string(),
+            target_usd: None,
+            target_mc_usd: None,
+            trailing_bps: Some(trailing_bps),
+            tp_usd: None,
+            sl_usd: None,
+            slippage_bps: None,
+            expires_in_secs: None,
+        }
+    }
+
+    /// A DCA plan without a band.
+    pub fn dca(input_mint: &str, output_mint: &str, per_order_amount: u64, count: u32, interval_seconds: u64) -> Self {
+        OrderIntent::Dca {
+            input_mint: input_mint.to_string(),
+            output_mint: output_mint.to_string(),
+            per_order_amount: per_order_amount.to_string(),
+            count,
+            interval_seconds,
+            band: None,
+        }
+    }
+}
+
+/// An order to cancel: `family` is `price` or `dca`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OrderRef {
+    pub family: String,
+    pub id: String,
+}
+
+/// `POST /v1/orders/plan`: the validated orders and the one link where the
+/// owner's wallet signs them all. Nothing was created or signed.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct OrderPlan {
+    pub sign_url: Option<String>,
+    pub wallet: Option<String>,
+    pub orders: Vec<serde_json::Value>,
+    pub cancel: Vec<OrderRef>,
+    pub cancel_all: Option<bool>,
+    pub signatures: Option<String>,
+    pub notes: Vec<String>,
+}
+
+/// Jupiter's sign-in challenge. Signing it moves nothing.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct JupiterChallenge {
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub challenge: Option<String>,
+    pub transaction: Option<String>,
+}
+
+/// The wallet's Jupiter session. Pass `access_token` to each order call; it
+/// lapses after about 15 minutes. This client never stores it.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct JupiterSession {
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<String>,
+}
+
+/// An UNSIGNED deposit (base64) and the `request_id` to create the order with.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DepositCraft {
+    pub transaction: Option<String>,
+    pub request_id: Option<String>,
+    pub receiver_address: Option<String>,
+    pub mint: Option<String>,
+    pub amount: Option<String>,
+    pub token_decimals: Option<u8>,
+}
+
+/// A created order; `tx_signature` is the deposit Jupiter landed.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OrderCreated {
+    pub id: Option<String>,
+    pub tx_signature: Option<String>,
+    pub deposit_confirmed: Option<bool>,
+}
+
+/// Cancel step one (an UNSIGNED withdrawal and `request_id`), or step two
+/// (`tx_signature` set once it landed).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OrderCancel {
+    pub id: Option<String>,
+    pub transaction: Option<String>,
+    pub request_id: Option<String>,
+    pub refund_amount: Option<String>,
+    pub tx_signature: Option<String>,
+}
+
+/// One order in a batch cancel or confirm. A `code` of `outcome_unknown` in
+/// `error` means the withdrawal may have landed: read the orders first.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct OrderBatchItem {
+    pub family: Option<String>,
+    pub id: Option<String>,
+    pub ok: Option<bool>,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<serde_json::Value>,
+}
+
+impl OrderBatchItem {
+    /// Jupiter's answer on a prepared or confirmed item.
+    pub fn cancel(&self) -> Option<OrderCancel> {
+        serde_json::from_value(self.result.clone()?).ok()
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct OrderBatch {
+    pub total: Option<u32>,
+    pub prepared: Option<u32>,
+    pub confirmed: Option<u32>,
+    pub failed: Option<u32>,
+    pub items: Vec<OrderBatchItem>,
+}
+
+// ---------------------------------------------------------------------------
+// Copy, live follow and Copy LP (0.7.0)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FollowLeader {
+    pub name: Option<String>,
+    pub slug: Option<String>,
+    pub key: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FollowOffer {
+    pub kind: Option<String>,
+    pub pool_address: Option<String>,
+    pub at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct NotCopied {
+    pub keys: Vec<String>,
+    pub reason: Option<String>,
+}
+
+/// A copy's link to the agent it copied. It mirrors CONFIG, never funds.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FollowStatus {
+    pub copied: Option<bool>,
+    pub following: Option<bool>,
+    pub leader: Option<FollowLeader>,
+    pub auto_follow_pool_moves: Option<bool>,
+    pub pool_moves_enabled: Option<bool>,
+    pub mirrored_keys: Vec<String>,
+    pub paused_keys: Vec<String>,
+    pub offer: Option<FollowOffer>,
+    pub last_mirrored_at: Option<String>,
+    pub last_error: Option<String>,
+    pub not_copied: Vec<NotCopied>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopyFollow {
+    pub agent_id: Option<String>,
+    pub agent_name: Option<String>,
+    pub status: Option<FollowStatus>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopyFollows {
+    pub follows: Vec<CopyFollow>,
+}
+
+/// A Copy LP mirror's settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct WalletFollow {
+    pub leader_address: Option<String>,
+    pub leader_position: Option<String>,
+    pub size_pct: Option<f64>,
+    pub max_usd_per_action: Option<f64>,
+    pub pools: Vec<String>,
+    pub min_tvl_usd: Option<f64>,
+    pub auto_mirror: Option<bool>,
+    pub pool_moves_enabled: Option<bool>,
+    pub managed: Option<bool>,
+    pub offer_log_id: Option<i64>,
+    pub last_mirrored_at: Option<String>,
+}
+
+/// The body of [`crate::Client::wallet_follow`]. Unset fields are left out.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct WalletFollowRequest {
+    /// Required on the first call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leader: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_usd_per_action: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pools: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_tvl_usd: Option<f64>,
+    /// `false` asks before each mirrored move; `true` acts under the mandate.
+    pub auto_mirror: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopyLogEntry {
+    pub id: Option<i64>,
+    pub source: Option<String>,
+    pub signature: Option<String>,
+    pub leader_kind: Option<String>,
+    pub pool: Option<String>,
+    pub leader_position: Option<String>,
+    pub leader_usd: Option<f64>,
+    pub target_usd: Option<f64>,
+    pub outcome: Option<String>,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+    pub leader_at: Option<String>,
+    pub at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopyLog {
+    pub follow: Option<WalletFollow>,
+    pub entries: Vec<CopyLogEntry>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopyReferralOffer {
+    pub offer: Option<bool>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopyReferralAttach {
+    pub attached: Option<bool>,
+}
+
+/// One item of an account batch; `key` is the agent id or slug.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct BatchOutcome {
+    pub key: Option<String>,
+    pub ok: Option<bool>,
+    pub result: Option<serde_json::Value>,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct BatchResult {
+    pub total: Option<u32>,
+    pub succeeded: Option<u32>,
+    pub failed: Option<u32>,
+    pub items: Vec<BatchOutcome>,
+}
+
+// ---------------------------------------------------------------------------
+// The self-custody loop (0.7.0)
+// ---------------------------------------------------------------------------
+
+/// An UNSIGNED build for the key owner's wallet. The fields the prepare
+/// routes share are named; `extra` keeps the rest of the body.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Prepared {
+    pub unsigned_tx_b64: Option<String>,
+    /// The reopen leg's transaction.
+    pub open_tx_b64: Option<String>,
+    pub recent_blockhash: Option<String>,
+    pub last_valid_block_height: Option<u64>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub position_address: Option<String>,
+    pub current_position: Option<String>,
+    pub new_position_address: Option<String>,
+    pub new_lower_bin_id: Option<i32>,
+    pub new_upper_bin_id: Option<i32>,
+    pub fee_event_ids: Vec<String>,
+    pub draft_event_ids: Vec<String>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// What a mark call recorded; which fields are set depends on the route.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct MarkedTx {
+    pub tx_id: Option<String>,
+    pub pnl_delta_usd: Option<String>,
+    pub fee_events_confirmed: Option<u64>,
+    pub agent_id: Option<String>,
+    pub position_address: Option<String>,
+    pub updated: Option<u64>,
+    pub status: Option<String>,
+    pub confirmed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct StrandedPositions {
+    pub positions: Vec<serde_json::Value>,
+    pub total_rent_lamports: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Calls, push, cards, privacy, logs, Telegram, ranking (0.7.0)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CallPreview {
+    pub mint: Option<String>,
+    pub symbol: Option<String>,
+    pub price_usd: Option<f64>,
+    pub wallet: Option<String>,
+    pub attached: Option<serde_json::Value>,
+    pub has_position: Option<bool>,
+}
+
+/// A posted call; `attached` is the position the server read from chain.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Call {
+    pub id: Option<String>,
+    pub caller: Option<serde_json::Value>,
+    pub mint: Option<String>,
+    pub symbol: Option<String>,
+    pub text: Option<String>,
+    pub at: Option<String>,
+    pub price_usd: Option<f64>,
+    pub mcap_usd: Option<f64>,
+    pub price_now_usd: Option<f64>,
+    pub mcap_now_usd: Option<f64>,
+    pub multiple_now: Option<f64>,
+    pub peak_multiple: Option<f64>,
+    pub peak_at: Option<String>,
+    pub attached: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PushSettings {
+    pub enabled: Option<bool>,
+    pub prefs: Option<serde_json::Value>,
+    pub devices: Option<i64>,
+    pub this_device: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PushTest {
+    pub delivered: Option<u32>,
+}
+
+/// A share card's saved look (the PnL card or the referral card).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CardLook {
+    pub prefs: Option<serde_json::Value>,
+    pub saved: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LeaderboardPrivacy {
+    pub privacy: Option<serde_json::Value>,
+    pub saved: Option<bool>,
+    pub creator_handle: Option<String>,
+    pub wallet: Option<String>,
+    pub owner_key: Option<String>,
+    pub named_key: Option<String>,
+    pub anon_key: Option<String>,
+    pub agents: Option<i64>,
+    pub agents_hidden: Option<i64>,
+}
+
+/// The body of [`crate::Client::set_leaderboard_privacy`].
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PrivacyRequest {
+    pub visible: bool,
+    pub show_name: bool,
+    pub show_wallet: bool,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentVisibility {
+    pub hidden: Option<bool>,
+}
+
+/// Rows hidden from the activity log. The fund ledger is never deleted.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LogsCleared {
+    pub deleted: Option<u64>,
+    pub hidden: Option<u64>,
+    pub cleared_before: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TelegramStatus {
+    pub linked: Option<bool>,
+    pub telegram_username: Option<String>,
+    pub linked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TelegramShared {
+    pub sent: Option<bool>,
+}
+
+/// The body of [`crate::Client::rank_presets`].
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RankRequest {
+    /// `meteora_dlmm`, `orca` or `raydium`.
+    pub dex: String,
+    pub pool: String,
+    /// 7, 14, 30 or 90 (default 30).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_days: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capital_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_mine: Option<bool>,
+}
+
+/// Every wizard preset (and your saved models) replayed by the site's Plot
+/// engine on one pool's window, ranked by net result. The row shape is the
+/// site ranker's; `extra` keeps everything else it sent.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PresetRank {
+    pub rows: Vec<serde_json::Value>,
+    pub reasons: Option<serde_json::Value>,
+    pub cached: Option<bool>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
 #[cfg(test)]
 mod live_shape_tests {
     use super::*;

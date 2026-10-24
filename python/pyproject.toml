@@ -9,7 +9,7 @@ description = "Python client for the ponk API: Solana DLMM liquidity agents, and
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
-keywords = ["solana", "dlmm", "liquidity", "meteora", "orca", "ponk", "webhooks"]
+keywords = ["solana", "dlmm", "liquidity", "meteora", "orca", "ponk", "webhooks", "jupiter", "limit-orders", "dca"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.8",

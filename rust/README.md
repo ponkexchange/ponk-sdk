@@ -225,6 +225,41 @@ key can move your funds home. It cannot move them anywhere else.
 | `review_` / `approve_` / `dismiss_recommendation(id)` / `snooze_recommendation(id, minutes)` | `POST /v1/recommendations/{id}/...` | `trade` |
 | `notify_settings()` / `update_notify_settings(&NotifySettings)` | `GET` / `PUT /v1/notify-settings` | `read` / `trade` |
 | `list_presets()` / `create_preset(&NewPreset)` / `update_preset(id, &NewPreset)` / `delete_preset(id)` | `/v1/presets` | `read` / `trade` |
+| `plan_orders(&[OrderIntent], &[OrderRef], cancel_all)` | `POST /v1/orders/plan`, one sign link | `read` |
+| `orders_challenge(kind)` / `orders_verify_message(sig)` / `orders_verify_transaction(tx)` / `orders_refresh(t)` / `orders_logout(t)` | `POST /v1/orders/auth/*` | `read` |
+| `order_mint_support(&mints)` | `GET /v1/orders/mint-support` | `read` |
+| `craft_order_deposit(session, in, out, amount, type, sub)` | `POST /v1/orders/deposit/craft`, unsigned | `trade` |
+| `create_price_order(session, &body)` / `create_dca_order(session, &body)` | `POST /v1/orders/price`, `/dca` | `trade` |
+| `cancel_order(session, family, id)` / `confirm_order_cancel(session, family, id, tx, request_id)` | `POST /v1/orders/{family}/{id}/cancel`, `/confirm-cancel` | `trade` |
+| `cancel_orders(session, &refs, all)` / `confirm_order_cancels(session, &items)` | `POST /v1/orders/cancel`, `/confirm-cancel` | `trade` |
+| `list_orders(session, family, state, limit)` | `GET /v1/orders` | `read` |
+| `copy_source` / `follow_leader` / `update_follow` / `unfollow_leader` / `answer_follow_offer` | `/v1/agents/{id}/copy-source`, `/follow`, `/follow/offer` | `trade` |
+| `follow_status(id)` / `list_copy_follows()` / `copy_log(id)` | `GET /v1/agents/{id}/follow`, `/v1/copy-follows`, `/copy-log` | `read` |
+| `follow_leaders(&ids, auto, unfollow)` / `follow_many(&slugs, unfollow)` | `POST /v1/agents/follow/batch`, `/v1/follows/batch` | `trade` |
+| `wallet_follow(id, &WalletFollowRequest)` / `unfollow_wallet(id)` / `answer_wallet_offer(id, accept)` | `/v1/agents/{id}/wallet-follow` | `trade` |
+| `copy_referral(key)` / `attach_copy_referral(key)` | `GET` / `POST /v1/copy-referral/{key}` | `read` / `trade` |
+| `agent_rebalance_prepare` / `_prepare_split` / `_prepare_open` / `agent_rebalance_mark` | `POST /v1/agents/{id}/rebalance/*`, unsigned | `trade` |
+| `agent_fees_prepare` / `agent_fees_mark` / `agent_fees_confirm` | `POST /v1/agents/{id}/collect-fees/*` | `trade` |
+| `position_open_prepare` / `position_mark_tx` / `position_rebalance_split` / `position_rebalance_open` / `position_rebalance_tick` / `position_compound_prepare` / `position_claim_prepare` | `POST /v1/positions/...`, unsigned | `trade` |
+| `lp_withdraw_prepare(dex, pool, position, bps)` | `POST /v1/lp/{dex}/withdraw/prepare` (incl. `ponk_clouds`) | `trade` |
+| `reclaim_wsol_prepare()` / `stranded_positions()` / `cleanup_position_prepare(pos)` | `/v1/wallet/...` | `trade` / `read` |
+| `positions_sync(&filter)` / `share_position_telegram(&card)` | `POST /v1/positions/sync`, `/share-telegram` | `trade` |
+| `clouds_referrals()` / `clouds_referral_claim_prepare(pool)` | `/v1/clouds/referrals` | `read` / `trade` |
+| `call_preview(mint)` / `post_call(mint, text)` / `delete_call(id)` | `/v1/calls` | `read` / `trade` |
+| `push_settings` / `set_push_prefs` / `push_subscribe` / `push_unsubscribe` / `push_test` | `/v1/push` | `read` / `trade` |
+| `pnl_card` / `set_pnl_card` / `referral_card` / `set_referral_card` | `/v1/pnl-card`, `/v1/referral-card` | `read` / `trade` |
+| `set_referral_code` / `add_referral_code` / `apply_creator` | `POST /v1/referral/code`, `/codes`, `/creator/apply` | `trade` |
+| `leaderboard_privacy` / `set_leaderboard_privacy(&PrivacyRequest)` / `agent_visibility` / `set_agent_visibility` | `/v1/leaderboard-privacy`, `/v1/agents/{id}/leaderboard-visibility` | `read` / `trade` |
+| `clear_logs()` | `DELETE /v1/logs` | `trade` |
+| `weekly_recap()` / `my_ponkillionaires()` / `telegram_status()` | `GET /v1/recap/weekly`, `/v1/ponkillionaires`, `/v1/telegram` | `read` |
+| `rank_presets(&RankRequest)` | `POST /v1/presets/rank` | `read` |
+
+The order calls take the caller's Jupiter access token as `session` and send
+it as `X-Jupiter-Session` on that one request (`JUPITER_SESSION_HEADER`); the
+client never keeps it. Create and confirm take the fund timeout, and a 504
+`outcome_unknown` there means the transaction may have landed: read
+`list_orders` before anything else, never retry blindly. Every prepare returns
+an UNSIGNED `Prepared` for your own wallet; this crate never signs.
 
 `fund_prepare` returns UNSIGNED transactions and this crate never signs them:
 open each of `plan.sign_urls` on ponk.exchange with your wallet connected, or
@@ -239,12 +274,10 @@ ceiling rather than refusing it, with `clamped` saying so. `health()` returns it
 because which component is down is the whole point of that call. `get_json` is
 the escape hatch for a route or a field added to the API after this version.
 
-This crate covers the key-authenticated `/v1` API plus those four public reads,
-and webhook verification in `ponk::webhooks`. The rest of the server's surface,
-the session-authenticated app routes (registering webhooks, minting API keys,
-an agent's decision history) and the wallet-signed Meteora transaction builders
-under `/public/meteora`, needs a wallet session rather than a key, so it is out
-of scope here.
+This crate covers the key-authenticated `/v1` API plus those public reads,
+and webhook verification in `ponk::webhooks`. What stays behind a wallet
+session, by design, is minting a custody mandate, API keys, registering
+webhooks and linking Telegram.
 
 ## The mandate expires
 

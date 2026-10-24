@@ -12,10 +12,11 @@ endpoint. It never computes a number the server did not send.
 pip install ponk
 ```
 
-0.6.0 adds agent fleets (create, fund, read and close many agents in one
-call) and `/v1` parity with the app's account surfaces: portfolio,
-transactions, fees, notifications, recommendations, presets and the managed
-rebalance and fee claim (see [Changes in 0.6.0](#changes-in-060)). To install
+0.7.0 brings everything the site does to a key: Jupiter limit, trailing,
+TP/SL and DCA orders (a sign link, or self-sign with your own signer
+callback), copy and live follow, Copy LP, the self-custody prepare and mark
+loop, calls, push, card looks, referral codes, privacy, and preset ranking in
+one call (see [Changes in 0.7.0](#changes-in-070)). To install
 from this repository
 instead:
 
@@ -414,6 +415,37 @@ print("holding $PONK would make that", perks.api_agent_fee.holder_percent, "%")
 
 `agent.managed_fee_bps` is the rate that specific agent's skim actually
 charges, before any $PONK holder discount.
+
+## Changes in 0.7.0
+
+* **Swap orders.** `plan_orders([limit_order(...), tp_sl_order(...),
+  dca_order(...)])` validates up to ten orders and returns one link
+  (`plan.sign_url`) where your wallet signs them. For a program that holds its
+  own key: `orders_sign_in(sign_message)`, then `place_order(token, family,
+  body, sign_transaction)`, or the single steps `craft_order_deposit`,
+  `create_price_order`, `create_dca_order`, `cancel_order`,
+  `confirm_order_cancel`, `list_orders`, `cancel_orders(token,
+  all_orders=True)` and `confirm_order_cancels`. The Jupiter token is a
+  per-call argument (`X-Jupiter-Session`), never stored. A 504
+  `outcome_unknown` on a create or confirm is never retried.
+* **Copy and follow.** `copy_source`, `follow_status`, `follow_leader`,
+  `update_follow`, `unfollow_leader`, `answer_follow_offer`,
+  `list_copy_follows`, `follow_leaders` and `follow_many` (batches), and Copy
+  LP: `wallet_follow`, `unfollow_wallet`, `answer_wallet_offer`, `copy_log`,
+  `copy_referral`, `attach_copy_referral`.
+* **Self-custody loop.** Every prepare returns a `Prepared` (an UNSIGNED
+  build for your own wallet) and every mark a `MarkedTx`: the agent
+  rebalance (prepare, prepare-split, prepare-open, mark), the fee claim
+  (prepare, mark, confirm), the position builders, `lp_withdraw_prepare`
+  (Ponk Clouds included, withdraw only), wSOL reclaim, stranded positions and
+  cleanup, `positions_sync`, the Clouds referral claim.
+* **Account.** Calls, Web Push, card looks, referral codes, the Creator
+  application, leaderboard privacy and per-agent visibility, `clear_logs`,
+  `weekly_recap`, `my_ponkillionaires`, `telegram_status`,
+  `share_position_telegram`, and `rank_presets`.
+
+Still app only: minting a custody mandate, API keys, webhooks and linking
+Telegram.
 
 ## Changes in 0.6.0
 
