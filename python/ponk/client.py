@@ -131,6 +131,8 @@ from .models import (
     ValueHistory,
     WhoAmI,
     Withdrawal,
+    ExitSwapLeg,
+    ExitToSol,
     AgentProof,
     AgentWalletCreated,
     FeeEvent,
@@ -1151,19 +1153,51 @@ class PonkClient:
             )
         )
 
-    def exit_agent(self, agent_id: str) -> Withdrawal:
+    def exit_agent(self, agent_id: str, *, to_sol: Optional[bool] = None) -> Withdrawal:
         """`POST /v1/agents/{id}/exit`. The full stop.
 
         Halts the agent, closes its position and sweeps every token plus native
         SOL back to the owner's wallet. Idempotent: if a call times out the
         work keeps running on the server, and calling again continues it rather
         than double-sending.
+
+        `to_sol=True` swaps the closed position's leftover tokens to SOL before
+        the sweep (ponk fee 0.2% of the swapped amount); `to_sol=False` sends
+        them as they are, no swap, no fee. Omitted, the agent's own
+        `exit_to_sol` setting decides, and it defaults to True. A token that
+        cannot be swapped is sent as it is; `Withdrawal.exit_notes` says why.
         """
         return Withdrawal.from_dict(
             self._request(
                 "POST",
                 "/v1/agents/{0}/exit".format(_seg(agent_id)),
+                body=_to_sol_body(to_sol),
                 timeout=self.fund_timeout,
+            )
+        )
+
+    def get_exit_to_sol(self, agent_id: str) -> ExitToSol:
+        """`GET /v1/agents/{id}/exit-to-sol`. Whether this agent's exits swap
+        leftover tokens to SOL (default True)."""
+        return ExitToSol.from_dict(
+            self._request("GET", "/v1/agents/{0}/exit-to-sol".format(_seg(agent_id)))
+        )
+
+    def set_exit_to_sol(self, agent_id: str, exit_to_sol: bool) -> ExitToSol:
+        """`POST /v1/agents/{id}/exit-to-sol`. Turn the exit-to-SOL swap on or off.
+
+        Automatic exits (take-profit, stop-loss, price stop, drawdown kill,
+        bleed exit, custom kill rule, Degen Mode) honour it and leave the SOL
+        in the agent wallet; a manual exit that does not pass `to_sol` uses it.
+        Moves no funds. Needs a `trade` key.
+        """
+        if not isinstance(exit_to_sol, bool):
+            raise TypeError("exit_to_sol must be a bool")
+        return ExitToSol.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/{0}/exit-to-sol".format(_seg(agent_id)),
+                body={"exit_to_sol": exit_to_sol},
             )
         )
 
@@ -1263,7 +1297,11 @@ class PonkClient:
         )
 
     def exit_agents(
-        self, agent_ids: Optional[Sequence[str]] = None, *, all_agents: bool = False
+        self,
+        agent_ids: Optional[Sequence[str]] = None,
+        *,
+        all_agents: bool = False,
+        to_sol: Optional[bool] = None,
     ) -> FleetBatch:
         """`POST /v1/agents/batch/exit`. Exit many agents at once.
 
@@ -1277,12 +1315,17 @@ class PonkClient:
         cannot be named. The batch keeps running after the response, so a
         `running` item is not lost: poll `get_batch(batch.batch_id)`. Needs a
         `trade` key. Takes the fund timeout.
+
+        `to_sol` applies to every agent of the batch, as in `exit_agent`;
+        omitted, each agent's own `exit_to_sol` setting decides.
         """
+        body = dict(_batch_target(agent_ids, all_agents))
+        body.update(_to_sol_body(to_sol))
         return FleetBatch.from_dict(
             self._request(
                 "POST",
                 "/v1/agents/batch/exit",
-                body=_batch_target(agent_ids, all_agents),
+                body=body,
                 timeout=self.fund_timeout,
             )
         )
@@ -1294,6 +1337,9 @@ class PonkClient:
 
         The agents keep running; positions stay open. Same targeting and
         polling as `exit_agents`. Needs a `trade` key. Takes the fund timeout.
+        A withdrawal swaps nothing: it moves the spendable SOL only, so there is
+        no `to_sol` here (an exit's leftover tokens exist only once a position
+        is closed).
         """
         return FleetBatch.from_dict(
             self._request(
@@ -1622,15 +1668,20 @@ class PonkClient:
             self._request("POST", "/v1/custody/withdraw", body=body, timeout=self.fund_timeout)
         )
 
-    def custody_exit(self) -> Withdrawal:
+    def custody_exit(self, *, to_sol: Optional[bool] = None) -> Withdrawal:
         """`POST /v1/custody/exit`. Exit every managed agent and sweep every managed wallet home.
 
         Closes every managed position and sweeps every managed wallet of this
         account, the shared one included, to the owner's own wallet. Needs a
-        `trade` key. Takes the fund timeout.
+        `trade` key. Takes the fund timeout. `to_sol` as in `exit_agent`.
         """
         return Withdrawal.from_dict(
-            self._request("POST", "/v1/custody/exit", timeout=self.fund_timeout)
+            self._request(
+                "POST",
+                "/v1/custody/exit",
+                body=_to_sol_body(to_sol),
+                timeout=self.fund_timeout,
+            )
         )
 
     # -- account reads (0.6.0) -----------------------------------------------
@@ -2821,6 +2872,16 @@ def _batch_target(agent_ids: Optional[Sequence[str]], all_agents: bool) -> Dict[
     if not ids and not all_agents:
         raise ValueError("name the agents in agent_ids, or pass all_agents=True")
     return {"all": True} if all_agents else {"agent_ids": ids}
+
+
+def _to_sol_body(to_sol: Optional[bool]) -> Dict[str, Any]:
+    """The optional exit-to-SOL choice of an exit. Omitted, the server applies the
+    agent's own `exit_to_sol` setting (default True)."""
+    if to_sol is None:
+        return {}
+    if not isinstance(to_sol, bool):
+        raise TypeError("to_sol must be a bool or None")
+    return {"to_sol": to_sol}
 
 
 def _preset_body(name: str, overrides: Mapping[str, Any], dex: Optional[str]) -> Dict[str, Any]:

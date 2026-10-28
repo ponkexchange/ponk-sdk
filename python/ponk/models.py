@@ -829,12 +829,34 @@ class ExitSnapshot(Model):
 
 
 @dataclass
+class ExitSwapLeg(Model):
+    """One leftover token of an exit-to-SOL liquidation.
+
+    `outcome` is `swapped` (sold to SOL; `signature`, `sol_out_lamports` and
+    `fee_lamports` are set, the fee being ponk's 0.2%), `kept` (sent as it is;
+    `reason` says why) or `outcome_unknown` (sent but not confirmed in time;
+    never retried, `signature` names it).
+    """
+
+    mint: Optional[str] = None
+    amount: Optional[int] = None
+    decimals: Optional[int] = None
+    outcome: Optional[str] = None
+    signature: Optional[str] = None
+    sol_out_lamports: Optional[int] = None
+    fee_lamports: Optional[int] = None
+    reason: Optional[str] = None
+
+
+@dataclass
 class Withdrawal(Model):
     """The result of a withdraw or an exit.
 
     `destination` is server-locked to the wallet that owns the agent: there is
     no destination parameter and there cannot be one. `pnl` is present only on
-    an exit that closed a live managed position.
+    an exit that closed a live managed position. `exit_swaps` and `exit_notes`
+    are present only on an exit that swapped (or tried to swap) leftover tokens
+    to SOL: one leg per token, and one plain sentence per outcome.
     """
 
     signature: Optional[str] = None
@@ -842,8 +864,25 @@ class Withdrawal(Model):
     destination: Optional[str] = None
     source: Optional[str] = None
     pnl: Optional[ExitSnapshot] = None
+    exit_swaps: List[ExitSwapLeg] = field(default_factory=list)
+    exit_notes: List[str] = field(default_factory=list)
 
-    _NESTED: ClassVar[Mapping[str, Any]] = {"pnl": ExitSnapshot}
+    _NESTED: ClassVar[Mapping[str, Any]] = {"pnl": ExitSnapshot, "exit_swaps": (ExitSwapLeg,)}
+
+
+@dataclass
+class ExitToSol(Model):
+    """An agent's exit-to-SOL setting (`/v1/agents/{id}/exit-to-sol`).
+
+    `exit_to_sol` true (the default): the agent's exits, the ones you start
+    and the ones its own stops trigger, swap leftover tokens to SOL with
+    ponk's 0.2% swap fee. False: tokens are kept as they are. `fee_line` is
+    the sentence every exit confirm shows.
+    """
+
+    agent_id: Optional[str] = None
+    exit_to_sol: Optional[bool] = None
+    fee_line: Optional[str] = None
 
 
 # --------------------------------------------------------------------------

@@ -5,6 +5,18 @@ Both clients carry the same version from 0.4.0 on. Python lives in
 
 ## Unreleased
 
+Added, in the Python client:
+
+- **Exit to SOL.** `exit_agent`, `exit_agents` and `custody_exit` take an
+  optional `to_sol`: `True` swaps the closed position's leftover tokens to SOL
+  before the sweep (ponk fee 0.2% of the swapped amount), `False` sends them as
+  they are with no swap and no fee, omitted uses the agent's own setting
+  (default `True`). A withdrawal swaps nothing and takes no `to_sol`.
+  `Withdrawal.exit_swaps` (`ExitSwapLeg`: swapped, kept with its reason, or
+  outcome unknown with its signature) and `Withdrawal.exit_notes` report each
+  token. `get_exit_to_sol` and `set_exit_to_sol` (`ExitToSol`) read and write
+  the agent setting that automatic exits (stops, kills, step-outs) honour.
+
 ## 0.8.0 (2026-10-28)
 
 - Ponk Copilot works with an API key as well as a wallet session: one sentence to a plan, a 30-day replay against holding, a signing link that funds the fleet, the live fleet read, stop and close. A read-scope key plans and reads; a trade-scope key starts and stops. Fleets started with a key pay the API fee (15%), a wallet session pays the web fee.
