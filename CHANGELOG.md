@@ -3,7 +3,7 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
-## Unreleased
+## 0.9.0 (2026-10-28)
 
 Added, in the Python client:
 
