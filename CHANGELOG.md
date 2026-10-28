@@ -5,6 +5,10 @@ Both clients carry the same version from 0.4.0 on. Python lives in
 
 ## Unreleased
 
+## 0.8.0 (2026-10-28)
+
+- Ponk Copilot works with an API key as well as a wallet session: one sentence to a plan, a 30-day replay against holding, a signing link that funds the fleet, the live fleet read, stop and close. A read-scope key plans and reads; a trade-scope key starts and stops. Fleets started with a key pay the API fee (15%), a wallet session pays the web fee.
+
 Added, in the Python client:
 
 - **The copilot**, wallet session only: `PonkClient(session_token=...)` and

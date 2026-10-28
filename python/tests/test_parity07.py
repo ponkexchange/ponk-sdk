@@ -46,7 +46,7 @@ def header(call, name):
 
 class TestVersion(unittest.TestCase):
     def test_version_is_070(self):
-        self.assertEqual(__version__, "0.7.0")
+        self.assertGreaterEqual(tuple(int(x) for x in __version__.split(".")), (0, 7, 0))
 
 
 class TestOrderIntents(unittest.TestCase):

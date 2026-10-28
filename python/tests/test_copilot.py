@@ -57,7 +57,7 @@ def session_client(payloads):
 
 
 class TestCopilot(unittest.TestCase):
-    def test_copilot_sends_the_session_never_the_key(self):
+    def test_copilot_prefers_the_session_when_both_are_held(self):
         c, opener = session_client([{"ok": True, "intent": {"kind": "deploy"}, "echo": "Start."}])
         parsed = c.copilot_parse("put 2 sol into 4 agents")
         self.assertTrue(parsed.ok)
@@ -66,9 +66,15 @@ class TestCopilot(unittest.TestCase):
         self.assertEqual(call["body"], {"text": "put 2 sol into 4 agents"})
         self.assertEqual(call["headers"]["Authorization"], "Bearer " + SESSION)
 
-    def test_a_key_alone_never_reaches_a_copilot_route(self):
-        opener = SequenceOpener([{}])
+    def test_a_key_alone_reaches_the_copilot(self):
+        opener = SequenceOpener([{"id": PLAN, "state": "building"}])
         c = PonkClient(api_key=KEY, base_url=BASE, opener=opener)
+        c.copilot_plan("put 2 sol into 4 agents")
+        self.assertEqual(opener.calls[0]["headers"]["Authorization"], "Bearer " + KEY)
+
+    def test_no_credential_never_reaches_a_copilot_route(self):
+        opener = SequenceOpener([{}])
+        c = PonkClient(base_url=BASE, opener=opener)
         with self.assertRaises(PonkError):
             c.copilot_plan("put 2 sol into 4 agents")
         self.assertEqual(opener.calls, [])

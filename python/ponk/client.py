@@ -212,10 +212,10 @@ class PonkClient:
             401 from the server.
         session_token: a signed-in wallet session (Sign-In-With-Solana on
             ponk.exchange, `POST /auth/nonce` then `POST /auth/verify`). The
-            copilot methods take ONLY this: their routes accept a wallet
-            session and refuse an API key, so a fleet is planned, started and
-            stopped only by the wallet's own session. Every other method keeps
-            using `api_key`.
+            copilot methods use it when present, otherwise the API key: a
+            read-scope key can parse, plan, replay and read fleets, a
+            trade-scope key can also start and stop them. Fleets started with
+            a key pay the API fee (15%); a wallet session pays the web fee.
         base_url: defaults to production. Point it elsewhere to test.
         timeout: seconds for read and control calls.
         fund_timeout: seconds for compound, withdraw and exit.
@@ -267,15 +267,16 @@ class PonkClient:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
         if session_only:
-            # The copilot routes take a wallet session only. The key is never
-            # sent to them, even when this client also holds one.
-            if not self.session_token:
+            # The copilot routes: a wallet session when this client holds one,
+            # otherwise the API key (read scope plans, trade scope starts).
+            credential = self.session_token or self.api_key
+            if not credential:
                 raise PonkError(
-                    "{0} {1} needs a wallet session: construct the client with "
-                    "session_token=. The copilot refuses an API key by design, so "
-                    "nothing was sent.".format(method, path)
+                    "{0} {1} needs a wallet session or an API key: construct the "
+                    "client with session_token= or api_key=. Nothing was "
+                    "sent.".format(method, path)
                 )
-            headers["Authorization"] = "Bearer " + self.session_token
+            headers["Authorization"] = "Bearer " + credential
         elif self.api_key:
             headers["Authorization"] = "Bearer " + self.api_key
         if extra_headers:
@@ -1355,7 +1356,7 @@ class PonkClient:
             self._request("POST", "/v1/agents/{0}/wallet".format(_seg(agent_id)))
         )
 
-    # -- the copilot (wallet session only) -----------------------------------
+    # -- the copilot (wallet session, or an API key) ---------------------------
 
     def copilot_parse(self, text: str) -> CopilotParse:
         """`POST /copilot/parse`. Read one sentence with ponk's closed grammar.
@@ -1363,7 +1364,7 @@ class PonkClient:
         Pure on the server: reads nothing, writes nothing. `ok` false carries
         `refusal` (a `code`, a sentence, the words not understood and example
         sentences that do parse). No language model runs anywhere. Needs
-        `session_token`; an API key is never sent here.
+        `session_token` or an API key.
         """
         return CopilotParse.from_dict(
             self._request("POST", "/copilot/parse", body={"text": text}, session_only=True)
