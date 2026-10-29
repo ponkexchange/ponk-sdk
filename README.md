@@ -297,6 +297,15 @@ ponk.confirm_order_cancels(token, [
 A 504 `outcome_unknown` on a create or confirm means it may have landed: read
 `list_orders(token, state="active")` before anything else.
 
+## Follow people
+
+```python
+ponk.follow_person("kader")
+for row in ponk.following_feed().rows:
+    print(row.actor.name, row.verb, row.pool, row.copy.mode)
+print(ponk.privacy().settings)          # public or private, and its switches
+```
+
 ## Copy and follow live
 
 ```python

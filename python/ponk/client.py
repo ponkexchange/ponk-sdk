@@ -86,6 +86,18 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 from ._version import __version__
 from .errors import PonkError, PonkTransportError, error_from_response
 from .models import (
+    FollowState,
+    MyFollowing,
+    PeopleBoard,
+    PeopleList,
+    PersonPositions,
+    Privacy,
+    Profile,
+    SocialFeed,
+    TopCalls,
+    TrackedLps,
+    WalletPnl,
+    XAccountCard,
     CopilotFleet,
     CopilotFleetSummary,
     CopilotParse,
@@ -444,6 +456,92 @@ class PonkClient:
             self._request("GET", "/public/ponkillionaires/week")
         )
 
+    # -- People, public ----------------------------------------------------
+
+    def profile(self, key: str) -> Profile:
+        """`GET /public/people/{key}`. A public profile.
+
+        `key` is an @handle (with or without the @), any /r/ referral code, a
+        shown wallet, or a `t-<owner_key>` tag. A private account answers with
+        its handle, bio, X and picture only. Raises `PonkNotFoundError` for a
+        key that names nothing public. No key needed.
+        """
+        return Profile.from_dict(
+            self._request("GET", "/public/people/{0}".format(_seg(key.lstrip("@"))))
+        )
+
+    def followers(self, key: str, cursor: Optional[str] = None) -> PeopleList:
+        """`GET /public/people/{key}/followers`. Who follows this person.
+
+        Private followers are counted, never named. Page with `next_cursor`.
+        """
+        return PeopleList.from_dict(
+            self._request(
+                "GET", "/public/people/{0}/followers".format(_seg(key.lstrip("@"))), params={"cursor": cursor}
+            )
+        )
+
+    def following(self, key: str, cursor: Optional[str] = None) -> PeopleList:
+        """`GET /public/people/{key}/following`. Who this person follows."""
+        return PeopleList.from_dict(
+            self._request(
+                "GET", "/public/people/{0}/following".format(_seg(key.lstrip("@"))), params={"cursor": cursor}
+            )
+        )
+
+    def person_activity(
+        self,
+        key: str,
+        *,
+        cursor: Optional[str] = None,
+        kinds: Optional[str] = None,
+        pnl_only: bool = False,
+    ) -> SocialFeed:
+        """`GET /public/people/{key}/activity`. One person's agent, LP, call and
+        (when they share them) swap activity, newest first.
+
+        `kinds` is `all`, `agents`, `lp`, `swaps` or `calls`; `pnl_only` keeps
+        closes and exits with a P&L.
+        """
+        return SocialFeed.from_dict(
+            self._request(
+                "GET",
+                "/public/people/{0}/activity".format(_seg(key.lstrip("@"))),
+                params={"cursor": cursor, "kinds": kinds, "pnl": "true" if pnl_only else None},
+            )
+        )
+
+    def person_positions(self, key: str) -> PersonPositions:
+        """`GET /public/people/{key}/positions`. A person's open positions on
+        Meteora, Orca and Raydium, each with its Copy action."""
+        return PersonPositions.from_dict(
+            self._request("GET", "/public/people/{0}/positions".format(_seg(key.lstrip("@"))))
+        )
+
+    def people_board(
+        self, window: Optional[str] = None, sort: Optional[str] = None, limit: Optional[int] = None
+    ) -> PeopleBoard:
+        """`GET /public/people-leaderboard`. Ponk accounts ranked over `window`
+        (`24h`, `7d`, `30d`) by P&L, with ROI and vs HODL beside it."""
+        return PeopleBoard.from_dict(
+            self._request(
+                "GET", "/public/people-leaderboard", params={"window": window, "sort": sort, "limit": limit}
+            )
+        )
+
+    def live_feed(
+        self, *, cursor: Optional[str] = None, kinds: Optional[str] = None, pnl_only: bool = False
+    ) -> SocialFeed:
+        """`GET /public/social/feed`. Activity of every public account, newest
+        first (the signed-out Following tab)."""
+        return SocialFeed.from_dict(
+            self._request(
+                "GET",
+                "/public/social/feed",
+                params={"cursor": cursor, "kinds": kinds, "pnl": "true" if pnl_only else None},
+            )
+        )
+
     # -- X Tracker, public -------------------------------------------------
 
     def x_feed(
@@ -457,6 +555,7 @@ class PonkClient:
         min_followers: Optional[int] = None,
         account: Optional[str] = None,
         q: Optional[str] = None,
+        first_calls: bool = False,
     ) -> XFeed:
         """`GET /public/x/feed`. The curated X accounts' posts and events, newest first.
 
@@ -465,6 +564,7 @@ class PonkClient:
         `limit` is 1 to 100 (default 50). `category` is a comma-separated list
         of directory categories (`x_accounts().categories`). `ca_only` keeps
         posts that name a token. `account` is one handle, `q` a text search.
+        `first_calls` keeps only posts that were the first call of a token.
         """
         return XFeed.from_dict(
             self._request(
@@ -479,6 +579,7 @@ class PonkClient:
                     "minFollowers": min_followers,
                     "account": account,
                     "q": q,
+                    "first": "1" if first_calls else None,
                 },
             )
         )
@@ -532,6 +633,26 @@ class PonkClient:
         """`GET /public/calls/{id}`. One call with its outcome so far. Public."""
         return self._request("GET", "/public/calls/" + _seg(call_id))
 
+    def x_account(self, handle: str, days: Optional[int] = None) -> XAccountCard:
+        """`GET /public/x/account/{handle}`. One X account's caller card: calls,
+        multiples, hit rate, 2x rate, first calls, rank and recent calls over
+        `days` (default 30)."""
+        return XAccountCard.from_dict(
+            self._request(
+                "GET", "/public/x/account/{0}".format(_seg(handle.lstrip("@"))), params={"days": days}
+            )
+        )
+
+    def top_calls(
+        self, days: Optional[int] = None, limit: Optional[int] = None, source: Optional[str] = None
+    ) -> TopCalls:
+        """`GET /public/calls/top`. The best calls of the last `days` (default 7,
+        up to 90), ranked by their multiple since the call. `source` is `ponk`
+        (default), `x` or `all`."""
+        return TopCalls.from_dict(
+            self._request("GET", "/public/calls/top", params={"days": days, "limit": limit, "source": source})
+        )
+
     def x_token(self, mint: str) -> XToken:
         """`GET /public/x/token/{mint}`. Every tracked mention of one token.
 
@@ -582,6 +703,18 @@ class PonkClient:
                 },
             )
         )
+
+    def wallet_pnl(self, address: str) -> WalletPnl:
+        """`GET /public/wallets/{address}/pnl`. Trading P&L per token for any
+        wallet, from its swaps. No key needed."""
+        return WalletPnl.from_dict(
+            self._request("GET", "/public/wallets/{0}/pnl".format(_seg(address)))
+        )
+
+    def tracked_lps(self) -> TrackedLps:
+        """`GET /public/wallets/positions`. Open LP positions of the curated
+        wallets on Meteora, Orca and Raydium."""
+        return TrackedLps.from_dict(self._request("GET", "/public/wallets/positions"))
 
     def wallets_defaults(self) -> CuratedWallets:
         """`GET /public/wallets/defaults`. The curated wallet list and where each comes from."""
@@ -1093,6 +1226,41 @@ class PonkClient:
     def unfollow(self, slug: str) -> Follow:
         """`DELETE /v1/follows/{slug}`. Stop following. Idempotent."""
         return Follow.from_dict(self._request("DELETE", "/v1/follows/{0}".format(_seg(slug))))
+
+    def follow_person(self, key: str) -> FollowState:
+        """`POST /v1/people/{key}/follow`. Follow a person: their agent, LP,
+        call and shared swap activity lands in your Following feed, and you are
+        told in the bell and on Telegram when linked. Idempotent. Needs a
+        `trade` key."""
+        return FollowState.from_dict(
+            self._request("POST", "/v1/people/{0}/follow".format(_seg(key.lstrip("@"))))
+        )
+
+    def unfollow_person(self, key: str) -> FollowState:
+        """`DELETE /v1/people/{key}/follow`. Stop following. Idempotent. Needs a
+        `trade` key."""
+        return FollowState.from_dict(
+            self._request("DELETE", "/v1/people/{0}/follow".format(_seg(key.lstrip("@"))))
+        )
+
+    def my_following(self) -> MyFollowing:
+        """`GET /v1/me/following`. Everyone you follow, private accounts
+        included, plus the shared agents you follow one by one."""
+        return MyFollowing.from_dict(self._request("GET", "/v1/me/following"))
+
+    def following_feed(
+        self, *, cursor: Optional[str] = None, kinds: Optional[str] = None, pnl_only: bool = False
+    ) -> SocialFeed:
+        """`GET /v1/social/feed`. Your Following feed, newest first. `kinds` is
+        `all`, `agents`, `lp`, `swaps` or `calls`; `pnl_only` keeps closes and
+        exits with a P&L. Page with `next_cursor`."""
+        return SocialFeed.from_dict(
+            self._request(
+                "GET",
+                "/v1/social/feed",
+                params={"cursor": cursor, "kinds": kinds, "pnl": "true" if pnl_only else None},
+            )
+        )
 
     def claim_handle(self, handle: str) -> Referral:
         """`POST /v1/referral/handle`. Claim or change this account's /r/<handle>.
@@ -2673,6 +2841,41 @@ class PonkClient:
         """`POST /v1/referral/creator/apply`. Apply for the Creator tier. Needs a `trade` key."""
         return Referral.from_dict(
             self._request("POST", "/v1/referral/creator/apply", body={"handle": handle, "note": note})
+        )
+
+    def privacy(self) -> Privacy:
+        """`GET /v1/me/privacy`. Your privacy: public or private, and the
+        switches under it (show wallet, show dollar amounts, share swaps)."""
+        return Privacy.from_dict(self._request("GET", "/v1/me/privacy"))
+
+    def set_privacy(
+        self,
+        *,
+        is_public: bool,
+        show_wallet: bool = False,
+        show_usd: bool = True,
+        share_swaps: bool = False,
+        rank_anon: bool = True,
+    ) -> Privacy:
+        """`PUT /v1/me/privacy`. Set every switch at once. A private account
+        (`is_public=False`) shows nothing but its handle, bio, X and picture,
+        and `rank_anon` keeps its agents on the board with no name. Needs a
+        `trade` key."""
+        body = {
+            "is_public": bool(is_public),
+            "show_wallet": bool(show_wallet),
+            "show_usd": bool(show_usd),
+            "share_swaps": bool(share_swaps),
+            "rank_anon": bool(rank_anon),
+        }
+        return Privacy.from_dict(self._request("PUT", "/v1/me/privacy", body=body))
+
+    def answer_privacy_prompt(self, keep_public: bool) -> Privacy:
+        """`POST /v1/me/privacy/ack`. Answer the one-time prompt an account
+        that was public before the new privacy model sees: keep public, or make
+        private. Needs a `trade` key."""
+        return Privacy.from_dict(
+            self._request("POST", "/v1/me/privacy/ack", body={"keep_public": bool(keep_public)})
         )
 
     def leaderboard_privacy(self) -> LeaderboardPrivacy:

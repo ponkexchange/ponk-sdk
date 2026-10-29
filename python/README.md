@@ -397,9 +397,12 @@ confirmation, so they can take a minute. They get their own timeout,
 
 ## Fees
 
-Autonomous agents charge a performance fee on realized yield only. Principal is
-never touched and no fee is taken on an unrealized gain. There is no charge for
-a key, for a call, for creating an agent, for depositing or for withdrawing.
+Autonomous agents charge a performance fee on realized yield, and a one-time
+activation fee of 1% of the capital of an agent's first open (0.5% for a wallet
+holding 1,000,000 $PONK), paid inside the transaction that opens it: a failed
+open pays nothing, and recenters, re-opens, compounds and top-ups never pay it
+again. A referrer earns 0.25% of that capital out of the fee. There is no
+charge for a key, for a call, for depositing or for withdrawing.
 
 **An agent created through this API pays the API rate, not the app rate.** The
 rate is fixed when the agent is created and follows that agent for its whole
@@ -415,6 +418,65 @@ print("holding $PONK would make that", perks.api_agent_fee.holder_percent, "%")
 
 `agent.managed_fee_bps` is the rate that specific agent's skim actually
 charges, before any $PONK holder discount.
+
+The activation rate is on the same perks read, and `ponk.ACTIVATION_FEE_BPS`,
+`ACTIVATION_FEE_HOLDER_BPS` and `ACTIVATION_REFERRER_BPS` name the published
+rates. A fee event charged on an activation carries `source == "activation"`:
+
+```python
+print("activation", perks.activation_fee.effective_percent, "%")
+for e in ponk.list_fees():
+    if e.source == "activation":
+        print(e.fee_token_mint, e.platform_fee_amount)
+```
+
+## People: profiles, follows and the Following feed
+
+Every claimed @handle and every /r/ code opens a public profile. Follow a
+person and their agent, LP, call and (when they share them) swap activity
+lands in your Following feed, with a Copy action on each row. Private accounts
+are counted on lists, never named, and show nothing but their handle, bio, X
+and picture.
+
+```python
+p = ponk.profile("@kader")                     # no key needed
+print(p.label, p.social)
+for pos in ponk.person_positions("kader").positions:
+    print(pos.venue, pos.pool, pos.pnl_pct, pos.copy.mode)
+
+ponk.follow_person("kader")                    # trade key
+for row in ponk.following_feed(kinds="agents").rows:
+    print(row.actor.name, row.verb, row.pool, row.size_usd, row.copy.mode)
+
+for r in ponk.people_board(window="7d").rows:  # the people board, no key
+    print(r.rank, r.person.name, r.pnl_usd, r.roi_pct, r.vs_hodl_pct)
+```
+
+## Privacy
+
+One switch decides it: public or private. Under a public account,
+`show_wallet` prints the wallet, `show_usd` shows dollar amounts (off:
+percentages only) and `share_swaps` puts swaps in followers' feeds.
+
+```python
+print(ponk.privacy().settings)
+ponk.set_privacy(is_public=True, show_wallet=False, show_usd=True, share_swaps=False)
+```
+
+`leaderboard_privacy` and `set_leaderboard_privacy` still work for one release.
+
+## Wallet Tracker P&L, tracked LPs, X caller cards and Top calls
+
+```python
+pnl = ponk.wallet_pnl(WALLET)                  # trading P&L per token, no key
+for row in ponk.tracked_lps().rows:            # curated wallets' open LPs
+    print(row.wallet["label"], row.position["pool_address"], row.position["pnl_usd"])
+card = ponk.x_account("solana", days=30)
+print(card.hit_rate, card.x2_rate, card.first_calls)
+print(ponk.x_feed(first_calls=True).raw_json["items"][:1])
+for call in ponk.top_calls(days=7, source="all").calls:
+    print(call)
+```
 
 ## The copilot (unreleased)
 
@@ -449,6 +511,23 @@ wallet. After a start, `copilot_fleet(...).funding` lists what is left to fund
 or approve with a fresh `sign_url`, and `.exit` names any agent whose exit
 failed; `copilot_stop_fleet` on a stopping fleet retries only those. The replay is
 one past window beside holding, not a forecast.
+
+## Changes in 0.10.0
+
+* **People.** `profile`, `followers`, `following`, `person_activity`,
+  `person_positions`, `people_board` and `live_feed` (no key);
+  `follow_person`, `unfollow_person`, `my_following` and `following_feed`
+  (API key). Models `Person`, `Profile`, `PeopleList`, `FollowState`,
+  `MyFollowing`, `SocialFeed`, `ActivityRow`, `CopyAction`, `OpenPosition`,
+  `PersonPositions`, `PeopleBoard`.
+* **Privacy.** `privacy`, `set_privacy` and `answer_privacy_prompt` over
+  `/v1/me/privacy` (`Privacy`, `PrivacySettings`); the leaderboard-privacy
+  names stay as aliases.
+* **Activation fee.** `PonkPerks.activation_fee`, `FeeEvent.source`
+  (`activation`), and the constants `ACTIVATION_FEE_BPS`,
+  `ACTIVATION_FEE_HOLDER_BPS` and `ACTIVATION_REFERRER_BPS`.
+* **Trackers and calls.** `wallet_pnl`, `tracked_lps`, `x_account`,
+  `top_calls`, and `x_feed(first_calls=True)`.
 
 ## Changes in 0.7.0
 

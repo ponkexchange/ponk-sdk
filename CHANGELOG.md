@@ -3,6 +3,23 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.10.0 (2026-10-28)
+
+Added, in the Python client (the Rust client stays at 0.7.0):
+
+- **People.** Public profiles for every @handle and /r/ code (`profile`),
+  followers and following lists, a person's activity and open positions, the
+  people board and the public live feed, no key needed. With an API key:
+  `follow_person`, `unfollow_person`, `my_following` and `following_feed`.
+- **Privacy.** `privacy`, `set_privacy` (public or private, show wallet, show
+  dollar amounts, share swaps) and `answer_privacy_prompt`. The
+  leaderboard-privacy methods keep working.
+- **Activation fee.** `PonkPerks.activation_fee` (1%, 0.5% for a 1M $PONK
+  holder), `FeeEvent.source == "activation"`, and `ACTIVATION_FEE_BPS`,
+  `ACTIVATION_FEE_HOLDER_BPS`, `ACTIVATION_REFERRER_BPS` (the referrer's 0.25%).
+- **Trackers and calls.** `wallet_pnl`, `tracked_lps`, `x_account`,
+  `top_calls`, and `x_feed(first_calls=True)`.
+
 ## 0.9.0 (2026-10-28)
 
 Added, in the Python client:

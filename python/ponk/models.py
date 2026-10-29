@@ -28,17 +28,24 @@ __all__ = [
     "ActionLog",
     "ActionReceipt",
     "ActivityEvent",
+    "ActivityRow",
     "Agent",
     "AgentCopy",
     "AgentPerformance",
     "AgentPosition",
     "AgentProof",
+    "AgentVisibility",
     "AgentWallet",
     "AgentWalletCreated",
     "AgentsActivity",
     "AutonomousState",
+    "BatchOutcome",
+    "BatchResult",
     "BinShare",
     "CalendarDay",
+    "Call",
+    "CallPreview",
+    "CardLook",
     "ClaimPayout",
     "ClaimPayoutToken",
     "ComponentStatus",
@@ -48,12 +55,20 @@ __all__ = [
     "CopilotPlan",
     "CopilotReplay",
     "CopilotStart",
+    "CopyAction",
+    "CopyFollow",
+    "CopyFollows",
+    "CopyLog",
+    "CopyLogEntry",
+    "CopyReferralAttach",
+    "CopyReferralOffer",
     "CostLeg",
     "CreatorDashboard",
     "CreatorDay",
     "CreatorTotals",
     "CuratedWallet",
     "CuratedWallets",
+    "DepositCraft",
     "ExitSnapshot",
     "FeeEvent",
     "FeeRates",
@@ -63,6 +78,10 @@ __all__ = [
     "FleetBatchItem",
     "FleetRow",
     "Follow",
+    "FollowLeader",
+    "FollowOffer",
+    "FollowState",
+    "FollowStatus",
     "Follows",
     "FundItem",
     "FundPlan",
@@ -71,14 +90,33 @@ __all__ = [
     "HandleCheck",
     "Health",
     "HealthChecks",
+    "JupiterChallenge",
+    "JupiterSession",
     "LastWeek",
     "Leaderboard",
+    "LeaderboardPrivacy",
     "LeaderboardRow",
     "LinkRevoked",
+    "LogsCleared",
     "Mandate",
+    "MarkedTx",
+    "MyFollow",
+    "MyFollowing",
     "MyPoints",
+    "NotCopied",
     "Notification",
     "NotifySettings",
+    "OpenPosition",
+    "OrderBatch",
+    "OrderBatchItem",
+    "OrderCancel",
+    "OrderCreated",
+    "OrderPlan",
+    "PeopleBoard",
+    "PeopleList",
+    "Person",
+    "PersonBoardRow",
+    "PersonPositions",
     "PointsEntry",
     "PointsLeaderboard",
     "PointsSeason",
@@ -91,11 +129,18 @@ __all__ = [
     "PortfolioPosition",
     "PortfolioSeriesPoint",
     "Position",
+    "Prepared",
     "Preset",
+    "PresetRank",
+    "Privacy",
+    "PrivacySettings",
+    "Profile",
     "ProofAction",
     "PublicAgent",
     "PublicLink",
     "PublicReferral",
+    "PushSettings",
+    "PushTest",
     "RangeCost",
     "RangeHistory",
     "RangePoint",
@@ -108,8 +153,15 @@ __all__ = [
     "ReferralTier",
     "ReferralTierStep",
     "RiskEvent",
+    "SocialFeed",
+    "StrandedPositions",
+    "TelegramShared",
+    "TelegramStatus",
     "TimeInRange",
     "TokenAmount",
+    "TopCalls",
+    "TrackedLp",
+    "TrackedLps",
     "TrackedWalletRef",
     "Transaction",
     "UnreadCount",
@@ -117,7 +169,9 @@ __all__ = [
     "WalletActivity",
     "WalletEvent",
     "WalletFeed",
+    "WalletFollow",
     "WalletLeg",
+    "WalletPnl",
     "WalletSource",
     "WeekPrize",
     "WeekStanding",
@@ -125,6 +179,7 @@ __all__ = [
     "WhoAmI",
     "Withdrawal",
     "XAccount",
+    "XAccountCard",
     "XAuthor",
     "XCaller",
     "XCallers",
@@ -143,41 +198,6 @@ __all__ = [
     "XTokenRef",
     "XTrending",
     "XTrendingToken",
-    "OrderPlan",
-    "JupiterChallenge",
-    "JupiterSession",
-    "DepositCraft",
-    "OrderCreated",
-    "OrderCancel",
-    "OrderBatchItem",
-    "OrderBatch",
-    "FollowLeader",
-    "FollowOffer",
-    "NotCopied",
-    "FollowStatus",
-    "CopyFollow",
-    "CopyFollows",
-    "WalletFollow",
-    "CopyLogEntry",
-    "CopyLog",
-    "CopyReferralOffer",
-    "CopyReferralAttach",
-    "BatchOutcome",
-    "BatchResult",
-    "Prepared",
-    "MarkedTx",
-    "StrandedPositions",
-    "CallPreview",
-    "Call",
-    "PushSettings",
-    "PushTest",
-    "CardLook",
-    "LeaderboardPrivacy",
-    "AgentVisibility",
-    "LogsCleared",
-    "TelegramStatus",
-    "TelegramShared",
-    "PresetRank",
 ]
 
 T = TypeVar("T", bound="Model")
@@ -403,8 +423,12 @@ class PonkPerks(Model):
     managed_agent_fee: Optional[FeeRates] = None
     api_agent_fee: Optional[FeeRates] = None
     non_custodial_agent_fee: Optional[FeeRates] = None
+    #: The one-time activation fee on an agent's first open: 1%, or 0.5% for
+    #: a wallet holding 1,000,000 $PONK.
+    activation_fee: Optional[FeeRates] = None
 
     _ALIASES: ClassVar[Mapping[str, str]] = {
+        "activation_fee": "activationFee",
         "threshold_ui": "thresholdUi",
         "balance_ui": "balanceUi",
         "shortfall_ui": "shortfallUi",
@@ -417,6 +441,7 @@ class PonkPerks(Model):
         "managed_agent_fee": FeeRates,
         "api_agent_fee": FeeRates,
         "non_custodial_agent_fee": FeeRates,
+        "activation_fee": FeeRates,
     }
 
 
@@ -2468,6 +2493,10 @@ class FeeEvent(Model):
     error_message: Optional[str] = None
     created_at: Optional[str] = None
     confirmed_at: Optional[str] = None
+    #: What the fee was charged on: `activation` (an agent's one-time fee on
+    #: the capital of its first open), `manual_lp` or `telegram_lp` (a manual
+    #: position's yield), or `None` for an agent's yield fee.
+    source: Optional[str] = None
 
 
 @dataclass
@@ -2982,3 +3011,379 @@ class PresetRank(Model):
     rows: Optional[List[Any]] = None
     reasons: Optional[Any] = None
     cached: Optional[bool] = None
+
+
+# --------------------------------------------------------------------------
+# People: profiles, follows, the Following feed and the people board
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class Person(Model):
+    """A Ponk account as other people see it.
+
+    `key` is its profile link (`/u/<key>`): the @handle, a shown wallet, or a
+    `t-<owner_key>` tag for a public account with neither. `None` for a
+    private account. `usd_hidden` is true when the owner shows sizes and P&L
+    as percentages only.
+    """
+
+    key: Optional[str] = None
+    owner_key: Optional[str] = None
+    name: Optional[str] = None
+    handle: Optional[str] = None
+    display_name: Optional[str] = None
+    wallet: Optional[str] = None
+    avatar_version: Optional[int] = None
+    is_public: Optional[bool] = None
+    usd_hidden: Optional[bool] = None
+    #: On a followers or following list: when the follow started.
+    followed_at: Optional[str] = None
+
+
+@dataclass
+class Profile(Model):
+    """A public profile (`/u/<key>`). Every claimed @handle and every /r/ code
+    opens one. A private account's profile carries only its handle, bio, X and
+    picture: no agents, no wallet, no figures. `social` holds the follower and
+    following counts."""
+
+    key: Optional[str] = None
+    label: Optional[str] = None
+    is_public: Optional[bool] = None
+    owner_key: Optional[str] = None
+    handle: Optional[str] = None
+    display_name: Optional[str] = None
+    wallet: Optional[str] = None
+    wallet_verified: Optional[bool] = None
+    bio: Optional[str] = None
+    x_handle: Optional[str] = None
+    avatar_version: Optional[int] = None
+    joined: Optional[str] = None
+    agents: Optional[List[Any]] = None
+    agents_unavailable: Optional[str] = None
+    min_rank_days: Optional[int] = None
+    activity: Optional[List[Any]] = None
+    social: Optional[Any] = None
+
+
+@dataclass
+class PeopleList(Model):
+    """Followers or following of one person. Private accounts are counted in
+    `private_count`, never listed. `hidden` is true when the list belongs to a
+    private account, so only `total` is shown. Page with `next_cursor`."""
+
+    people: Optional[List[Person]] = None
+    private_count: Optional[int] = None
+    total: Optional[int] = None
+    next_cursor: Optional[str] = None
+    hidden: Optional[bool] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"people": (Person,)}
+
+
+@dataclass
+class FollowState(Model):
+    """Your follow of one person. `private` is true when they are private:
+    nothing they do is shown until they go public."""
+
+    key: Optional[str] = None
+    following: Optional[bool] = None
+    followers: Optional[int] = None
+    notify_telegram: Optional[bool] = None
+    notify_push: Optional[bool] = None
+    muted: Optional[bool] = None
+    private: Optional[bool] = None
+
+
+@dataclass
+class MyFollow(Person):
+    notify_telegram: Optional[bool] = None
+    notify_push: Optional[bool] = None
+    muted: Optional[bool] = None
+    last_active_at: Optional[str] = None
+
+
+@dataclass
+class MyFollowing(Model):
+    """Everyone you follow (private accounts included) plus the shared agents
+    you follow one by one, by slug."""
+
+    people: Optional[List[MyFollow]] = None
+    agents: Optional[List[str]] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"people": (MyFollow,)}
+
+
+@dataclass
+class CopyAction(Model):
+    """What Copy does for a feed row or position: `agent` (copy the shared
+    agent's config), `mirror` (Copy LP the wallet), `open_same` (one open of the
+    same pool and range), `trade` (open the token) or `none`."""
+
+    mode: Optional[str] = None
+    slug: Optional[str] = None
+    wallet: Optional[str] = None
+    venue: Optional[str] = None
+    pool: Optional[str] = None
+    mint: Optional[str] = None
+    range_lo: Optional[float] = None
+    range_hi: Optional[float] = None
+    edge_lo: Optional[int] = None
+    edge_hi: Optional[int] = None
+
+
+@dataclass
+class ActivityRow(Model):
+    """One row of the Following feed or a person's activity: an agent open,
+    rebalance or exit, a manual LP move, a call, or a swap (only when the owner
+    shares swaps). `size_usd` and `pnl_usd` are `None` when the owner hides
+    dollars (`usd_hidden`); `size_rounded` and `time_rounded` say a figure was
+    coarsened to protect a hidden wallet."""
+
+    id: Optional[int] = None
+    kind: Optional[str] = None
+    #: Who did it, and the verb the site prints ("Opened", "Exited", ...).
+    actor: Optional[Person] = None
+    verb: Optional[str] = None
+    agent_slug: Optional[str] = None
+    call_id: Optional[str] = None
+    venue: Optional[str] = None
+    pool: Optional[str] = None
+    token_x_mint: Optional[str] = None
+    token_y_mint: Optional[str] = None
+    range_lo: Optional[float] = None
+    range_hi: Optional[float] = None
+    range_width_pct: Optional[float] = None
+    size_usd: Optional[float] = None
+    size_rounded: Optional[bool] = None
+    pnl_usd: Optional[float] = None
+    pnl_pct: Optional[float] = None
+    usd_hidden: Optional[bool] = None
+    unavailable: Optional[str] = None
+    position: Optional[str] = None
+    signature: Optional[str] = None
+    count: Optional[int] = None
+    first_at: Optional[str] = None
+    at: Optional[str] = None
+    time_rounded: Optional[bool] = None
+    copy: Optional[CopyAction] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"actor": Person, "copy": CopyAction}
+
+
+@dataclass
+class SocialFeed(Model):
+    """A page of activity, newest first. For your Following feed `following`
+    and `following_private` count the people you follow and how many of them
+    are private (their rows never appear). Page with `next_cursor`."""
+
+    rows: Optional[List[ActivityRow]] = None
+    next_cursor: Optional[str] = None
+    following: Optional[int] = None
+    following_private: Optional[int] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"rows": (ActivityRow,)}
+
+
+@dataclass
+class OpenPosition(Model):
+    """One open position on a person's profile, from an agent (`source`
+    `agent`) or a manual LP (`lp`), on Meteora, Orca or Raydium."""
+
+    source: Optional[str] = None
+    agent_slug: Optional[str] = None
+    venue: Optional[str] = None
+    pool: Optional[str] = None
+    token_x_mint: Optional[str] = None
+    token_y_mint: Optional[str] = None
+    value_usd: Optional[float] = None
+    value_rounded: Optional[bool] = None
+    pnl_usd: Optional[float] = None
+    pnl_pct: Optional[float] = None
+    in_range: Optional[bool] = None
+    position: Optional[str] = None
+    copy: Optional[CopyAction] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"copy": CopyAction}
+
+
+@dataclass
+class PersonPositions(Model):
+    """A person's open positions. `scope` is `all`, `shared_agents` (agents
+    shared by link only) or `private` (nothing listed)."""
+
+    positions: Optional[List[OpenPosition]] = None
+    scope: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"positions": (OpenPosition,)}
+
+
+@dataclass
+class PersonBoardRow(Model):
+    """One person on the people board. `rank` is `None` with an
+    `unranked_reason` (for example under $100 deployed in the window)."""
+
+    rank: Optional[int] = None
+    person: Optional[Person] = None
+    pnl_usd: Optional[float] = None
+    roi_pct: Optional[float] = None
+    vs_hodl_pct: Optional[float] = None
+    fees_earned_usd: Optional[float] = None
+    drawdown_pct: Optional[float] = None
+    positions: Optional[int] = None
+    followers: Optional[int] = None
+    usd_hidden: Optional[bool] = None
+    unranked_reason: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"person": Person}
+
+
+@dataclass
+class PeopleBoard(Model):
+    """The people board: Ponk accounts ranked over `window` (`24h`, `7d`,
+    `30d`) by `sort` (`pnl`, `roi`, ...). `basis` says what the figures cover."""
+
+    window: Optional[str] = None
+    sort: Optional[str] = None
+    rows: Optional[List[PersonBoardRow]] = None
+    basis: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"rows": (PersonBoardRow,)}
+
+
+@dataclass
+class PrivacySettings(Model):
+    """The privacy switches. `is_public` is the one that matters: a public
+    account can be found and followed, and its positions, agents and results
+    show. Under it, `show_wallet` prints the wallet, `show_usd` shows dollar
+    amounts (off: percentages only) and `share_swaps` puts swaps in followers'
+    feeds. A private account may still rank its agents anonymously
+    (`rank_anon`)."""
+
+    is_public: Optional[bool] = None
+    show_wallet: Optional[bool] = None
+    show_usd: Optional[bool] = None
+    share_swaps: Optional[bool] = None
+    rank_anon: Optional[bool] = None
+
+
+@dataclass
+class Privacy(Model):
+    """Your privacy: the switches (`settings`), whether the one-time "Keep
+    public or make private" prompt is due (`needs_ack`), and what a row of
+    yours carries right now (`profile_key`, `owner_key`)."""
+
+    settings: Optional[PrivacySettings] = None
+    saved: Optional[bool] = None
+    activity_ack: Optional[bool] = None
+    needs_ack: Optional[bool] = None
+    creator_handle: Optional[str] = None
+    handle: Optional[str] = None
+    wallet: Optional[str] = None
+    owner_key: Optional[str] = None
+    named_key: Optional[str] = None
+    anon_key: Optional[str] = None
+    profile_key: Optional[str] = None
+    avatar_version: Optional[int] = None
+    agents: Optional[int] = None
+    agents_hidden: Optional[int] = None
+    visible: Optional[bool] = None
+    show_name: Optional[bool] = None
+    show_wallet: Optional[bool] = None
+    display_name: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"settings": PrivacySettings}
+
+
+# --------------------------------------------------------------------------
+# Wallet Tracker P&L and tracked LPs, X account cards, Top calls
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class WalletPnl(Model):
+    """Trading P&L per token for any wallet, from its swaps. `tokens` rows
+    carry buys, sells, cost, proceeds, realized and unrealized P&L;
+    `basisComplete` is false when the history did not reach the first buy, so
+    the cost basis is partial. Unpriced values are `None`, never zero."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    address: Optional[str] = None
+    tokens: Optional[List[Any]] = None
+    summary: Optional[Any] = None
+    sol_usd: Optional[float] = None
+    balances_read: Optional[bool] = None
+    transactions_read: Optional[int] = None
+    read_at: Optional[str] = None
+
+
+@dataclass
+class TrackedLp(Model):
+    """One open LP position of a tracked wallet: `wallet` (address, label,
+    source) and `position` (venue, pool, range, value, fees and P&L)."""
+
+    wallet: Optional[Any] = None
+    position: Optional[Any] = None
+
+
+@dataclass
+class TrackedLps(Model):
+    """Open LP positions of the curated wallets on Meteora, Orca and Raydium.
+    Only wallets with an LP move in the last 30 days are read."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    scope: Optional[str] = None
+    rows: Optional[List[TrackedLp]] = None
+    total: Optional[int] = None
+    wallets_read: Optional[int] = None
+    wallets_failed: Optional[int] = None
+    wallets_lp_active: Optional[int] = None
+    read_at: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"rows": (TrackedLp,)}
+
+
+@dataclass
+class XAccountCard(Model):
+    """One X account's caller card over `days`: calls, priced and scored
+    calls, median 1h and 24h multiples, best, hit rate, median peak, 2x rate,
+    first calls, posting rate, median detection latency, rank and recent calls."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    days: Optional[int] = None
+    account: Optional[Any] = None
+    calls: Optional[int] = None
+    priced_calls: Optional[int] = None
+    median1h: Optional[float] = None
+    median24h: Optional[float] = None
+    best: Optional[float] = None
+    hit_rate: Optional[float] = None
+    scored24h: Optional[int] = None
+    median_peak: Optional[float] = None
+    x2_rate: Optional[float] = None
+    peaked: Optional[int] = None
+    ranked: Optional[bool] = None
+    first_calls: Optional[int] = None
+    posts24h: Optional[int] = None
+    median_latency_secs: Optional[int] = None
+    rank: Optional[int] = None
+    recent: Optional[List[Any]] = None
+    computed_at: Optional[str] = None
+
+    _ALIASES: ClassVar[Mapping[str, str]] = {"x2_rate": "x2Rate"}
+
+
+@dataclass
+class TopCalls(Model):
+    """The best calls of the last `days`, Ponk and X, ranked by their
+    multiple since the call, computed from real prices."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    days: Optional[int] = None
+    calls: Optional[List[Any]] = None
+    computed_at: Optional[str] = None
