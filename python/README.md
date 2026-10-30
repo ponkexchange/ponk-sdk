@@ -184,7 +184,8 @@ key can move your funds home. It cannot move them anywhere else.
 
 ## The mandate expires
 
-A mandate carries a hard expiry, 30 days by default in the app. Lapsing is a
+A mandate carries a hard expiry, 365 days by default in the app (30, 90 or
+180 when you pick them). Lapsing is a
 clock fact with nothing on chain to mark it: the agent keeps running and every
 signature it asks for is denied, so it quietly stops compounding, claiming and
 recentering with its funds still deployed. Read the expiry instead of waiting
@@ -222,8 +223,11 @@ if m is not None:
   as "nothing reached the chain" and `error_message` for why.
 * A lapsed mandate never traps funds. `withdraw` and `exit` deliberately
   bypass it and keep working after expiry.
-* ponk also sends `mandate_expiring` (from five days ahead) and
-  `mandate_expired` notifications. A webhook registered from a signed-in
+* `mandates()` reads every autonomous agent's mandate at once, the most
+  urgent first, with `renew_all_url`: one page where your wallet signs every
+  renewal in turn.
+* ponk also reminds at 7 days, 2 days and on expiry (`mandate_expiring` and
+  `mandate_expired` notifications). A webhook registered from a signed-in
   session receives them; see [Webhooks](#webhooks).
 
 ## Methods
@@ -260,6 +264,7 @@ if m is not None:
 | `agent_decisions(id, hours=None, limit=None)` | `GET /v1/agents/{id}/decisions`, raw JSON | `read` |
 | `agent_wallet(id)` | `GET /v1/agents/{id}/wallet` | `read` |
 | `agent_mandate(id)` | `GET /v1/agents/{id}/mandate` | `read` |
+| `mandates()` | `GET /v1/agents/mandates` | `read` |
 | `list_positions()` | `GET /v1/positions` | `read` |
 | `list_logs(limit)` | `GET /v1/logs` (limit 1 to 500, default 100) | `read` |
 | `get_public_link(id)` | `GET /v1/agents/{id}/public-link` | `read` |
@@ -434,9 +439,8 @@ for e in ponk.list_fees():
 
 Every claimed @handle and every /r/ code opens a public profile. Follow a
 person and their agent, LP, call and (when they share them) swap activity
-lands in your Following feed, with a Copy action on each row. Private accounts
-are counted on lists, never named, and show nothing but their handle, bio, X
-and picture.
+lands in your Following feed, with a Copy action on each row. Every account
+is public.
 
 ```python
 p = ponk.profile("@kader")                     # no key needed
@@ -450,20 +454,29 @@ for row in ponk.following_feed(kinds="agents").rows:
 
 for r in ponk.people_board(window="7d").rows:  # the people board, no key
     print(r.rank, r.person.name, r.pnl_usd, r.roi_pct, r.vs_hodl_pct)
+
+page = ponk.people_search("ch")                # @handle, /r/ code or name, from
+while page.people:                             # the first letter, 20 a page
+    for hit in page.people:
+        print(hit.display_name, hit.handle, hit.followers)
+    if not page.next_cursor:
+        break
+    page = ponk.people_search("ch", cursor=page.next_cursor)
+
+for r in ponk.recommended_people(limit=5).people:   # who to follow, no key
+    print(r.name, r.reason)
+for r in ponk.similar_people("kader").people:       # traders like this one
+    print(r.name, r.reason)
+for r in ponk.my_recommended().people:              # for your account
+    print(r.name, r.reasons)
+ponk.dismiss_recommended(r.key)                     # never suggest again
 ```
 
 ## Privacy
 
-One switch decides it: public or private. Under a public account,
-`show_wallet` prints the wallet, `show_usd` shows dollar amounts (off:
-percentages only) and `share_swaps` puts swaps in followers' feeds.
-
-```python
-print(ponk.privacy().settings)
-ponk.set_privacy(is_public=True, show_wallet=False, show_usd=True, share_swaps=False)
-```
-
-`leaderboard_privacy` and `set_leaderboard_privacy` still work for one release.
+Every Ponk account is public since 0.11.0's server release (2026-10-29).
+`privacy`, `set_privacy` and `answer_privacy_prompt` still answer, with the
+public state, so older code keeps running; writes are accepted and ignored.
 
 ## Wallet Tracker P&L, tracked LPs, X caller cards and Top calls
 
@@ -504,13 +517,26 @@ ponk.copilot_stop_fleet(start.fleet_id)         # managed exit of this fleet's a
 Amounts are SOL, exactly as typed: "$500", "half my sol" or "20% of my wallet"
 are refused, never converted. A fleet is 1 to 8 agents on Meteora DLMM pools
 only. Name a token by symbol ("jup pools") or by its mint; a symbol is
-resolved to a mint and an ambiguous one is refused with a sentence asking
-for the mint. `plan.can_start` turns true once the replay is done, and
+resolved to a mint. An ambiguous or unverified symbol is refused with
+`refusal["suggestions"]`, the tokens carrying it with their mints, most liquid
+first, so you can put the one you mean into the sentence. `plan.can_start` turns true once the replay is done, and
 `plan.plan["totals"]["ponk_fee_bps"]` is the Ponk fee on fees earned for this
 wallet. After a start, `copilot_fleet(...).funding` lists what is left to fund
 or approve with a fresh `sign_url`, and `.exit` names any agent whose exit
 failed; `copilot_stop_fleet` on a stopping fleet retries only those. The replay is
 one past window beside holding, not a forecast.
+
+## Changes in 0.11.0
+
+* **People search.** `people_search(q, cursor=None)` (`PeopleSearch`,
+  `SearchHit`), no key.
+* **Who to follow.** `recommended_people`, `similar_people` (no key),
+  `my_recommended`, `dismiss_recommended` (`Recommendations`,
+  `RecommendedPerson`).
+* **Mandates.** `mandates()` (`Mandates`, `MandateRow`) with `renew_all_url`.
+* **Pool checks are advice.** `create_agent(..., accept_pool_risk=True)`.
+* **Copilot.** Leg `warnings` and refusal `suggestions` for new tokens.
+* Every account is public: the privacy methods answer the public state.
 
 ## Changes in 0.10.0
 

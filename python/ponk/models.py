@@ -99,6 +99,8 @@ __all__ = [
     "LinkRevoked",
     "LogsCleared",
     "Mandate",
+    "MandateRow",
+    "Mandates",
     "MarkedTx",
     "MyFollow",
     "MyFollowing",
@@ -114,9 +116,13 @@ __all__ = [
     "OrderPlan",
     "PeopleBoard",
     "PeopleList",
+    "PeopleSearch",
     "Person",
     "PersonBoardRow",
     "PersonPositions",
+    "RecommendedPerson",
+    "Recommendations",
+    "SearchHit",
     "PointsEntry",
     "PointsLeaderboard",
     "PointsSeason",
@@ -646,6 +652,32 @@ class Mandate(Model):
     max_slippage_bps: Optional[int] = None
     pool_allowlist: List[str] = field(default_factory=list)
     withdrawal_address: Optional[str] = None
+
+
+@dataclass
+class MandateRow(Model):
+    """One autonomous agent's mandate on the `mandates()` list. `state` is
+    `active`, `expiring`, `expired` or `none`; `renew_url` opens this agent's
+    renewal with its previous terms preselected."""
+
+    agent_id: Optional[str] = None
+    name: Optional[str] = None
+    state: Optional[str] = None
+    expires_at: Optional[Any] = None
+    seconds_remaining: Optional[int] = None
+    renew_url: Optional[str] = None
+
+
+@dataclass
+class Mandates(Model):
+    """Every autonomous agent's mandate, the most urgent first."""
+
+    expiring_within_days: Optional[int] = None
+    needs_renewal: Optional[int] = None
+    renew_all_url: Optional[str] = None
+    rows: Optional[List[MandateRow]] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"rows": (MandateRow,)}
 
 
 @dataclass
@@ -2086,7 +2118,12 @@ class CopilotPlan(Model):
     `ponk_fee_holder_bps`), `fleet_stop`, `notes`, `skipped` (each pool
     looked at and not used, with its reason) and `resolved_tokens` (each
     token you named and the mint it was resolved to). The copilot plans
-    Meteora DLMM pools only. `can_start` is true only for a ready start plan
+    Meteora DLMM, Orca and Raydium pools. A leg on a pool your sentence named
+    that is below the pool checks carries `warnings` (one sentence each);
+    starting the plan accepts them. A `refusal` with code `unverified_token`
+    or `ambiguous_token` carries `suggestions`: the tokens with that symbol
+    (`typed`, `mint`, `symbol`, `name`, `liquidity_usd`, `verified`), most
+    liquid first; put a mint into your sentence to plan it. `can_start` is true only for a ready start plan
     with at least one leg whose 30 day replay is done. An expired plan
     carries `refusal` with code `plan_expired`. `poll_after_ms` is set while
     something is still moving.
@@ -3080,6 +3117,45 @@ class PeopleList(Model):
     hidden: Optional[bool] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"people": (Person,)}
+
+
+@dataclass
+class SearchHit(Person):
+    """One person a search found, with their follower count."""
+
+    followers: Optional[int] = None
+
+
+@dataclass
+class PeopleSearch(Model):
+    """A page of a people search. `next_cursor` is `None` on the last page."""
+
+    people: Optional[List[SearchHit]] = None
+    next_cursor: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"people": (SearchHit,)}
+
+
+@dataclass
+class RecommendedPerson(Person):
+    """Someone to follow. `reason` is the strongest reason as one line;
+    `reasons` holds every one, strongest first, each `{"kind", "text"}` with
+    kind `followed_by`, `same_pool`, `same_token`, `top`, `rising` or
+    `caller`."""
+
+    followers: Optional[int] = None
+    reason: Optional[str] = None
+    reasons: Optional[List[Any]] = None
+
+
+@dataclass
+class Recommendations(Model):
+    """Who to follow, strongest first, and `basis`: the signals ranked."""
+
+    people: Optional[List[RecommendedPerson]] = None
+    basis: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"people": (RecommendedPerson,)}
 
 
 @dataclass

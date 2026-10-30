@@ -3,6 +3,35 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.11.0 (2026-10-29)
+
+Added, in the Python client (the Rust client stays at 0.7.0):
+
+- **People search.** `people_search(q, cursor=None)`: accounts by @handle
+  (the @ is optional), creator handle, /r/ code or display name, from the
+  first letter, twenty a page, each with its follower count. No key needed.
+- **Who to follow.** `recommended_people` (no key), `similar_people(key)`,
+  `my_recommended` and `dismiss_recommended(key)`, each person with the
+  reason they are suggested.
+- **Every mandate at once.** `mandates()`: each autonomous agent's mandate
+  state (`active`, `expiring`, `expired`, `none`) with its renew link, and
+  `renew_all_url` to sign every renewal on one page.
+- **Deploy past the pool checks.** `create_agent(..., accept_pool_risk=True)`
+  (and `accept_pool_risk` on a `create_agents` element) creates the agent on a
+  pool the deploy gate calls young, thin, quiet or unsettled, after you have
+  read its reason.
+- **Copilot.** A plan that names a new token keeps its pools below the checks
+  with `warnings` on each leg, and an `unverified_token` or `ambiguous_token`
+  refusal carries `suggestions` (mints, most liquid first). Documented on
+  `CopilotPlan`; the fields arrive in `plan` and `refusal` as before.
+
+Changed:
+
+- Every account is public. `privacy`, `set_privacy` and `answer_privacy_prompt`
+  answer the public state and the server ignores their writes.
+- Any account can post a call on any token; a position earns the Holder mark.
+- The app's default mandate is 365 days (was 30).
+
 ## 0.10.0 (2026-10-28)
 
 Added, in the Python client (the Rust client stays at 0.7.0):

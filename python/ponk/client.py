@@ -45,8 +45,8 @@ control; this client never signs and never asks for a private key.
 The mandate expires, and that is the failure to design for
 ---------------------------------------------------------
 
-A mandate carries a hard expiry, and the grant the app asks you to sign runs 30
-days by default. Lapsing is a pure clock fact: no transaction and nothing on
+A mandate carries a hard expiry, and the grant the app asks you to sign runs
+365 days by default (30, 90 or 180 when you pick them). Lapsing is a pure clock fact: no transaction and nothing on
 chain marks it. The agent keeps running and every signature it asks for is
 denied, so what you see from here is an agent that quietly stopped
 compounding, claiming and recentering with its funds still deployed. The
@@ -61,10 +61,12 @@ symptom is silence, not an exception. Four consequences for your code:
 * Read the expiry, do not infer it. `agent_mandate(agent_id)` returns the
   live mandate with `expires_at`, `status` (`active` or `expired`) and a
   server-computed `seconds_remaining` that goes negative once it has lapsed.
-  It raises `PonkNotFoundError` when the agent has no mandate at all. ponk
-  also sends `mandate_expiring` (from five days ahead) and `mandate_expired`
-  notifications, which a webhook registered from a signed-in session
-  receives.
+  It raises `PonkNotFoundError` when the agent has no mandate at all.
+  `mandates()` reads every autonomous agent's mandate at once, the ones that
+  need renewing first, with the one link that renews them all. ponk also
+  reminds at 7 days, 2 days and on expiry (`mandate_expiring` and
+  `mandate_expired` notifications, which a webhook registered from a
+  signed-in session receives).
 * Turning autonomy off does not revoke the mandate. `set_autonomous(id,
   False)` stops autonomous signing but leaves the mandate in place, so a
   later `set_autonomous(id, True)` re-arms it for as long as it is unexpired.
@@ -130,6 +132,9 @@ from .models import (
     Leaderboard,
     LinkRevoked,
     Mandate,
+    Mandates,
+    PeopleSearch,
+    Recommendations,
     MyPoints,
     PointsLeaderboard,
     PonkPerks,
@@ -518,6 +523,37 @@ class PonkClient:
             self._request("GET", "/public/people/{0}/positions".format(_seg(key.lstrip("@"))))
         )
 
+    def people_search(self, q: str, cursor: Optional[str] = None) -> PeopleSearch:
+        """`GET /public/people-search?q=&cursor=`. Ponk accounts by @handle
+        (the @ is optional), creator handle, /r/ code or display name, from the
+        first letter, case-insensitive.
+
+        An exact handle ranks first, then names that start with `q`, then names
+        that contain it, the most followed first. Twenty a page: pass
+        `next_cursor` back as `cursor`. No key needed.
+        """
+        return PeopleSearch.from_dict(
+            self._request("GET", "/public/people-search", params={"q": q, "cursor": cursor})
+        )
+
+    def recommended_people(self, limit: Optional[int] = None) -> Recommendations:
+        """`GET /public/social/recommended?limit=`. Who to follow, with the
+        reason for each, for a reader with no account. `limit` is 1 to 30
+        (default 10). `my_recommended` is the same for your own account."""
+        return Recommendations.from_dict(
+            self._request("GET", "/public/social/recommended", params={"limit": limit})
+        )
+
+    def similar_people(self, key: str, limit: Optional[int] = None) -> Recommendations:
+        """`GET /public/people/{key}/similar?limit=`. Traders like this one:
+        the same pools in the last 30 days, and the people this person's
+        followers also follow. Never the person themself."""
+        return Recommendations.from_dict(
+            self._request(
+                "GET", "/public/people/{0}/similar".format(_seg(key.lstrip("@"))), params={"limit": limit}
+            )
+        )
+
     def people_board(
         self, window: Optional[str] = None, sort: Optional[str] = None, limit: Optional[int] = None
     ) -> PeopleBoard:
@@ -811,6 +847,18 @@ class PonkClient:
             self._request("GET", "/v1/agents/{0}/mandate".format(_seg(agent_id)))
         )
 
+    def mandates(self) -> Mandates:
+        """`GET /v1/agents/mandates`. Every autonomous agent's mandate, the
+        ones that need renewing first.
+
+        Each row's `state` is `active`, `expiring` (inside
+        `expiring_within_days`), `expired` or `none` (never signed), with its
+        own `renew_url`. `renew_all_url` is the one page where your wallet signs
+        every renewal in turn, `None` when nothing needs it. Reads only: a
+        mandate is never extended without your wallet's signature.
+        """
+        return Mandates.from_dict(self._request("GET", "/v1/agents/mandates"))
+
     def list_positions(self) -> List[Position]:
         """`GET /v1/positions`. Every LP position the wallet holds.
 
@@ -935,6 +983,7 @@ class PonkClient:
         pool_address: Optional[str] = None,
         position_address: Optional[str] = None,
         dry_run: bool,
+        accept_pool_risk: bool = False,
     ) -> Agent:
         """`POST /v1/agents`. Create an agent.
 
@@ -968,6 +1017,13 @@ class PonkClient:
         Its config may carry a bin step filter, `min_bin_step` and
         `max_bin_step` (each 1 to 1000, max at least min), so the screener only
         enters pools inside that band.
+
+        The deploy gate refuses a pool that is young (under 30 days), thin
+        (under $50K liquidity), quiet (under $10K 24h volume) or unsettled (a
+        100% move) with a 422 that names the reason. Those checks are advice:
+        `accept_pool_risk=True` creates the agent on that pool anyway, after
+        you have read the reason. Anything that would make the transaction
+        itself fail still refuses.
         """
         if not isinstance(dry_run, bool):
             raise TypeError(
@@ -987,6 +1043,8 @@ class PonkClient:
             body["pool_address"] = pool_address
         if position_address is not None:
             body["position_address"] = position_address
+        if accept_pool_risk:
+            body["accept_pool_risk"] = True
         return Agent.from_dict(self._request("POST", "/v1/agents", body=body))
 
     def pause_agent(self, agent_id: str) -> Agent:
@@ -1243,6 +1301,22 @@ class PonkClient:
             self._request("DELETE", "/v1/people/{0}/follow".format(_seg(key.lstrip("@"))))
         )
 
+    def my_recommended(self, limit: Optional[int] = None) -> Recommendations:
+        """`GET /v1/social/recommended?limit=`. Who to follow, for your
+        account: also ranked by who the people you follow follow, leaving out
+        who you already follow or dismissed."""
+        return Recommendations.from_dict(
+            self._request("GET", "/v1/social/recommended", params={"limit": limit})
+        )
+
+    def dismiss_recommended(self, key: str) -> Dict[str, Any]:
+        """`POST /v1/social/recommended/{key}/dismiss`. Never suggest this
+        person again. Answers `{"key", "dismissed": true}`. Needs a `trade`
+        key."""
+        return self._request(
+            "POST", "/v1/social/recommended/{0}/dismiss".format(_seg(key.lstrip("@")))
+        )
+
     def my_following(self) -> MyFollowing:
         """`GET /v1/me/following`. Everyone you follow, private accounts
         included, plus the shared agents you follow one by one."""
@@ -1380,7 +1454,8 @@ class PonkClient:
         """`POST /v1/agents/batch`. Create many agents in one call.
 
         Each element is a `create_agent` body (`name`, `dex`, `strategy`,
-        `config`, `pool_address`, `dry_run`). `wallet_address` may be left
+        `config`, `pool_address`, `dry_run`, and `accept_pool_risk` to deploy
+        past the pool checks). `wallet_address` may be left
         out: the server fills in the key's own wallet, the only value a create
         accepts. Each agent is created on its own through the same handler as
         `create_agent`, so one bad pool refuses only that item.
@@ -2776,8 +2851,10 @@ class PonkClient:
         return CallPreview.from_dict(self._request("GET", "/v1/calls/preview", params={"mint": mint}))
 
     def post_call(self, mint: str, text: str) -> Call:
-        """`POST /v1/calls`. Post a Ponk Call. The server reads your position from chain
-        and stores what it found. Needs a `trade` key."""
+        """`POST /v1/calls`. Post a Ponk Call on any token. The server reads your
+        position from chain: holding it earns the call the Holder mark, and no
+        position is needed to call. One call per token every 6 hours. Needs a
+        `trade` key."""
         return Call.from_dict(self._request("POST", "/v1/calls", body={"mint": mint, "text": text}))
 
     def delete_call(self, call_id: str) -> Any:
@@ -2844,8 +2921,8 @@ class PonkClient:
         )
 
     def privacy(self) -> Privacy:
-        """`GET /v1/me/privacy`. Your privacy: public or private, and the
-        switches under it (show wallet, show dollar amounts, share swaps)."""
+        """`GET /v1/me/privacy`. Since 2026-10-29 every Ponk account is
+        public, so this answers the public state. Kept for older code."""
         return Privacy.from_dict(self._request("GET", "/v1/me/privacy"))
 
     def set_privacy(
@@ -2857,10 +2934,9 @@ class PonkClient:
         share_swaps: bool = False,
         rank_anon: bool = True,
     ) -> Privacy:
-        """`PUT /v1/me/privacy`. Set every switch at once. A private account
-        (`is_public=False`) shows nothing but its handle, bio, X and picture,
-        and `rank_anon` keeps its agents on the board with no name. Needs a
-        `trade` key."""
+        """`PUT /v1/me/privacy`. Every account is public since 2026-10-29: the
+        server accepts this body, ignores it and answers the public state. Kept
+        so older code does not break. Needs a `trade` key."""
         body = {
             "is_public": bool(is_public),
             "show_wallet": bool(show_wallet),
@@ -2871,9 +2947,9 @@ class PonkClient:
         return Privacy.from_dict(self._request("PUT", "/v1/me/privacy", body=body))
 
     def answer_privacy_prompt(self, keep_public: bool) -> Privacy:
-        """`POST /v1/me/privacy/ack`. Answer the one-time prompt an account
-        that was public before the new privacy model sees: keep public, or make
-        private. Needs a `trade` key."""
+        """`POST /v1/me/privacy/ack`. The prompt it answered no longer exists;
+        the server accepts and ignores it and answers the public state. Needs a
+        `trade` key."""
         return Privacy.from_dict(
             self._request("POST", "/v1/me/privacy/ack", body={"keep_public": bool(keep_public)})
         )

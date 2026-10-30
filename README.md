@@ -303,7 +303,10 @@ A 504 `outcome_unknown` on a create or confirm means it may have landed: read
 ponk.follow_person("kader")
 for row in ponk.following_feed().rows:
     print(row.actor.name, row.verb, row.pool, row.copy.mode)
-print(ponk.privacy().settings)          # public or private, and its switches
+for hit in ponk.people_search("@ka").people:   # by handle, /r/ code or name, no key
+    print(hit.display_name, "@" + (hit.handle or ""), hit.followers)
+for r in ponk.recommended_people().people:    # who to follow, with why
+    print(r.name, r.reason)
 ```
 
 ## Copy and follow live
