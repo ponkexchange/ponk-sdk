@@ -1760,6 +1760,710 @@ impl Client {
         self.post("/v1/presets/rank", Some(request), self.timeout).await
     }
 
+    // -- people and the social graph (0.10.0) --------------------------------
+
+    /// `GET /public/people/{key}`. A public profile.
+    ///
+    /// `key` is an @handle (with or without the @), any /r/ referral code, a
+    /// shown wallet, or a `t-<owner_key>` tag. A private account answers with
+    /// its handle, bio, X and picture only. 404 for a key that names nothing
+    /// public. No key needed.
+    pub async fn profile(&self, key: &str) -> Result<Profile> {
+        self.get(&format!("/public/people/{}", seg(key.trim_start_matches('@'))))
+            .await
+    }
+
+    /// `GET /public/people/{key}/followers`. Who follows this person. Private
+    /// followers are counted, never named. Page with `next_cursor`.
+    pub async fn followers(&self, key: &str, cursor: Option<&str>) -> Result<PeopleList> {
+        self.get(&with_query(
+            &format!("/public/people/{}/followers", seg(key.trim_start_matches('@'))),
+            &[("cursor", cursor.map(str::to_string))],
+        ))
+        .await
+    }
+
+    /// `GET /public/people/{key}/following`. Who this person follows.
+    pub async fn following(&self, key: &str, cursor: Option<&str>) -> Result<PeopleList> {
+        self.get(&with_query(
+            &format!("/public/people/{}/following", seg(key.trim_start_matches('@'))),
+            &[("cursor", cursor.map(str::to_string))],
+        ))
+        .await
+    }
+
+    /// `GET /public/people/{key}/activity`. One person's agent, LP, call and
+    /// (when they share them) swap activity, newest first.
+    ///
+    /// `kinds` is `all`, `agents`, `lp`, `swaps` or `calls`; `pnl_only` keeps
+    /// closes and exits with a PnL.
+    pub async fn person_activity(
+        &self,
+        key: &str,
+        cursor: Option<&str>,
+        kinds: Option<&str>,
+        pnl_only: bool,
+    ) -> Result<SocialFeed> {
+        self.get(&with_query(
+            &format!("/public/people/{}/activity", seg(key.trim_start_matches('@'))),
+            &[
+                ("cursor", cursor.map(str::to_string)),
+                ("kinds", kinds.map(str::to_string)),
+                ("pnl", pnl_only.then(|| "true".to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /public/people/{key}/positions`. A person's open positions on
+    /// Meteora, Orca and Raydium, each with its Copy action.
+    pub async fn person_positions(&self, key: &str) -> Result<PersonPositions> {
+        self.get(&format!("/public/people/{}/positions", seg(key.trim_start_matches('@'))))
+            .await
+    }
+
+    /// `GET /public/people-search?q=&cursor=`. Ponk accounts by @handle (the @
+    /// is optional), creator handle, /r/ code or display name, from the first
+    /// letter, case-insensitive. Twenty a page: pass `next_cursor` back as
+    /// `cursor`. No key needed.
+    pub async fn people_search(&self, q: &str, cursor: Option<&str>) -> Result<PeopleSearch> {
+        self.get(&with_query(
+            "/public/people-search",
+            &[("q", Some(q.to_string())), ("cursor", cursor.map(str::to_string))],
+        ))
+        .await
+    }
+
+    /// `GET /public/social/recommended?limit=`. Who to follow, with the reason
+    /// for each, for a reader with no account. `limit` is 1 to 30 (default
+    /// 10). [`my_recommended`] is the same for your own account.
+    ///
+    /// [`my_recommended`]: Client::my_recommended
+    pub async fn recommended_people(&self, limit: Option<i64>) -> Result<Recommendations> {
+        self.get(&with_query(
+            "/public/social/recommended",
+            &[("limit", limit.map(|n| n.to_string()))],
+        ))
+        .await
+    }
+
+    /// `GET /public/people/{key}/similar?limit=`. Traders like this one: the
+    /// same pools in the last 30 days, and the people this person's followers
+    /// also follow. Never the person themself.
+    pub async fn similar_people(&self, key: &str, limit: Option<i64>) -> Result<Recommendations> {
+        self.get(&with_query(
+            &format!("/public/people/{}/similar", seg(key.trim_start_matches('@'))),
+            &[("limit", limit.map(|n| n.to_string()))],
+        ))
+        .await
+    }
+
+    /// `GET /public/people-leaderboard`. Ponk accounts ranked over `window`
+    /// (`24h`, `7d`, `30d`) by PnL, with ROI and vs HODL beside it.
+    pub async fn people_board(
+        &self,
+        window: Option<&str>,
+        sort: Option<&str>,
+        limit: Option<i64>,
+    ) -> Result<PeopleBoard> {
+        self.get(&with_query(
+            "/public/people-leaderboard",
+            &[
+                ("window", window.map(str::to_string)),
+                ("sort", sort.map(str::to_string)),
+                ("limit", limit.map(|n| n.to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /public/social/feed`. Activity of every public account, newest
+    /// first (the signed-out Following tab).
+    pub async fn live_feed(
+        &self,
+        cursor: Option<&str>,
+        kinds: Option<&str>,
+        pnl_only: bool,
+    ) -> Result<SocialFeed> {
+        self.get(&with_query(
+            "/public/social/feed",
+            &[
+                ("cursor", cursor.map(str::to_string)),
+                ("kinds", kinds.map(str::to_string)),
+                ("pnl", pnl_only.then(|| "true".to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `POST /v1/people/{key}/follow`. Follow a person: their agent, LP, call
+    /// and shared swap activity lands in your Following feed. Idempotent. Needs
+    /// a `trade` key.
+    pub async fn follow_person(&self, key: &str) -> Result<FollowState> {
+        self.post(
+            &format!("/v1/people/{}/follow", seg(key.trim_start_matches('@'))),
+            None::<&()>,
+            self.timeout,
+        )
+        .await
+    }
+
+    /// `DELETE /v1/people/{key}/follow`. Stop following. Idempotent. Needs a
+    /// `trade` key.
+    pub async fn unfollow_person(&self, key: &str) -> Result<FollowState> {
+        self.delete(&format!("/v1/people/{}/follow", seg(key.trim_start_matches('@'))))
+            .await
+    }
+
+    /// `GET /v1/social/recommended?limit=`. Who to follow, for your account:
+    /// also ranked by who the people you follow follow, leaving out who you
+    /// already follow or dismissed.
+    pub async fn my_recommended(&self, limit: Option<i64>) -> Result<Recommendations> {
+        self.get(&with_query(
+            "/v1/social/recommended",
+            &[("limit", limit.map(|n| n.to_string()))],
+        ))
+        .await
+    }
+
+    /// `POST /v1/social/recommended/{key}/dismiss`. Never suggest this person
+    /// again. Answers `{"key", "dismissed": true}`. Needs a `trade` key.
+    pub async fn dismiss_recommended(&self, key: &str) -> Result<serde_json::Value> {
+        self.post(
+            &format!("/v1/social/recommended/{}/dismiss", seg(key.trim_start_matches('@'))),
+            None::<&()>,
+            self.timeout,
+        )
+        .await
+    }
+
+    /// `GET /v1/me/following`. Everyone you follow, private accounts included,
+    /// plus the shared agents you follow one by one.
+    pub async fn my_following(&self) -> Result<MyFollowing> {
+        self.get("/v1/me/following").await
+    }
+
+    /// `GET /v1/social/feed`. Your Following feed, newest first. `kinds` is
+    /// `all`, `agents`, `lp`, `swaps` or `calls`; `pnl_only` keeps closes and
+    /// exits with a PnL. Page with `next_cursor`.
+    pub async fn following_feed(
+        &self,
+        cursor: Option<&str>,
+        kinds: Option<&str>,
+        pnl_only: bool,
+    ) -> Result<SocialFeed> {
+        self.get(&with_query(
+            "/v1/social/feed",
+            &[
+                ("cursor", cursor.map(str::to_string)),
+                ("kinds", kinds.map(str::to_string)),
+                ("pnl", pnl_only.then(|| "true".to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// Stream social activity over Server-Sent Events, indefinitely.
+    ///
+    /// `GET /public/social/stream` (`public = true`, no key) or
+    /// `GET /me/social/stream` (`public = false`, your following graph, needs
+    /// a key). The returned [`SocialStream`] yields one [`StreamEvent`] per
+    /// frame from [`SocialStream::next_event`]: one `ready` on connect, a `row`
+    /// for each event as it happens, and a `resync` when the server wants the
+    /// client to reload from [`live_feed`]. The 15s keep-alive comment is
+    /// skipped.
+    ///
+    /// The API exposes no WebSocket: Server-Sent Events are the transport, and
+    /// this is a one-way read. The request carries no timeout, so it stays open
+    /// until the server closes it or the connection drops; reconnection is the
+    /// caller's, and after a `resync` read [`live_feed`] to fill the gap before
+    /// streaming again.
+    ///
+    /// [`live_feed`]: Client::live_feed
+    pub async fn stream_social(&self, public: bool) -> Result<SocialStream> {
+        let path = if public {
+            "/public/social/stream"
+        } else {
+            "/me/social/stream"
+        };
+        let mut request = self
+            .http
+            .get(self.url(path))
+            .header(reqwest::header::ACCEPT, "text/event-stream");
+        if public {
+            // The public stream is anonymous: no key is sent even when the
+            // client holds one.
+        } else {
+            match &self.api_key {
+                Some(key) => request = request.bearer_auth(key),
+                None => {
+                    return Err(Error::Api(ApiError {
+                        status: 401,
+                        code: "no_api_key".to_string(),
+                        message: "stream_social(public = false) needs an API key: construct the \
+                                  client with one. Nothing was sent."
+                            .to_string(),
+                        request_id: None,
+                        body: None,
+                    }))
+                }
+            }
+        }
+        let response = request.send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(Error::Api(ApiError::from_body(status.as_u16(), Some(body))));
+        }
+        Ok(SocialStream::new(response))
+    }
+
+    // -- calls, X account cards and wallet PnL (0.10.0) ----------------------
+
+    /// `GET /public/calls/{id}`. One call with its outcome so far. Public.
+    pub async fn call(&self, call_id: &str) -> Result<serde_json::Value> {
+        self.get(&format!("/public/calls/{}", seg(call_id))).await
+    }
+
+    /// `GET /public/x/account/{handle}`. One X account's caller card: calls,
+    /// multiples, hit rate, 2x rate, first calls, rank and recent calls over
+    /// `days` (default 30). Public.
+    pub async fn x_account(&self, handle: &str, days: Option<i64>) -> Result<XAccountCard> {
+        self.get(&with_query(
+            &format!("/public/x/account/{}", seg(handle.trim_start_matches('@'))),
+            &[("days", days.map(|n| n.to_string()))],
+        ))
+        .await
+    }
+
+    /// `GET /public/calls/top`. The best calls of the last `days` (default 7,
+    /// up to 90), ranked by their multiple since the call. `source` is `ponk`
+    /// (default), `x` or `all`. Public.
+    pub async fn top_calls(
+        &self,
+        days: Option<i64>,
+        limit: Option<i64>,
+        source: Option<&str>,
+    ) -> Result<TopCalls> {
+        self.get(&with_query(
+            "/public/calls/top",
+            &[
+                ("days", days.map(|n| n.to_string())),
+                ("limit", limit.map(|n| n.to_string())),
+                ("source", source.map(str::to_string)),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /public/wallets/{address}/pnl`. Trading PnL per token for any
+    /// wallet, from its swaps. No key needed.
+    pub async fn wallet_pnl(&self, address: &str) -> Result<WalletPnl> {
+        self.get(&format!("/public/wallets/{}/pnl", seg(address))).await
+    }
+
+    /// `GET /public/wallets/positions`. Open LP positions of the curated
+    /// wallets on Meteora, Orca and Raydium.
+    pub async fn tracked_lps(&self) -> Result<TrackedLps> {
+        self.get("/public/wallets/positions").await
+    }
+
+    // -- the copilot (0.8.0) -------------------------------------------------
+
+    /// `POST /copilot/parse`. Read one sentence with ponk's closed grammar.
+    ///
+    /// Pure on the server: reads nothing, writes nothing. `ok` false carries
+    /// `refusal`. No language model runs anywhere. Needs an API key.
+    pub async fn copilot_parse(&self, text: &str) -> Result<CopilotParse> {
+        self.post("/copilot/parse", Some(&serde_json::json!({ "text": text })), self.timeout)
+            .await
+    }
+
+    /// `POST /copilot/plans`. Start building a plan from one sentence.
+    ///
+    /// Returns at once with `state` `building`; poll [`copilot_get_plan`] (or
+    /// use [`copilot_wait`]). Creates nothing and moves nothing. Plans last 15
+    /// minutes.
+    ///
+    /// [`copilot_get_plan`]: Client::copilot_get_plan
+    /// [`copilot_wait`]: Client::copilot_wait
+    pub async fn copilot_plan(&self, text: &str) -> Result<CopilotPlan> {
+        self.post("/copilot/plans", Some(&serde_json::json!({ "text": text })), self.timeout)
+            .await
+    }
+
+    /// `GET /copilot/plans/{id}`. The plan, its progress and its replay.
+    pub async fn copilot_get_plan(&self, plan_id: &str) -> Result<CopilotPlan> {
+        self.get(&format!("/copilot/plans/{}", seg(plan_id))).await
+    }
+
+    /// `POST /copilot/plans/{id}/replay`. Replay every leg over the last 30
+    /// days. The replay runs on the server; poll the plan until `replay.state`
+    /// is `done`. It is one past window, not a forecast.
+    pub async fn copilot_replay(&self, plan_id: &str) -> Result<CopilotPlan> {
+        self.post(
+            &format!("/copilot/plans/{}/replay", seg(plan_id)),
+            None::<&()>,
+            self.timeout,
+        )
+        .await
+    }
+
+    /// Poll a plan until it is ready (and replayed, with `replay = true`) or
+    /// refused.
+    ///
+    /// Starts the replay once the plan is ready when it has not run. Returns
+    /// the last read when `timeout` passes, so check `state` and `replay.state`
+    /// rather than assuming it finished. `sleep` is how this waits between
+    /// polls: pass your runtime's timer, for example
+    /// `|d| tokio::time::sleep(d)`, which keeps this crate free of a runtime
+    /// of its own.
+    pub async fn copilot_wait<S, Fut>(
+        &self,
+        plan_id: &str,
+        replay: bool,
+        timeout: Duration,
+        mut sleep: S,
+    ) -> Result<CopilotPlan>
+    where
+        S: FnMut(Duration) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut asked = false;
+        loop {
+            let plan = self.copilot_get_plan(plan_id).await?;
+            let rstate = plan.replay.as_ref().and_then(|r| r.state.clone());
+            if plan.state.as_deref() == Some("ready")
+                && replay
+                && rstate.as_deref() == Some("idle")
+                && !asked
+            {
+                asked = true;
+                self.copilot_replay(plan_id).await?;
+                continue;
+            }
+            let settled = matches!(plan.state.as_deref(), Some("refused") | Some("expired"))
+                || (plan.state.as_deref() == Some("ready")
+                    && (!replay || rstate.as_deref() == Some("done")));
+            if settled || std::time::Instant::now() >= deadline {
+                return Ok(plan);
+            }
+            let ms = plan.poll_after_ms.unwrap_or(2000).max(1000) as u64;
+            sleep(Duration::from_millis(ms)).await;
+        }
+    }
+
+    /// `POST /copilot/plans/{id}/start`. Create the agents and prepare the
+    /// funding.
+    ///
+    /// The agents are created in dry run, each with its own empty managed
+    /// wallet, and the funding comes back as UNSIGNED transfers from your
+    /// wallet plus `sign_url`, the ponk.exchange page where your wallet signs
+    /// them and then one custody mandate per agent. NOTHING MOVES until your
+    /// wallet signs; this client never signs. A plan starts at most once. Takes
+    /// the fund timeout.
+    pub async fn copilot_start(&self, plan_id: &str) -> Result<CopilotStart> {
+        self.post(
+            &format!("/copilot/plans/{}/start", seg(plan_id)),
+            None::<&()>,
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `GET /copilot/fleets`. Every fleet this wallet started from a plan.
+    pub async fn copilot_fleets(&self) -> Result<Vec<CopilotFleetSummary>> {
+        self.get("/copilot/fleets").await
+    }
+
+    /// `GET /copilot/fleets/{id}`. The fleet live: totals, the stop now, every
+    /// agent. USD figures the server could not price are `None`, never zero.
+    pub async fn copilot_fleet(&self, fleet_id: &str) -> Result<CopilotFleet> {
+        self.get(&format!("/copilot/fleets/{}", seg(fleet_id))).await
+    }
+
+    /// `POST /copilot/fleets/{id}/stop`. Close every agent in this fleet.
+    ///
+    /// Each agent is stopped, its position closed and its own wallet swept to
+    /// your linked wallet through the managed exit under the mandate you
+    /// signed; the destination cannot be named. On a fleet that is `stopping`
+    /// with failed exits, calling again retries ONLY those exits; on a stopped
+    /// fleet it answers 409. Takes the fund timeout.
+    pub async fn copilot_stop_fleet(&self, fleet_id: &str) -> Result<FleetBatch> {
+        self.post(
+            &format!("/copilot/fleets/{}/stop", seg(fleet_id)),
+            None::<&()>,
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `POST /copilot/fleets/{id}/stop-rule`. Make the fleet stop tighter.
+    ///
+    /// `drawdown_pct` is percent below what went in, 1 to 50. Only a tighter
+    /// (smaller) stop than the current one is accepted, and only while the
+    /// fleet is active: a looser one answers 422.
+    pub async fn copilot_tighten_stop(
+        &self,
+        fleet_id: &str,
+        drawdown_pct: f64,
+    ) -> Result<CopilotFleetSummary> {
+        self.post(
+            &format!("/copilot/fleets/{}/stop-rule", seg(fleet_id)),
+            Some(&serde_json::json!({ "drawdown_pct": drawdown_pct })),
+            self.timeout,
+        )
+        .await
+    }
+
+    // -- agents: exit with to-SOL, mandates, copy (0.9.0/0.10.0) -------------
+
+    /// `POST /v1/agents/{id}/exit`. The full stop, with the exit-to-SOL choice.
+    ///
+    /// Like [`exit`], but `to_sol` sets whether the closed position's leftover
+    /// tokens are swapped to SOL before the sweep (ponk fee 0.2% of the swapped
+    /// amount). `Some(false)` sends them as they are, no swap, no fee; `None`
+    /// lets the agent's own `exit_to_sol` setting decide (default true). Read
+    /// the result like [`exit`]: a mandate denial is a 200 with a failed status
+    /// and no signature, not an `Err`. Takes the fund timeout.
+    ///
+    /// [`exit`]: Client::exit
+    pub async fn exit_agent(&self, agent_id: &str, to_sol: Option<bool>) -> Result<Withdrawal> {
+        let body = match to_sol {
+            Some(b) => serde_json::json!({ "to_sol": b }),
+            None => serde_json::json!({}),
+        };
+        self.post(
+            &format!("/v1/agents/{}/exit", seg(agent_id)),
+            Some(&body),
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `GET /v1/agents/mandates`. Every autonomous agent's mandate, the ones
+    /// that need renewing first. Reads only: a mandate is never extended
+    /// without your wallet's signature.
+    pub async fn mandates(&self) -> Result<Mandates> {
+        self.get("/v1/agents/mandates").await
+    }
+
+    /// `GET /v1/agents/{id}/exit-to-sol`. Whether this agent's exits swap
+    /// leftover tokens to SOL (default true).
+    pub async fn get_exit_to_sol(&self, agent_id: &str) -> Result<ExitToSol> {
+        self.get(&format!("/v1/agents/{}/exit-to-sol", seg(agent_id))).await
+    }
+
+    /// `POST /v1/agents/{id}/exit-to-sol`. Turn the exit-to-SOL swap on or off.
+    ///
+    /// Automatic exits (take-profit, stop-loss, price stop, drawdown kill,
+    /// bleed exit, custom kill rule, Degen Mode) honour it; a manual exit that
+    /// does not pass `to_sol` uses it. Moves no funds. Needs a `trade` key.
+    pub async fn set_exit_to_sol(&self, agent_id: &str, exit_to_sol: bool) -> Result<ExitToSol> {
+        self.post(
+            &format!("/v1/agents/{}/exit-to-sol", seg(agent_id)),
+            Some(&serde_json::json!({ "exit_to_sol": exit_to_sol })),
+            self.timeout,
+        )
+        .await
+    }
+
+    /// Copy a shared agent: [`create_agent`] from its public `copy` block.
+    ///
+    /// Reads the agent with [`public_agent`] first, then creates one that is
+    /// yours, on your wallet, with the same venue, pool, strategy and config;
+    /// nothing of the owner's is shared. `config_overrides`, when set, is
+    /// merged over the copied config (for example a narrower range). `dry_run`
+    /// is required, as in [`create_agent`]. 422 when the agent carries no copy
+    /// block to start from.
+    ///
+    /// [`create_agent`]: Client::create_agent
+    /// [`public_agent`]: Client::public_agent
+    pub async fn copy_agent(
+        &self,
+        slug: &str,
+        name: &str,
+        wallet_address: &str,
+        dry_run: bool,
+        config_overrides: Option<&serde_json::Value>,
+    ) -> Result<Agent> {
+        let source = self.public_agent(slug).await?;
+        let mut new_agent = source.copy.to_new_agent(name, wallet_address).ok_or_else(|| {
+            Error::Api(ApiError {
+                status: 422,
+                code: "no_copy_block".to_string(),
+                message: "that agent carries no copy block to start from".to_string(),
+                request_id: None,
+                body: None,
+            })
+        })?;
+        if let Some(overrides) = config_overrides.and_then(|v| v.as_object()) {
+            if let Some(config) = new_agent.config.as_object_mut() {
+                for (k, v) in overrides {
+                    config.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        new_agent.dry_run = Some(dry_run);
+        self.create_agent(&new_agent).await
+    }
+
+    // -- orders: sign-in and place in one call (0.7.0) -----------------------
+
+    /// Challenge, sign and verify in one call.
+    ///
+    /// `sign_message` takes Jupiter's challenge text and returns the wallet's
+    /// base58 ed25519 signature of its UTF-8 bytes. Your code signs; this
+    /// client never sees a key. Check the text says it authenticates the wallet
+    /// you expect before signing.
+    pub async fn orders_sign_in<F>(&self, sign_message: F) -> Result<JupiterSession>
+    where
+        F: FnOnce(&str) -> String,
+    {
+        let challenge = self.orders_challenge("message").await?;
+        let text = challenge.challenge.ok_or_else(|| {
+            Error::Api(ApiError {
+                status: 422,
+                code: "no_challenge".to_string(),
+                message: "Jupiter sent no challenge text".to_string(),
+                request_id: None,
+                body: None,
+            })
+        })?;
+        self.orders_verify_message(&sign_message(&text)).await
+    }
+
+    /// Craft the deposit, have your code sign it, create the order.
+    ///
+    /// `family` is `price` or `dca`. `body` is the create body WITHOUT the
+    /// deposit fields (see [`create_price_order`] / [`create_dca_order`]);
+    /// `inputAmount`, `inputMint`, `outputMint` and, for a price order,
+    /// `orderType` are read from it for the craft. `sign_transaction` takes the
+    /// UNSIGNED base64 deposit and returns it signed, base64. The crafted
+    /// amount and mint are checked against `body` before your signer is called,
+    /// so a mismatch refuses with code `deposit_mismatch` and nothing is
+    /// signed.
+    ///
+    /// [`create_price_order`]: Client::create_price_order
+    /// [`create_dca_order`]: Client::create_dca_order
+    pub async fn place_order<F>(
+        &self,
+        jupiter_session: &str,
+        family: &str,
+        body: &serde_json::Value,
+        sign_transaction: F,
+    ) -> Result<OrderCreated>
+    where
+        F: FnOnce(&str) -> String,
+    {
+        if family != "price" && family != "dca" {
+            return Err(Error::Api(ApiError {
+                status: 422,
+                code: "bad_order_family".to_string(),
+                message: "family must be 'price' or 'dca'".to_string(),
+                request_id: None,
+                body: None,
+            }));
+        }
+        let input_mint = json_str(body, "inputMint");
+        let output_mint = json_str(body, "outputMint");
+        let input_amount = json_str(body, "inputAmount");
+        let amount: u64 = input_amount.parse().map_err(|_| {
+            Error::Api(ApiError {
+                status: 422,
+                code: "bad_order_amount".to_string(),
+                message: "inputAmount must be base units as a string".to_string(),
+                request_id: None,
+                body: None,
+            })
+        })?;
+        let sub = if family == "price" {
+            match body.get("orderType") {
+                Some(serde_json::Value::String(s)) => Some(s.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let craft = self
+            .craft_order_deposit(
+                jupiter_session,
+                &input_mint,
+                &output_mint,
+                amount,
+                family,
+                sub.as_deref(),
+            )
+            .await?;
+        if craft.amount.as_deref() != Some(input_amount.as_str())
+            || craft.mint.as_deref() != Some(input_mint.as_str())
+        {
+            return Err(Error::Api(ApiError {
+                status: 422,
+                code: "deposit_mismatch".to_string(),
+                message: "Jupiter's deposit does not match this order. Nothing was signed."
+                    .to_string(),
+                request_id: None,
+                body: None,
+            }));
+        }
+        let signed = sign_transaction(craft.transaction.as_deref().unwrap_or(""));
+        let mut full = body.clone();
+        if let Some(obj) = full.as_object_mut() {
+            if let Some(id) = craft.request_id {
+                obj.insert("depositRequestId".to_string(), serde_json::Value::String(id));
+            }
+            obj.insert("depositSignedTx".to_string(), serde_json::Value::String(signed));
+        }
+        if family == "price" {
+            self.create_price_order(jupiter_session, &full).await
+        } else {
+            self.create_dca_order(jupiter_session, &full).await
+        }
+    }
+
+    // -- privacy (0.10.0) ----------------------------------------------------
+
+    /// `GET /v1/me/privacy`. Since 2026-10-29 every Ponk account is public, so
+    /// this answers the public state. Kept for older code.
+    pub async fn privacy(&self) -> Result<Privacy> {
+        self.get("/v1/me/privacy").await
+    }
+
+    /// `PUT /v1/me/privacy`. Every account is public since 2026-10-29: the
+    /// server accepts this body, ignores it and answers the public state. Kept
+    /// so older code does not break. Needs a `trade` key.
+    pub async fn set_privacy(
+        &self,
+        is_public: bool,
+        show_wallet: bool,
+        show_usd: bool,
+        share_swaps: bool,
+        rank_anon: bool,
+    ) -> Result<Privacy> {
+        let body = serde_json::json!({
+            "is_public": is_public,
+            "show_wallet": show_wallet,
+            "show_usd": show_usd,
+            "share_swaps": share_swaps,
+            "rank_anon": rank_anon,
+        });
+        self.put_json("/v1/me/privacy", &body).await
+    }
+
+    /// `POST /v1/me/privacy/ack`. The prompt it answered no longer exists; the
+    /// server accepts and ignores it and answers the public state. Needs a
+    /// `trade` key.
+    pub async fn answer_privacy_prompt(&self, keep_public: bool) -> Result<Privacy> {
+        self.post(
+            "/v1/me/privacy/ack",
+            Some(&serde_json::json!({ "keep_public": keep_public })),
+            self.timeout,
+        )
+        .await
+    }
+
     // -- transport ---------------------------------------------------------
 
     async fn put_json<B: Serialize + ?Sized, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
@@ -1969,6 +2673,95 @@ impl WalletFeedQuery {
             ("token", self.token.clone()),
             ("wallet", self.wallet.clone()),
         ]
+    }
+}
+
+/// A live Server-Sent Events stream from [`Client::stream_social`].
+///
+/// Call [`SocialStream::next_event`] in a loop: it awaits the next frame and
+/// returns one [`StreamEvent`], or `None` once the server closes the stream.
+/// The stream is a one-way read and holds its connection open, so iterating it
+/// blocks between events.
+#[derive(Debug)]
+pub struct SocialStream {
+    response: reqwest::Response,
+    buf: Vec<u8>,
+    event: String,
+    data: Vec<String>,
+}
+
+impl SocialStream {
+    fn new(response: reqwest::Response) -> Self {
+        SocialStream {
+            response,
+            buf: Vec::new(),
+            event: "message".to_string(),
+            data: Vec::new(),
+        }
+    }
+
+    /// Await the next event, or `None` when the stream ends.
+    ///
+    /// Parses the event-stream grammar: a blank line dispatches the frame just
+    /// read, a line beginning with a colon is a keep-alive comment, `event:`
+    /// sets the name and every `data:` line appends to the payload. The payload
+    /// is decoded as JSON, or wrapped as `{"raw": <text>}` when it is not JSON.
+    pub async fn next_event(&mut self) -> Result<Option<StreamEvent>> {
+        loop {
+            while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
+                let line_bytes: Vec<u8> = self.buf.drain(..=pos).collect();
+                let line = String::from_utf8_lossy(&line_bytes);
+                let line = line.trim_end_matches(['\r', '\n']);
+                if line.is_empty() {
+                    if !self.data.is_empty() {
+                        let event = std::mem::replace(&mut self.event, "message".to_string());
+                        let payload = self.data.join("\n");
+                        self.data.clear();
+                        return Ok(Some(StreamEvent {
+                            event,
+                            data: parse_sse_data(&payload),
+                        }));
+                    }
+                    self.event = "message".to_string();
+                    continue;
+                }
+                if line.starts_with(':') {
+                    continue;
+                }
+                let (field, value) = match line.split_once(':') {
+                    Some((f, v)) => (f, v.strip_prefix(' ').unwrap_or(v)),
+                    None => (line, ""),
+                };
+                match field {
+                    "event" => self.event = value.to_string(),
+                    "data" => self.data.push(value.to_string()),
+                    _ => {}
+                }
+            }
+            match self.response.chunk().await? {
+                Some(bytes) => self.buf.extend_from_slice(&bytes),
+                None => return Ok(None),
+            }
+        }
+    }
+}
+
+/// Decode one SSE data payload: JSON when it parses, else `{"raw": <text>}`.
+fn parse_sse_data(payload: &str) -> serde_json::Value {
+    if payload.is_empty() {
+        return serde_json::Value::Object(serde_json::Map::new());
+    }
+    serde_json::from_str(payload)
+        .unwrap_or_else(|_| serde_json::json!({ "raw": payload }))
+}
+
+/// Read a field of a JSON object as a string, stringifying a number. Absent or
+/// null fields read as empty, which the caller rejects.
+fn json_str(body: &serde_json::Value, key: &str) -> String {
+    match body.get(key) {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Null) | None => String::new(),
+        Some(other) => other.to_string(),
     }
 }
 

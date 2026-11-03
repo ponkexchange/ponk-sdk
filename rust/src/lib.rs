@@ -117,8 +117,8 @@ mod models;
 pub mod webhooks;
 
 pub use client::{
-    Client, ClientBuilder, WalletFeedQuery, XFeedQuery, DEFAULT_BASE_URL, DEFAULT_FUND_TIMEOUT,
-    DEFAULT_TIMEOUT, JUPITER_SESSION_HEADER,
+    Client, ClientBuilder, SocialStream, WalletFeedQuery, XFeedQuery, DEFAULT_BASE_URL,
+    DEFAULT_FUND_TIMEOUT, DEFAULT_TIMEOUT, JUPITER_SESSION_HEADER,
 };
 pub use error::{ApiError, Error, ErrorKind};
 pub use models::{
@@ -154,4 +154,11 @@ pub use models::{
     XAccount, XAuthor, XCaller, XCallers, XDirectory, XDirectoryEntry, XEvent, XEventPost, XFeed,
     XFeedItem, XFirstCall, XMetrics, XPost, XSource, XToken, XTokenMention, XTokenRef, XTrending,
     XTrendingToken,
+};
+pub use models::{
+    ActivityRow, CopilotFleet, CopilotFleetSummary, CopilotParse, CopilotPlan, CopilotReplay,
+    CopilotStart, CopyAction, ExitToSol, FollowState, MandateRow, Mandates, MyFollow, MyFollowing,
+    OpenPosition, PeopleBoard, PeopleList, PeopleSearch, Person, PersonBoardRow, PersonPositions,
+    Privacy, PrivacySettings, Profile, RecommendedPerson, Recommendations, SearchHit, SocialFeed,
+    StreamEvent, TopCalls, TrackedLp, TrackedLps, WalletPnl, XAccountCard,
 };

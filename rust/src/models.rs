@@ -2733,6 +2733,593 @@ pub struct PresetRank {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+// --------------------------------------------------------------------------
+// Mandates and the exit-to-SOL setting (0.9.0)
+// --------------------------------------------------------------------------
+
+/// One autonomous agent's mandate on the [`Mandates`] list. `state` is
+/// `active`, `expiring`, `expired` or `none`; `renew_url` opens this agent's
+/// renewal with its previous terms preselected.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct MandateRow {
+    pub agent_id: Option<String>,
+    pub name: Option<String>,
+    pub state: Option<String>,
+    /// RFC 3339, or `null` when the agent never signed one.
+    pub expires_at: Option<serde_json::Value>,
+    pub seconds_remaining: Option<i64>,
+    pub renew_url: Option<String>,
+}
+
+/// Every autonomous agent's mandate, the ones that need renewing first.
+///
+/// `renew_all_url` is the one page where your wallet signs every renewal in
+/// turn, `None` when nothing needs it. Reads only: a mandate is never extended
+/// without your wallet's signature.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Mandates {
+    pub expiring_within_days: Option<i64>,
+    pub needs_renewal: Option<i64>,
+    pub renew_all_url: Option<String>,
+    pub rows: Option<Vec<MandateRow>>,
+}
+
+/// An agent's exit-to-SOL setting (`/v1/agents/{id}/exit-to-sol`).
+///
+/// `exit_to_sol` true (the default): the agent's exits, the ones you start and
+/// the ones its own stops trigger, swap leftover tokens to SOL with ponk's
+/// 0.2% swap fee. False: tokens are kept as they are. `fee_line` is the
+/// sentence every exit confirm shows.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ExitToSol {
+    pub agent_id: Option<String>,
+    pub exit_to_sol: Option<bool>,
+    pub fee_line: Option<String>,
+}
+
+// --------------------------------------------------------------------------
+// The copilot (0.8.0)
+// --------------------------------------------------------------------------
+
+/// What ponk's closed grammar read from one sentence.
+///
+/// `ok` true carries `intent` and `echo`, the intent restated for the user to
+/// confirm. `ok` false carries `refusal` (a `code`, a sentence, the words not
+/// understood and example sentences that do parse). No language model runs
+/// anywhere.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopilotParse {
+    pub ok: Option<bool>,
+    pub intent: Option<serde_json::Value>,
+    pub echo: Option<String>,
+    pub refusal: Option<serde_json::Value>,
+}
+
+/// A plan's 30 day replay. `state` is `idle`, `running` or `done`.
+///
+/// `result` (when done) holds per-leg `legs` and fleet `totals` with
+/// `net_pnl_usd`, `hold_pnl_usd` and `net_vs_hold_usd` side by side, plus
+/// `statement`. It is one past window, not a forecast.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopilotReplay {
+    pub state: Option<String>,
+    pub done: Option<i64>,
+    pub total: Option<i64>,
+    pub result: Option<serde_json::Value>,
+}
+
+/// A plan: `state` is `building`, `ready`, `refused` or `expired`.
+///
+/// `plan` (when ready) is the server's plan verbatim. A `refusal` carries a
+/// `code`, a sentence and, for an unverified or ambiguous token, the
+/// `suggestions` to disambiguate with a mint. `can_start` is true only for a
+/// ready start plan with at least one leg whose 30 day replay is done.
+/// `poll_after_ms` is set while something is still moving.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopilotPlan {
+    pub plan_id: Option<String>,
+    pub state: Option<String>,
+    pub progress: Option<String>,
+    pub text: Option<String>,
+    pub created_at: Option<String>,
+    pub expires_in_secs: Option<i64>,
+    pub plan: Option<serde_json::Value>,
+    pub refusal: Option<serde_json::Value>,
+    pub replay: Option<CopilotReplay>,
+    pub can_start: Option<bool>,
+    pub poll_after_ms: Option<i64>,
+    pub signed_in: Option<bool>,
+}
+
+/// What a start created and what is left for your wallet to sign.
+///
+/// `created` is the create batch (one item per leg). `funding` is the UNSIGNED
+/// funding plan, `None` when nothing could be funded (then `next` says why).
+/// `sign_url` is the ponk.exchange page that signs the funding and then each
+/// mandate in `mandate_queue`. NOTHING MOVES until your wallet signs.
+/// `already_started` true means the plan was started before.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopilotStart {
+    pub fleet_id: Option<String>,
+    pub already_started: Option<bool>,
+    pub created: Option<FleetBatch>,
+    pub funding: Option<FundPlan>,
+    pub mandate_queue: Vec<String>,
+    pub sign_url: Option<String>,
+    pub next: Option<String>,
+    pub funding_state: Option<serde_json::Value>,
+}
+
+/// One fleet. `status` is `active`, `stopping` or `stopped`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopilotFleetSummary {
+    pub id: Option<String>,
+    pub intent_text: Option<String>,
+    pub status: Option<String>,
+    pub agents: Option<i64>,
+    pub stop_drawdown_pct: Option<f64>,
+    pub stop_armed: Option<bool>,
+    pub stop_reason: Option<String>,
+    pub stop_batch_id: Option<String>,
+    pub breach_count: Option<i64>,
+    pub last_eval: Option<serde_json::Value>,
+    pub last_eval_at: Option<String>,
+    pub stopped_at: Option<String>,
+    pub created_at: Option<String>,
+}
+
+/// A fleet live: totals, the stop evaluated now, and every agent.
+///
+/// `totals` carries value, cost basis and PnL over the same in-market agents
+/// the fleet stop counts, each `None` (never zero) when it cannot be valued.
+/// `stop_now` is the fleet stop evaluated on this read. `exit` (once the fleet
+/// is stopping) names every agent whose exit failed. `funding` is what the
+/// fleet still needs from your wallet.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopilotFleet {
+    pub fleet: Option<CopilotFleetSummary>,
+    pub stop_now: Option<serde_json::Value>,
+    pub totals: Option<serde_json::Value>,
+    pub rows: Vec<FleetRow>,
+    pub missing_agents: Vec<String>,
+    pub as_of: Option<String>,
+    pub poll_after_ms: Option<i64>,
+    pub exit: Option<serde_json::Value>,
+    pub funding: Option<serde_json::Value>,
+}
+
+// --------------------------------------------------------------------------
+// People and the social graph (0.10.0)
+// --------------------------------------------------------------------------
+
+/// A Ponk account as other people see it.
+///
+/// `key` is its profile link (`/u/<key>`): the @handle, a shown wallet, or a
+/// `t-<owner_key>` tag for a public account with neither. `None` for a private
+/// account. `usd_hidden` is true when the owner shows sizes and PnL as
+/// percentages only.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Person {
+    pub key: Option<String>,
+    pub owner_key: Option<String>,
+    pub name: Option<String>,
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+    pub wallet: Option<String>,
+    pub avatar_version: Option<i64>,
+    pub is_public: Option<bool>,
+    pub usd_hidden: Option<bool>,
+    /// On a followers or following list: when the follow started.
+    pub followed_at: Option<String>,
+}
+
+/// A public profile (`/u/<key>`). Every claimed @handle and every /r/ code
+/// opens one. A private account's profile carries only its handle, bio, X and
+/// picture: no agents, no wallet, no figures. `social` holds the follower and
+/// following counts.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Profile {
+    pub key: Option<String>,
+    pub label: Option<String>,
+    pub is_public: Option<bool>,
+    pub owner_key: Option<String>,
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+    pub wallet: Option<String>,
+    pub wallet_verified: Option<bool>,
+    pub bio: Option<String>,
+    pub x_handle: Option<String>,
+    pub avatar_version: Option<i64>,
+    pub joined: Option<String>,
+    pub agents: Option<Vec<serde_json::Value>>,
+    pub agents_unavailable: Option<String>,
+    pub min_rank_days: Option<i64>,
+    pub activity: Option<Vec<serde_json::Value>>,
+    pub social: Option<serde_json::Value>,
+}
+
+/// Followers or following of one person. Private accounts are counted in
+/// `private_count`, never listed. `hidden` is true when the list belongs to a
+/// private account, so only `total` is shown. Page with `next_cursor`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PeopleList {
+    pub people: Option<Vec<Person>>,
+    pub private_count: Option<i64>,
+    pub total: Option<i64>,
+    pub next_cursor: Option<String>,
+    pub hidden: Option<bool>,
+}
+
+/// One person a search found, with their follower count. Carries the same
+/// fields as [`Person`].
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct SearchHit {
+    pub key: Option<String>,
+    pub owner_key: Option<String>,
+    pub name: Option<String>,
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+    pub wallet: Option<String>,
+    pub avatar_version: Option<i64>,
+    pub is_public: Option<bool>,
+    pub usd_hidden: Option<bool>,
+    pub followed_at: Option<String>,
+    pub followers: Option<i64>,
+}
+
+/// A page of a people search. `next_cursor` is `None` on the last page.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PeopleSearch {
+    pub people: Option<Vec<SearchHit>>,
+    pub next_cursor: Option<String>,
+}
+
+/// Someone to follow. `reason` is the strongest reason as one line; `reasons`
+/// holds every one, strongest first, each `{"kind", "text"}`. Carries the same
+/// fields as [`Person`].
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct RecommendedPerson {
+    pub key: Option<String>,
+    pub owner_key: Option<String>,
+    pub name: Option<String>,
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+    pub wallet: Option<String>,
+    pub avatar_version: Option<i64>,
+    pub is_public: Option<bool>,
+    pub usd_hidden: Option<bool>,
+    pub followed_at: Option<String>,
+    pub followers: Option<i64>,
+    pub reason: Option<String>,
+    pub reasons: Option<Vec<serde_json::Value>>,
+}
+
+/// Who to follow, strongest first, and `basis`: the signals ranked.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Recommendations {
+    pub people: Option<Vec<RecommendedPerson>>,
+    pub basis: Option<String>,
+}
+
+/// Your follow of one person. `private` is true when they are private: nothing
+/// they do is shown until they go public.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FollowState {
+    pub key: Option<String>,
+    pub following: Option<bool>,
+    pub followers: Option<i64>,
+    pub notify_telegram: Option<bool>,
+    pub notify_push: Option<bool>,
+    pub muted: Option<bool>,
+    pub private: Option<bool>,
+}
+
+/// One account you follow. Carries the same fields as [`Person`], plus your
+/// notification switches for them.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct MyFollow {
+    pub key: Option<String>,
+    pub owner_key: Option<String>,
+    pub name: Option<String>,
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+    pub wallet: Option<String>,
+    pub avatar_version: Option<i64>,
+    pub is_public: Option<bool>,
+    pub usd_hidden: Option<bool>,
+    pub followed_at: Option<String>,
+    pub notify_telegram: Option<bool>,
+    pub notify_push: Option<bool>,
+    pub muted: Option<bool>,
+    pub last_active_at: Option<String>,
+}
+
+/// Everyone you follow (private accounts included) plus the shared agents you
+/// follow one by one, by slug.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct MyFollowing {
+    pub people: Option<Vec<MyFollow>>,
+    pub agents: Option<Vec<String>>,
+}
+
+/// What Copy does for a feed row or position: `agent` (copy the shared agent's
+/// config), `mirror` (Copy LP the wallet), `open_same` (one open of the same
+/// pool and range), `trade` (open the token) or `none`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CopyAction {
+    pub mode: Option<String>,
+    pub slug: Option<String>,
+    pub wallet: Option<String>,
+    pub venue: Option<String>,
+    pub pool: Option<String>,
+    pub mint: Option<String>,
+    pub range_lo: Option<f64>,
+    pub range_hi: Option<f64>,
+    pub edge_lo: Option<i64>,
+    pub edge_hi: Option<i64>,
+}
+
+/// One row of the Following feed or a person's activity: an agent open,
+/// rebalance or exit, a manual LP move, a call, or a swap (only when the owner
+/// shares swaps). `size_usd` and `pnl_usd` are `None` when the owner hides
+/// dollars (`usd_hidden`); `size_rounded` and `time_rounded` say a figure was
+/// coarsened to protect a hidden wallet.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ActivityRow {
+    pub id: Option<i64>,
+    pub kind: Option<String>,
+    /// Who did it.
+    pub actor: Option<Person>,
+    /// The verb the site prints ("Opened", "Exited", ...).
+    pub verb: Option<String>,
+    pub agent_slug: Option<String>,
+    pub call_id: Option<String>,
+    pub venue: Option<String>,
+    pub pool: Option<String>,
+    pub token_x_mint: Option<String>,
+    pub token_y_mint: Option<String>,
+    pub range_lo: Option<f64>,
+    pub range_hi: Option<f64>,
+    pub range_width_pct: Option<f64>,
+    pub size_usd: Option<f64>,
+    pub size_rounded: Option<bool>,
+    pub pnl_usd: Option<f64>,
+    pub pnl_pct: Option<f64>,
+    pub usd_hidden: Option<bool>,
+    pub unavailable: Option<String>,
+    pub position: Option<String>,
+    pub signature: Option<String>,
+    pub count: Option<i64>,
+    pub first_at: Option<String>,
+    pub at: Option<String>,
+    pub time_rounded: Option<bool>,
+    pub copy: Option<CopyAction>,
+}
+
+/// A page of activity, newest first. For your Following feed `following` and
+/// `following_private` count the people you follow and how many of them are
+/// private (their rows never appear). Page with `next_cursor`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct SocialFeed {
+    pub rows: Option<Vec<ActivityRow>>,
+    pub next_cursor: Option<String>,
+    pub following: Option<i64>,
+    pub following_private: Option<i64>,
+}
+
+/// One open position on a person's profile, from an agent (`source` `agent`)
+/// or a manual LP (`lp`), on Meteora, Orca or Raydium.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct OpenPosition {
+    pub source: Option<String>,
+    pub agent_slug: Option<String>,
+    pub venue: Option<String>,
+    pub pool: Option<String>,
+    pub token_x_mint: Option<String>,
+    pub token_y_mint: Option<String>,
+    pub value_usd: Option<f64>,
+    pub value_rounded: Option<bool>,
+    pub pnl_usd: Option<f64>,
+    pub pnl_pct: Option<f64>,
+    pub in_range: Option<bool>,
+    pub position: Option<String>,
+    pub copy: Option<CopyAction>,
+}
+
+/// A person's open positions. `scope` is `all`, `shared_agents` (agents shared
+/// by link only) or `private` (nothing listed).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PersonPositions {
+    pub positions: Option<Vec<OpenPosition>>,
+    pub scope: Option<String>,
+}
+
+/// One person on the people board. `rank` is `None` with an `unranked_reason`
+/// (for example under $100 deployed in the window).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PersonBoardRow {
+    pub rank: Option<i64>,
+    pub person: Option<Person>,
+    pub pnl_usd: Option<f64>,
+    pub roi_pct: Option<f64>,
+    pub vs_hodl_pct: Option<f64>,
+    pub fees_earned_usd: Option<f64>,
+    pub drawdown_pct: Option<f64>,
+    pub positions: Option<i64>,
+    pub followers: Option<i64>,
+    pub usd_hidden: Option<bool>,
+    pub unranked_reason: Option<String>,
+}
+
+/// The people board: Ponk accounts ranked over `window` (`24h`, `7d`, `30d`)
+/// by `sort` (`pnl`, `roi`, ...). `basis` says what the figures cover.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PeopleBoard {
+    pub window: Option<String>,
+    pub sort: Option<String>,
+    pub rows: Option<Vec<PersonBoardRow>>,
+    pub basis: Option<String>,
+}
+
+/// The privacy switches. Since 2026-10-29 every Ponk account is public, so the
+/// server reads this body, ignores it and answers the public state.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PrivacySettings {
+    pub is_public: Option<bool>,
+    pub show_wallet: Option<bool>,
+    pub show_usd: Option<bool>,
+    pub share_swaps: Option<bool>,
+    pub rank_anon: Option<bool>,
+}
+
+/// Your privacy: the switches (`settings`), whether the one-time prompt is due
+/// (`needs_ack`), and what a row of yours carries right now (`profile_key`,
+/// `owner_key`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Privacy {
+    pub settings: Option<PrivacySettings>,
+    pub saved: Option<bool>,
+    pub activity_ack: Option<bool>,
+    pub needs_ack: Option<bool>,
+    pub creator_handle: Option<String>,
+    pub handle: Option<String>,
+    pub wallet: Option<String>,
+    pub owner_key: Option<String>,
+    pub named_key: Option<String>,
+    pub anon_key: Option<String>,
+    pub profile_key: Option<String>,
+    pub avatar_version: Option<i64>,
+    pub agents: Option<i64>,
+    pub agents_hidden: Option<i64>,
+    pub visible: Option<bool>,
+    pub show_name: Option<bool>,
+    pub show_wallet: Option<bool>,
+    pub display_name: Option<String>,
+}
+
+// --------------------------------------------------------------------------
+// Wallet Tracker PnL and tracked LPs, X account cards, Top calls (0.10.0)
+// --------------------------------------------------------------------------
+
+/// Trading PnL per token for any wallet, from its swaps. `tokens` rows carry
+/// buys, sells, cost, proceeds, realized and unrealized PnL. Unpriced values
+/// are `None`, never zero.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WalletPnl {
+    pub address: Option<String>,
+    pub tokens: Option<Vec<serde_json::Value>>,
+    pub summary: Option<serde_json::Value>,
+    pub sol_usd: Option<f64>,
+    pub balances_read: Option<bool>,
+    pub transactions_read: Option<i64>,
+    pub read_at: Option<String>,
+}
+
+/// One open LP position of a tracked wallet: `wallet` (address, label, source)
+/// and `position` (venue, pool, range, value, fees and PnL).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TrackedLp {
+    pub wallet: Option<serde_json::Value>,
+    pub position: Option<serde_json::Value>,
+}
+
+/// Open LP positions of the curated wallets on Meteora, Orca and Raydium. Only
+/// wallets with an LP move in the last 30 days are read.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TrackedLps {
+    pub scope: Option<String>,
+    pub rows: Option<Vec<TrackedLp>>,
+    pub total: Option<i64>,
+    pub wallets_read: Option<i64>,
+    pub wallets_failed: Option<i64>,
+    pub wallets_lp_active: Option<i64>,
+    pub read_at: Option<String>,
+}
+
+/// One X account's caller card over `days`: calls, priced and scored calls,
+/// median 1h and 24h multiples, best, hit rate, median peak, 2x rate, first
+/// calls, posting rate, median detection latency, rank and recent calls.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XAccountCard {
+    pub days: Option<i64>,
+    pub account: Option<serde_json::Value>,
+    pub calls: Option<i64>,
+    pub priced_calls: Option<i64>,
+    pub median1h: Option<f64>,
+    pub median24h: Option<f64>,
+    pub best: Option<f64>,
+    pub hit_rate: Option<f64>,
+    pub scored24h: Option<i64>,
+    pub median_peak: Option<f64>,
+    /// The 2x rate, served as `x2Rate`.
+    pub x2_rate: Option<f64>,
+    pub peaked: Option<i64>,
+    pub ranked: Option<bool>,
+    pub first_calls: Option<i64>,
+    pub posts24h: Option<i64>,
+    pub median_latency_secs: Option<i64>,
+    pub rank: Option<i64>,
+    pub recent: Option<Vec<serde_json::Value>>,
+    pub computed_at: Option<String>,
+}
+
+/// The best calls of the last `days`, Ponk and X, ranked by their multiple
+/// since the call, computed from real prices.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TopCalls {
+    pub days: Option<i64>,
+    pub calls: Option<Vec<serde_json::Value>>,
+    pub computed_at: Option<String>,
+}
+
+/// One Server-Sent Event from a streaming endpoint.
+///
+/// `event` is the SSE event name and `data` the JSON payload the server sent
+/// with it. On the social stream: `ready` ({}) arrives once when the stream
+/// opens, `row` carries one social event as it happens, and `resync` ({}) asks
+/// the client to reload from [`Client::live_feed`] because it may have missed
+/// rows. Built by the client as events arrive, not decoded from one body.
+///
+/// [`Client::live_feed`]: crate::Client::live_feed
+#[derive(Debug, Clone)]
+pub struct StreamEvent {
+    pub event: String,
+    pub data: serde_json::Value,
+}
+
 #[cfg(test)]
 mod live_shape_tests {
     use super::*;

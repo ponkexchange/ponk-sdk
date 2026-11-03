@@ -5,7 +5,7 @@ Both clients carry the same version from 0.4.0 on. Python lives in
 
 ## 0.12.0 (2026-11-02)
 
-Added, in the Python client (the Rust client stays at 0.7.0):
+Added, in the Python client:
 
 - **Live social stream.** `stream_social()` opens `GET /public/social/stream`
   and yields a `StreamEvent` as each event happens, indefinitely: one `ready`
@@ -16,6 +16,25 @@ Added, in the Python client (the Rust client stays at 0.7.0):
   client parses the event stream with the standard library, so the Python
   client still has zero runtime dependencies. `examples/stream.py` prints the
   public feed as it moves.
+
+The Rust client caught up to the Python client at this version (it had stayed
+at 0.7.0 while the Python client moved through 0.8.0 to 0.11.0). It now has the
+copilot (`copilot_parse`, `copilot_plan`, `copilot_get_plan`, `copilot_replay`,
+`copilot_wait`, `copilot_start`, `copilot_fleets`, `copilot_fleet`,
+`copilot_stop_fleet`, `copilot_tighten_stop`), the people and social graph
+(`profile`, `followers`, `following`, `person_activity`, `person_positions`,
+`people_search`, `recommended_people`, `similar_people`, `people_board`,
+`live_feed`, `follow_person`, `unfollow_person`, `my_recommended`,
+`dismiss_recommended`, `my_following`, `following_feed`), the live social
+stream (`stream_social`, over a `SocialStream` that yields a `StreamEvent` per
+frame, parsed from the response body with no extra dependency), the privacy
+and exit-to-SOL methods (`privacy`, `set_privacy`, `answer_privacy_prompt`,
+`get_exit_to_sol`, `set_exit_to_sol`), the one-call order helpers
+(`orders_sign_in`, `place_order`), `exit_agent` with the to-SOL choice,
+`copy_agent`, `mandates`, `tracked_lps`, `top_calls`, `wallet_pnl`, `x_account`
+and `call`. `examples/stream.rs` prints the public feed as it moves. The one
+Python surface left out is `iter_fleet`, whose collected form is the existing
+`fleet_all`.
 
 ## 0.11.0 (2026-10-29)
 
