@@ -96,6 +96,7 @@ from .models import (
     Privacy,
     Profile,
     SocialFeed,
+    StreamEvent,
     TopCalls,
     TrackedLps,
     WalletPnl,
@@ -219,6 +220,36 @@ DEFAULT_TIMEOUT = 30.0
 DEFAULT_FUND_TIMEOUT = 180.0
 
 _USER_AGENT = "ponk-python/" + __version__
+
+
+def _iter_sse(response: Any) -> Iterator[tuple]:
+    """Parse a byte stream of Server-Sent Events into (event, data) frames.
+
+    Follows the event-stream grammar: a blank line dispatches the frame just
+    read, a line beginning with a colon is a comment (the 15s keep-alive),
+    ``event:`` sets the name and every ``data:`` line appends to the payload.
+    The default event name is ``message``. ``id`` and ``retry`` are ignored;
+    this stream sends neither.
+    """
+    event = "message"
+    data: List[str] = []
+    for raw in response:
+        line = raw.decode("utf-8", "replace").rstrip("\r\n")
+        if not line:
+            if data:
+                yield event, "\n".join(data)
+            event = "message"
+            data = []
+            continue
+        if line[0] == ":":
+            continue
+        field, _, value = line.partition(":")
+        if value[:1] == " ":
+            value = value[1:]
+        if field == "event":
+            event = value
+        elif field == "data":
+            data.append(value)
 
 
 class PonkClient:
@@ -579,6 +610,57 @@ class PonkClient:
         )
 
     # -- X Tracker, public -------------------------------------------------
+
+    def stream_social(
+        self, *, public: bool = True, timeout: Optional[float] = None
+    ) -> Iterator[StreamEvent]:
+        """Stream social activity over Server-Sent Events, indefinitely.
+
+        ``GET /public/social/stream`` (``public=True``, no key) or
+        ``GET /me/social/stream`` (``public=False``, your following graph,
+        needs a key). Yields a :class:`~ponk.models.StreamEvent` per frame: one
+        ``ready`` on connect, a ``row`` for each event as it happens, and a
+        ``resync`` when the server wants the client to reload from
+        :meth:`live_feed`. The 15s keep-alive comment is skipped.
+
+        The API exposes no WebSocket: Server-Sent Events are the transport, and
+        this is a one-way read. It is a long-lived generator, so iterating it
+        blocks between events. ``timeout`` is the idle timeout in seconds
+        (``None`` waits forever); exceeding it raises
+        :class:`~ponk.errors.PonkTransportError`. Reconnection is the caller's:
+        wrap the loop, and after a ``resync`` read :meth:`live_feed` to fill
+        the gap before streaming again.
+        """
+        path = "/public/social/stream" if public else "/me/social/stream"
+        url = self.base_url + path
+        headers = {"Accept": "text/event-stream", "User-Agent": _USER_AGENT}
+        if not public:
+            credential = self.session_token or self.api_key
+            if not credential:
+                raise PonkError(
+                    "stream_social(public=False) needs an API key or wallet "
+                    "session: construct the client with api_key= or "
+                    "session_token=. Nothing was sent."
+                )
+            headers["Authorization"] = "Bearer " + credential
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            response = self._opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            raise error_from_response(exc.code, _decode(exc.read())) from None
+        except urllib.error.URLError as exc:
+            raise PonkTransportError("GET {0} failed: {1}".format(url, exc.reason)) from exc
+        except socket.timeout as exc:
+            raise PonkTransportError("GET {0} timed out".format(url)) from exc
+        try:
+            for name, payload in _iter_sse(response):
+                try:
+                    body = json.loads(payload) if payload else {}
+                except ValueError:
+                    body = {"raw": payload}
+                yield StreamEvent(event=name, data=body)
+        finally:
+            response.close()
 
     def x_feed(
         self,

@@ -3,6 +3,20 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.12.0 (2026-11-02)
+
+Added, in the Python client (the Rust client stays at 0.7.0):
+
+- **Live social stream.** `stream_social()` opens `GET /public/social/stream`
+  and yields a `StreamEvent` as each event happens, indefinitely: one `ready`
+  on connect, a `row` per event, and a `resync` when the client should reload
+  from `live_feed`. `stream_social(public=False)` streams your own following
+  graph from `GET /me/social/stream` and needs a key. The transport is
+  Server-Sent Events, not a WebSocket: the API exposes no WebSocket, and the
+  client parses the event stream with the standard library, so the Python
+  client still has zero runtime dependencies. `examples/stream.py` prints the
+  public feed as it moves.
+
 ## 0.11.0 (2026-10-29)
 
 Added, in the Python client (the Rust client stays at 0.7.0):

@@ -161,6 +161,7 @@ __all__ = [
     "RiskEvent",
     "SocialFeed",
     "StrandedPositions",
+    "StreamEvent",
     "TelegramShared",
     "TelegramStatus",
     "TimeInRange",
@@ -3463,3 +3464,19 @@ class TopCalls(Model):
     days: Optional[int] = None
     calls: Optional[List[Any]] = None
     computed_at: Optional[str] = None
+
+
+@dataclass
+class StreamEvent(Model):
+    """One Server-Sent Event from a streaming endpoint.
+
+    ``event`` is the SSE event name and ``data`` the JSON payload the server
+    sent with it. On the social stream: ``ready`` ({}) arrives once when the
+    stream opens, ``row`` carries one social event as it happens, and
+    ``resync`` ({}) asks the client to reload from ``live_feed`` because it may
+    have missed rows. Built by the client as events arrive, not parsed from a
+    single response body.
+    """
+
+    event: Optional[str] = None
+    data: Optional[Mapping[str, Any]] = None

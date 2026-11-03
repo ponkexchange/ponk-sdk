@@ -322,6 +322,23 @@ for e in ponk.copy_log(agent.id).entries:
     print(e.outcome, e.reason)
 ```
 
+## Stream social activity live
+
+`live_feed()` is a snapshot; `stream_social()` is the same activity pushed as
+it happens, over Server-Sent Events (the API has no WebSocket). It is a
+long-lived generator with no key for the public stream:
+
+```python
+for event in ponk.stream_social():            # public=False streams your following graph, needs a key
+    if event.event == "resync":               # reload from live_feed() to fill the gap
+        continue
+    print(event.event, event.data)            # "ready" once, then a "row" per event
+```
+
+The Python client reads the event stream with the standard library, so it
+stays dependency-free. Reconnection is yours: wrap the loop and call again to
+resume. `examples/stream.py` is the whole thing.
+
 ## Run a self-custody agent from code
 
 A self-custody agent never holds a key of ours: it raises recommendations and
