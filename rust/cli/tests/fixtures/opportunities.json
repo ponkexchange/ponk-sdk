@@ -1,0 +1,71 @@
+{
+  "asOf": 1762246800000,
+  "servedAt": 1762246805000,
+  "pools": [
+    {
+      "key": "meteora_dlmm:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+      "dex": "meteora_dlmm",
+      "address": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+      "x": {
+        "mint": "So11111111111111111111111111111111111111112",
+        "symbol": "SOL",
+        "verified": true,
+        "holders": null,
+        "freezeAuthorityDisabled": true,
+        "mintAuthorityDisabled": true,
+        "token2022": false,
+        "stock": false,
+        "logoUri": null,
+        "topHoldersPct": null,
+        "priceUsd": 151.4,
+        "change1h": -0.4,
+        "change24h": 2.1,
+        "traders1h": 1200,
+        "buyVolume1h": 50000.0,
+        "sellVolume1h": 42000.0,
+        "createdAt": null
+      },
+      "y": {
+        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "symbol": "USDC",
+        "verified": true,
+        "holders": null,
+        "freezeAuthorityDisabled": null,
+        "mintAuthorityDisabled": null,
+        "token2022": false,
+        "stock": false,
+        "logoUri": null,
+        "topHoldersPct": null,
+        "priceUsd": 1.0,
+        "change1h": 0.0,
+        "change24h": 0.0,
+        "traders1h": null,
+        "buyVolume1h": null,
+        "sellVolume1h": null,
+        "createdAt": null
+      },
+      "binStep": 10,
+      "feePct": 0.12,
+      "tvl": 1250000.5,
+      "createdAt": 1726300000000,
+      "launchpad": null,
+      "volume": { "30m": 4100.0, "1h": 9000.0, "4h": 41000.0, "24h": 340000.0 },
+      "fees": { "30m": 4.9, "1h": 10.8, "4h": 49.2, "24h": 812.4 }
+    },
+    {
+      "key": "raydium:8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj",
+      "dex": "raydium",
+      "address": "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj",
+      "x": { "mint": "So11111111111111111111111111111111111111112", "symbol": "SOL" },
+      "y": { "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "symbol": "USDC" },
+      "binStep": 1,
+      "feePct": 0.01,
+      "tvl": 2900000.0,
+      "createdAt": null,
+      "launchpad": null,
+      "volume": { "30m": null, "1h": null, "4h": null, "24h": 510000.0 },
+      "fees": { "30m": null, "1h": null, "4h": null, "24h": 51.0 }
+    }
+  ],
+  "ok": { "meteora": true, "orca": true, "raydium": true, "tokens": true }
+}

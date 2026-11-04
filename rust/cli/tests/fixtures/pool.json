@@ -1,0 +1,19 @@
+{
+  "dex": "raydium",
+  "pool_address": "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj",
+  "token_x_mint": "So11111111111111111111111111111111111111112",
+  "token_y_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "token_x_decimals": 9,
+  "token_y_decimals": 6,
+  "bin_step": 4,
+  "active_bin_id": 1287,
+  "current_price": "0.1502",
+  "tvl_usd": "1250000.00",
+  "volume_24h": "340000.00",
+  "fees_24h": "812.40",
+  "base_fee_pct": 0.04,
+  "fetched_at": "2026-11-04T09:00:00Z",
+  "token_price": 150.2,
+  "token_price_quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "token_price_base_mint": "So11111111111111111111111111111111111111112"
+}

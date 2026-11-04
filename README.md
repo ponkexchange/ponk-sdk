@@ -31,6 +31,7 @@ drive that from your own code instead of the app.
 |---|---|
 | [`python/`](python) | Standard library only. Zero runtime dependencies. |
 | [`rust/`](rust) | `reqwest` + `serde`, async, `rustls` by default. |
+| [`rust/cli/`](rust/cli) | The `ponk` command line, built on the Rust client. |
 
 ## Install
 
@@ -40,6 +41,9 @@ pip install ponk
 
 # Python, straight from this repository
 pip install "git+https://github.com/ponkexchange/ponk-sdk#subdirectory=python"
+
+# The command line (binary: ponk)
+cargo install --git https://github.com/ponkexchange/ponk-sdk ponk-cli
 ```
 
 ```toml

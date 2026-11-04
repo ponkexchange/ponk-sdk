@@ -1,0 +1,48 @@
+{
+  "data": {
+    "pools": [
+      {
+        "address": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+        "name": "SOL-USDC",
+        "tokenX": {
+          "address": "So11111111111111111111111111111111111111112",
+          "symbol": "SOL",
+          "name": "Solana",
+          "decimals": 9,
+          "priceUsd": 151.4,
+          "verified": true
+        },
+        "tokenY": {
+          "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "symbol": "USDC",
+          "name": "USD Coin",
+          "decimals": 6,
+          "priceUsd": 1.0,
+          "verified": true
+        },
+        "binStep": 10,
+        "baseFeePct": 0.1,
+        "maxFeePct": 10.0,
+        "protocolFeePct": 5.0,
+        "dynamicFeePct": 0.023,
+        "currentPrice": 151.4,
+        "activeBinId": 1287,
+        "tvlUsd": 1250000.5,
+        "volume24hUsd": 340000.0,
+        "fees24hUsd": 812.4,
+        "volumeWindows": [4100.0, 9000.0, 18000.0, 41000.0, 170000.0, 340000.0],
+        "apr": 0.065,
+        "apy": 26.8,
+        "reserveXAmount": 4100.5,
+        "reserveYAmount": 620000.1,
+        "hasFarm": false,
+        "isBlacklisted": false,
+        "tags": []
+      }
+    ],
+    "total": 5000,
+    "page": 1,
+    "pageSize": 50,
+    "pages": 100
+  }
+}

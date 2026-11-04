@@ -1,0 +1,43 @@
+{
+  "address": "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe",
+  "tokens": [
+    {
+      "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+      "symbol": "BONK",
+      "quote": "sol",
+      "buys": 3,
+      "sells": 1,
+      "boughtQty": 120000.0,
+      "soldQty": 40000.0,
+      "cost": 1.2,
+      "proceeds": 0.5,
+      "avgBuyPrice": 0.00001,
+      "avgSellPrice": 0.0000125,
+      "realized": 0.1,
+      "basisComplete": true,
+      "openQty": 80000.0,
+      "heldQty": 80000.0,
+      "priceNow": 0.000011,
+      "unrealized": 0.08,
+      "firstAt": 1761000000,
+      "lastAt": 1761800000
+    }
+  ],
+  "summary": {
+    "sol": { "cost": 1.2, "proceeds": 0.5, "realized": 0.1, "unrealized": 0.08 },
+    "usd": { "cost": 0.0, "proceeds": 0.0, "realized": 0.0, "unrealized": 0.0 },
+    "trades": 4,
+    "buys": 3,
+    "sells": 1,
+    "tokens": 1,
+    "wins": 1,
+    "samples": 1,
+    "winRatePct": null,
+    "from": 1761000000,
+    "fullHistory": true
+  },
+  "solUsd": 151.4,
+  "balancesRead": true,
+  "transactionsRead": 412,
+  "readAt": "2026-11-04T09:00:00Z"
+}

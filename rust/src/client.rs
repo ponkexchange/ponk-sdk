@@ -31,6 +31,12 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct Client {
     http: reqwest::Client,
     base_url: String,
+    /// The web app's origin, for the handful of boards the app serves itself
+    /// rather than through the API (`/pools/board`, `/discover/feed`). Derived
+    /// from `base_url` by default; see [`ClientBuilder::web_url`]. Requests to
+    /// it never carry the API key: every board on it is public, and a custom
+    /// pair of origins must not leak the key across them.
+    web_url: String,
     api_key: Option<String>,
     timeout: Duration,
     fund_timeout: Duration,
@@ -65,6 +71,7 @@ impl Client {
     pub fn builder(base_url: impl Into<String>) -> ClientBuilder {
         ClientBuilder {
             base_url: base_url.into(),
+            web_url: None,
             api_key: None,
             timeout: DEFAULT_TIMEOUT,
             fund_timeout: DEFAULT_FUND_TIMEOUT,
@@ -75,6 +82,12 @@ impl Client {
     /// The base URL this client sends to, without a trailing slash.
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// The web app origin the pool boards are read from, without a trailing
+    /// slash. By default the base URL with its `/api` suffix removed.
+    pub fn web_url(&self) -> &str {
+        &self.web_url
     }
 
     /// The timeout used by [`Client::compound`], [`Client::withdraw`] and
@@ -489,6 +502,25 @@ impl Client {
     /// version. `path` starts with a slash and is appended to the base URL.
     pub async fn get_json(&self, path: &str) -> Result<serde_json::Value> {
         self.get(path).await
+    }
+
+    /// `POST` any path on the API, raw JSON in and raw JSON out: the same
+    /// escape hatch as [`Client::get_json`], for a route this crate has not
+    /// typed yet. `body` of `None` sends `{}`. `timeout` of `None` uses the
+    /// read timeout; pass [`Client::fund_timeout`] for a fund-moving route.
+    pub async fn post_json(
+        &self,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        timeout: Option<Duration>,
+    ) -> Result<serde_json::Value> {
+        self.post(path, body, timeout.unwrap_or(self.timeout)).await
+    }
+
+    /// `GET` any path on the WEB origin ([`Client::web_url`]), raw JSON out:
+    /// the escape hatch for the app-served boards. Never carries the API key.
+    pub async fn get_web_json(&self, path: &str) -> Result<serde_json::Value> {
+        self.get_web(path).await
     }
 
     // -- agents, write (needs a `trade` key) -------------------------------
@@ -2068,6 +2100,71 @@ impl Client {
         self.get("/public/wallets/positions").await
     }
 
+    // -- pool market lists (0.13.0): no key required ------------------------
+
+    /// `GET <web>/pools/board?view=&q=`. The Meteora DLMM pool board the app's
+    /// own list shows.
+    ///
+    /// `view` picks a different UPSTREAM QUERY, not a re-sort of one page:
+    /// `hot` (most fees in 24h, TVL over $50K; the default), `new` (created in
+    /// the last 24h, most fees first, TVL over $10K), `volume` and `tvl`.
+    /// `search` filters by symbol, name or pool/mint address. Served from the
+    /// web app origin ([`Client::web_url`]), no key needed.
+    ///
+    /// Meteora only: for one board across every live venue, use
+    /// [`Client::opportunities`].
+    pub async fn hot_pools(&self, view: Option<&str>, search: Option<&str>) -> Result<PoolBoard> {
+        self.get_web(&with_query(
+            "/pools/board",
+            &[
+                ("view", view.map(str::to_string)),
+                ("q", search.map(str::to_string)),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET <web>/discover/feed`. The Discover board: LP opportunities across
+    /// Meteora DLMM, Orca Whirlpools and Raydium CLMM in one read, each row
+    /// with both token legs' risk reads and per-window volume and fees.
+    ///
+    /// Check `ok`: a source that did not answer leaves its rows out and the
+    /// flag false, and nothing is substituted. Served from the web app origin
+    /// ([`Client::web_url`]), no key needed.
+    pub async fn opportunities(&self) -> Result<OppBoard> {
+        self.get_web("/discover/feed").await
+    }
+
+    /// `GET /dex/dlmm/pools?page&pageSize&sortBy&q`. The venue's paginated
+    /// Meteora DLMM pool list, with live metrics per row.
+    ///
+    /// `sort_by` is one of `tvl`, `volume_24h`, `fees_24h`,
+    /// `fee_tvl_ratio_24h`, `apr`, `apy`, `bin_step`, `pool_created_at`,
+    /// descending unless `:asc` is appended (the server default is
+    /// `tvl:desc`). `page` is 1-based; `page_size` 1 to 100, default 50.
+    /// `search` matches symbol, name or address. No key needed.
+    ///
+    /// Mind the units on [`DlmmPool::apr`]: percent per DAY, not annual.
+    pub async fn dlmm_pools(
+        &self,
+        page: Option<u32>,
+        page_size: Option<u32>,
+        sort_by: Option<&str>,
+        search: Option<&str>,
+    ) -> Result<DlmmPoolPage> {
+        let path = with_query(
+            "/dex/dlmm/pools",
+            &[
+                ("page", page.map(|n| n.to_string())),
+                ("pageSize", page_size.map(|n| n.to_string())),
+                ("sortBy", sort_by.map(str::to_string)),
+                ("q", search.map(str::to_string)),
+            ],
+        );
+        let envelope: DexData<DlmmPoolPage> = self.get(&path).await?;
+        Ok(envelope.data)
+    }
+
     // -- the copilot (0.8.0) -------------------------------------------------
 
     /// `POST /copilot/parse`. Read one sentence with ponk's closed grammar.
@@ -2497,6 +2594,17 @@ impl Client {
         self.send(request, path, &[]).await
     }
 
+    /// A GET against the web app origin rather than the API. The key is never
+    /// attached: these boards are public, and when the two origins differ the
+    /// key must not cross to the second one.
+    async fn get_web<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let request = self
+            .http
+            .get(format!("{}{}", self.web_url, path))
+            .timeout(self.timeout);
+        self.send_with_auth(request, path, &[], false).await
+    }
+
     async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let request = self.http.delete(self.url(path)).timeout(self.timeout);
         self.send(request, path, &[]).await
@@ -2527,9 +2635,21 @@ impl Client {
         path: &str,
         body_statuses: &[u16],
     ) -> Result<T> {
+        self.send_with_auth(request, path, body_statuses, true).await
+    }
+
+    async fn send_with_auth<T: DeserializeOwned>(
+        &self,
+        request: reqwest::RequestBuilder,
+        path: &str,
+        body_statuses: &[u16],
+        with_key: bool,
+    ) -> Result<T> {
         let mut request = request.header(reqwest::header::ACCEPT, "application/json");
-        if let Some(key) = &self.api_key {
-            request = request.bearer_auth(key);
+        if with_key {
+            if let Some(key) = &self.api_key {
+                request = request.bearer_auth(key);
+            }
         }
         let response = request.send().await?;
         let status = response.status();
@@ -2769,6 +2889,7 @@ fn json_str(body: &serde_json::Value, key: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct ClientBuilder {
     base_url: String,
+    web_url: Option<String>,
     api_key: Option<String>,
     timeout: Duration,
     fund_timeout: Duration,
@@ -2779,6 +2900,17 @@ impl ClientBuilder {
     /// The `ponk_live_...` secret from Settings, API keys.
     pub fn api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
+        self
+    }
+
+    /// The web app origin, for [`Client::hot_pools`] and
+    /// [`Client::opportunities`]. Only needed when the two origins are split,
+    /// as in local development (API on one port, app on another): by default
+    /// it is the base URL with its `/api` suffix removed, so the production
+    /// base `https://ponk.exchange/api` reads the boards from
+    /// `https://ponk.exchange`.
+    pub fn web_url(mut self, web_url: impl Into<String>) -> Self {
+        self.web_url = Some(web_url.into());
         self
     }
 
@@ -2806,6 +2938,19 @@ impl ClientBuilder {
         if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
             return Err(Error::InvalidBaseUrl(self.base_url));
         }
+        let web_url = match self.web_url {
+            Some(raw) => {
+                let web = raw.trim_end_matches('/').to_string();
+                if !(web.starts_with("http://") || web.starts_with("https://")) {
+                    return Err(Error::InvalidBaseUrl(raw));
+                }
+                web
+            }
+            None => base_url
+                .strip_suffix("/api")
+                .map(str::to_string)
+                .unwrap_or_else(|| base_url.clone()),
+        };
         let http = match self.http {
             Some(http) => http,
             None => reqwest::Client::builder().build()?,
@@ -2813,11 +2958,18 @@ impl ClientBuilder {
         Ok(Client {
             http,
             base_url,
+            web_url,
             api_key: self.api_key,
             timeout: self.timeout,
             fund_timeout: self.fund_timeout,
         })
     }
+}
+
+/// The DEX leg of the API wraps every success as `{"data": ...}`.
+#[derive(serde::Deserialize)]
+struct DexData<T> {
+    data: T,
 }
 
 /// Percent-encode one path segment, so an id can never change the route.
@@ -2852,6 +3004,57 @@ mod tests {
         let c = Client::new("https://ponk.exchange/api/", "k").unwrap();
         assert_eq!(c.base_url(), "https://ponk.exchange/api");
         assert_eq!(c.url("/v1/me"), "https://ponk.exchange/api/v1/me");
+    }
+
+    #[test]
+    fn the_web_origin_is_the_base_without_its_api_suffix() {
+        // Production shape: the boards live one level above the API.
+        let c = Client::public("https://ponk.exchange/api").unwrap();
+        assert_eq!(c.web_url(), "https://ponk.exchange");
+        // A base with no /api suffix is its own web origin.
+        let c = Client::public("http://127.0.0.1:8080").unwrap();
+        assert_eq!(c.web_url(), "http://127.0.0.1:8080");
+        // Split origins, as in local development, are set explicitly.
+        let c = Client::builder("http://127.0.0.1:8080/api")
+            .web_url("http://127.0.0.1:3000/")
+            .build()
+            .unwrap();
+        assert_eq!(c.web_url(), "http://127.0.0.1:3000");
+        // And a relative web origin is refused like a relative base.
+        assert!(matches!(
+            Client::builder("https://ponk.exchange/api").web_url("ponk.exchange").build(),
+            Err(Error::InvalidBaseUrl(_))
+        ));
+    }
+
+    #[test]
+    fn the_board_and_pool_list_queries_use_the_servers_names() {
+        assert_eq!(
+            with_query(
+                "/pools/board",
+                &[("view", Some("hot".into())), ("q", Some("SOL USDC".into()))]
+            ),
+            "/pools/board?view=hot&q=SOL%20USDC"
+        );
+        assert_eq!(
+            with_query(
+                "/dex/dlmm/pools",
+                &[
+                    ("page", Some("2".into())),
+                    ("pageSize", Some("25".into())),
+                    ("sortBy", Some("fees_24h".into())),
+                    ("q", None),
+                ]
+            ),
+            "/dex/dlmm/pools?page=2&pageSize=25&sortBy=fees_24h"
+        );
+    }
+
+    #[test]
+    fn the_dex_envelope_unwraps_to_the_page() {
+        let d: DexData<DlmmPoolPage> =
+            serde_json::from_str(r#"{"data":{"pools":[],"total":0,"page":1,"pageSize":50,"pages":0}}"#).unwrap();
+        assert_eq!(d.data.page, Some(1));
     }
 
     #[test]

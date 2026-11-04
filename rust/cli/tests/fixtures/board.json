@@ -1,0 +1,27 @@
+{
+  "pools": [
+    {
+      "address": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+      "name": "SOL-USDC",
+      "tokenX": {
+        "address": "So11111111111111111111111111111111111111112",
+        "symbol": "SOL",
+        "verified": true
+      },
+      "tokenY": {
+        "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "symbol": "USDC",
+        "verified": true
+      },
+      "binStep": 10,
+      "baseFeePct": 0.1,
+      "dynamicFeePct": 0.023,
+      "tvlUsd": 1250000.5,
+      "volume24hUsd": 340000.0,
+      "fees24hUsd": 812.4,
+      "isBlacklisted": false,
+      "createdAt": 1726300000000,
+      "launchpad": null
+    }
+  ]
+}

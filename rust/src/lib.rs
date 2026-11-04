@@ -95,7 +95,10 @@
 //! ([`Client::health`], [`Client::pool`], [`Client::range_cost`],
 //! [`Client::ponk_perks`], the Top Ponkillionaires board
 //! [`Client::leaderboard`], [`Client::public_agent`] and its value history,
-//! the points board and [`Client::resolve_referral`]), the agent fleet
+//! the points board and [`Client::resolve_referral`]), the pool market lists
+//! ([`Client::hot_pools`], [`Client::opportunities`], which covers Meteora
+//! DLMM, Orca Whirlpools and Raydium CLMM in one board, and
+//! [`Client::dlmm_pools`]), the agent fleet
 //! ([`Client::create_agents`], [`Client::fund_prepare`], which returns
 //! UNSIGNED transfers for your wallet to sign, [`Client::fleet_all`],
 //! [`Client::exit_agents`]) and the account parity routes (portfolio,
@@ -154,6 +157,10 @@ pub use models::{
     XAccount, XAuthor, XCaller, XCallers, XDirectory, XDirectoryEntry, XEvent, XEventPost, XFeed,
     XFeedItem, XFirstCall, XMetrics, XPost, XSource, XToken, XTokenMention, XTokenRef, XTrending,
     XTrendingToken,
+};
+pub use models::{
+    BoardPool, BoardToken, DlmmPool, DlmmPoolPage, DlmmToken, OppBoard, OppPool, OppSources,
+    OppToken, PoolBoard,
 };
 pub use models::{
     ActivityRow, CopilotFleet, CopilotFleetSummary, CopilotParse, CopilotPlan, CopilotReplay,

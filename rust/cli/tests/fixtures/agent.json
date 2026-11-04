@@ -1,0 +1,27 @@
+{
+  "id": "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1",
+  "name": "sol-usdc narrow",
+  "wallet_address": "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe",
+  "dex": "meteora_dlmm",
+  "pool_address": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+  "position_address": null,
+  "status": "active",
+  "strategy": "bin_rebalancer",
+  "dry_run": false,
+  "config": {
+    "kind": "bin_rebalancer",
+    "knobs": {
+      "bin_range_width": 10,
+      "rebalance_direction": "both"
+    }
+  },
+  "created_at": "2026-10-30T18:02:11.482910Z",
+  "updated_at": "2026-11-03T07:55:41.102331Z",
+  "mode": "manual",
+  "wallet_source": "managed",
+  "origin": "api",
+  "managed_fee_bps": 1500,
+  "activation_fee_bps": 100,
+  "waiting": null,
+  "pool_warning": "This pool traded $412 in the last 24 hours, so fees may not cover rebalance costs at this width."
+}

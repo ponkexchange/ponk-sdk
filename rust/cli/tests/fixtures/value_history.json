@@ -1,0 +1,13 @@
+{
+  "range": "7d",
+  "bucket_secs": 3600,
+  "since": "2026-10-28T09:00:00Z",
+  "until": "2026-11-04T09:00:00Z",
+  "points": [
+    { "t": "2026-10-28T09:00:00Z", "value_usd": 480.0, "hodl_usd": 480.0 },
+    { "t": "2026-10-28T10:00:00Z", "value_usd": null, "hodl_usd": 481.2 },
+    { "t": "2026-10-28T11:00:00Z", "value_usd": 484.9, "hodl_usd": 482.0 }
+  ],
+  "hodl_since": "2026-10-28T09:00:00Z",
+  "positions": 2
+}

@@ -1,17 +1,21 @@
 [package]
 name = "ponk"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
 description = "Thin Rust client for the ponk public API: Solana DLMM liquidity agents."
 readme = "README.md"
-publish = false
+repository = "https://github.com/ponkexchange/ponk-sdk"
 
 # Its own workspace on purpose. This client depends on nothing in the ponk
 # workspace (it talks to the deployed API over HTTP like any other consumer),
-# so it stays out of the root member list and keeps its own lockfile.
+# so it stays out of the root member list and keeps its own lockfile. The CLI
+# (`cli/`, binary `ponk`) is this workspace's one member besides the root: it
+# ships from this public repo so an integrator can `cargo install` it, which
+# the monorepo cannot offer.
 [workspace]
+members = ["cli"]
 
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json"] }

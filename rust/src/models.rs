@@ -69,6 +69,14 @@ pub struct PoolSnapshot {
     pub base_fee_pct: Option<f64>,
     /// RFC 3339.
     pub fetched_at: Option<String>,
+    /// The volatile leg priced in the quote leg, human units: exactly what a
+    /// `take_profit_price` or `stop_loss_price` is compared against. `None`
+    /// when the pool price is not a finite positive number.
+    pub token_price: Option<f64>,
+    /// The mint `token_price` is quoted in (the quote leg).
+    pub token_price_quote_mint: Option<String>,
+    /// The mint `token_price` prices (the volatile leg).
+    pub token_price_base_mint: Option<String>,
 }
 
 impl PoolSnapshot {
@@ -167,6 +175,19 @@ pub struct Agent {
     /// basis points, before any $PONK holder discount. Zero for a
     /// non-managed agent, which pays a per-action platform fee instead.
     pub managed_fee_bps: Option<u16>,
+    /// The one-time activation fee the agent's FIRST open pays, in basis
+    /// points of that open's capital. Zero for a non-managed agent.
+    pub activation_fee_bps: Option<u16>,
+    /// What the agent is WAITING on (funds, or an authorization), when an
+    /// action was refused for a reason only an external event can change.
+    /// `kind`, `reason`, `since` and the funding target, as the runtime
+    /// recorded them. `None` when it is not waiting.
+    pub waiting: Option<serde_json::Value>,
+    /// Set only on the CREATE response: the deploy gate's sentence when the
+    /// pool looks thin, quiet, young or unsettled for this band. It is advice,
+    /// never a refusal: the agent was created and will open either way, so
+    /// show this line to whoever asked for the agent.
+    pub pool_warning: Option<String>,
 }
 
 /// Live value, PnL and fees for one agent.
@@ -3305,6 +3326,197 @@ pub struct TopCalls {
     pub computed_at: Option<String>,
 }
 
+// --------------------------------------------------------------------------
+// Pool market lists (0.13.0)
+// --------------------------------------------------------------------------
+
+/// One token leg of a pool-board row.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct BoardToken {
+    pub address: Option<String>,
+    pub symbol: Option<String>,
+    /// On the venue's verified list. Absent means "not said", never "no".
+    pub verified: Option<bool>,
+}
+
+/// One Meteora DLMM pool on the board (`GET <web>/pools/board`). Every figure
+/// is the venue's own; `None` is "not reported", never zero.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BoardPool {
+    pub address: Option<String>,
+    pub name: Option<String>,
+    pub token_x: Option<BoardToken>,
+    pub token_y: Option<BoardToken>,
+    pub bin_step: Option<u16>,
+    pub base_fee_pct: Option<f64>,
+    pub dynamic_fee_pct: Option<f64>,
+    pub tvl_usd: Option<f64>,
+    pub volume_24h_usd: Option<f64>,
+    pub fees_24h_usd: Option<f64>,
+    pub is_blacklisted: Option<bool>,
+    /// Epoch milliseconds of the pool's creation, where the venue reports it.
+    pub created_at: Option<i64>,
+    /// The launchpad the pool's token came from, where the venue tags one.
+    pub launchpad: Option<String>,
+}
+
+/// The pool board: which Meteora pools the app's list ASKS FOR under each
+/// view, not a re-sort of one page. See [`Client::hot_pools`].
+///
+/// [`Client::hot_pools`]: crate::Client::hot_pools
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PoolBoard {
+    pub pools: Vec<BoardPool>,
+}
+
+/// One token leg of a Discover opportunity row, with its risk reads. A `None`
+/// means the source did not say, never a substituted figure.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OppToken {
+    pub mint: Option<String>,
+    pub symbol: Option<String>,
+    pub verified: Option<bool>,
+    pub holders: Option<i64>,
+    /// True when the freeze authority is revoked.
+    pub freeze_authority_disabled: Option<bool>,
+    /// True when the mint authority is revoked.
+    pub mint_authority_disabled: Option<bool>,
+    /// Owned by the Token-2022 program.
+    #[serde(rename = "token2022")]
+    pub token_2022: Option<bool>,
+    /// A tokenized stock.
+    pub stock: Option<bool>,
+    pub logo_uri: Option<String>,
+    /// Share of supply held by the top holders, percent.
+    pub top_holders_pct: Option<f64>,
+    pub price_usd: Option<f64>,
+    #[serde(rename = "change1h")]
+    pub change_1h: Option<f64>,
+    #[serde(rename = "change24h")]
+    pub change_24h: Option<f64>,
+    /// Distinct traders of the token in the last hour, every venue.
+    #[serde(rename = "traders1h")]
+    pub traders_1h: Option<i64>,
+    #[serde(rename = "buyVolume1h")]
+    pub buy_volume_1h: Option<f64>,
+    #[serde(rename = "sellVolume1h")]
+    pub sell_volume_1h: Option<f64>,
+    /// Epoch milliseconds of the token's first pool.
+    pub created_at: Option<i64>,
+}
+
+/// One pool on the Discover board: Meteora DLMM, Orca Whirlpools or Raydium
+/// CLMM. `volume` and `fees` are USD keyed by window (`30m`, `1h`, `4h`,
+/// `24h`); a `None` inside is a window that venue does not publish.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OppPool {
+    /// `dex:address`.
+    pub key: Option<String>,
+    /// `meteora_dlmm`, `orca` or `raydium`.
+    pub dex: Option<String>,
+    pub address: Option<String>,
+    pub x: Option<OppToken>,
+    pub y: Option<OppToken>,
+    /// Bin step (Meteora) or tick spacing (Orca, Raydium).
+    pub bin_step: Option<u32>,
+    /// The swap fee now, percent (base plus the live dynamic part on Meteora).
+    pub fee_pct: Option<f64>,
+    pub tvl: Option<f64>,
+    pub created_at: Option<i64>,
+    pub launchpad: Option<String>,
+    pub volume: std::collections::BTreeMap<String, Option<f64>>,
+    pub fees: std::collections::BTreeMap<String, Option<f64>>,
+}
+
+/// Which of the Discover board's upstreams answered. A `false` means that
+/// source's rows are missing from this read, not that it has no pools.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct OppSources {
+    pub meteora: Option<bool>,
+    pub orca: Option<bool>,
+    pub raydium: Option<bool>,
+    pub tokens: Option<bool>,
+}
+
+/// The Discover board (`GET <web>/discover/feed`): LP opportunities across
+/// every live venue, with per-source health in `ok`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OppBoard {
+    /// Epoch ms, server clock: when the oldest board question was read.
+    pub as_of: Option<i64>,
+    /// Epoch ms, server clock: when the server answered.
+    pub served_at: Option<i64>,
+    pub pools: Vec<OppPool>,
+    pub ok: Option<OppSources>,
+}
+
+/// One token leg of a DLMM pool-list row (`GET <api>/dex/dlmm/pools`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DlmmToken {
+    pub address: Option<String>,
+    pub symbol: Option<String>,
+    pub name: Option<String>,
+    pub decimals: Option<u8>,
+    pub price_usd: Option<f64>,
+    pub verified: Option<bool>,
+}
+
+/// One Meteora DLMM pool with its live venue metrics.
+///
+/// UNITS: the venue's `apr` is the 24h fee/TVL ratio as a percent PER DAY
+/// (0.2158 means 0.22% a day); `apy` is the annualized figure. Reading `apr`
+/// as annual was once a 365x error, so do not.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DlmmPool {
+    pub address: Option<String>,
+    pub name: Option<String>,
+    pub token_x: Option<DlmmToken>,
+    pub token_y: Option<DlmmToken>,
+    pub bin_step: Option<u16>,
+    pub base_fee_pct: Option<f64>,
+    pub max_fee_pct: Option<f64>,
+    pub protocol_fee_pct: Option<f64>,
+    pub dynamic_fee_pct: Option<f64>,
+    /// Price of token X in token Y, decimal-adjusted (UI price).
+    pub current_price: Option<f64>,
+    pub active_bin_id: Option<i32>,
+    pub tvl_usd: Option<f64>,
+    pub volume_24h_usd: Option<f64>,
+    pub fees_24h_usd: Option<f64>,
+    /// Cumulative volume over the 30m, 1h, 2h, 4h, 12h and 24h windows, USD.
+    /// Empty when the venue does not report windows.
+    pub volume_windows: Vec<f64>,
+    /// The venue's own figure: percent per DAY, see the struct note.
+    pub apr: Option<f64>,
+    /// Annualized by the venue.
+    pub apy: Option<f64>,
+    pub reserve_x_amount: Option<f64>,
+    pub reserve_y_amount: Option<f64>,
+    pub has_farm: Option<bool>,
+    pub is_blacklisted: Option<bool>,
+    pub tags: Vec<String>,
+}
+
+/// One page of the venue's DLMM pool list.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DlmmPoolPage {
+    pub pools: Vec<DlmmPool>,
+    pub total: Option<u64>,
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+    pub pages: Option<u32>,
+}
+
 /// One Server-Sent Event from a streaming endpoint.
 ///
 /// `event` is the SSE event name and `data` the JSON payload the server sent
@@ -3323,6 +3535,71 @@ pub struct StreamEvent {
 #[cfg(test)]
 mod live_shape_tests {
     use super::*;
+
+    #[test]
+    fn the_pool_boards_camel_case_keys_decode() {
+        let b: PoolBoard = serde_json::from_str(
+            r#"{"pools":[{"address":"P1","name":"SOL-USDC","tokenX":{"address":"So1","symbol":"SOL","verified":true},
+                "tokenY":{"address":"EPj","symbol":"USDC","verified":true},"binStep":10,"baseFeePct":0.1,
+                "dynamicFeePct":null,"tvlUsd":1200000.5,"volume24hUsd":340000.0,"fees24hUsd":812.4,
+                "isBlacklisted":false,"createdAt":1761000000000,"launchpad":null}]}"#,
+        )
+        .unwrap();
+        let p = &b.pools[0];
+        assert_eq!(p.bin_step, Some(10));
+        assert_eq!(p.volume_24h_usd, Some(340000.0));
+        assert_eq!(p.fees_24h_usd, Some(812.4));
+        assert_eq!(p.token_x.as_ref().unwrap().symbol.as_deref(), Some("SOL"));
+        // A window the venue does not publish stays None, never zero.
+        assert_eq!(p.dynamic_fee_pct, None);
+    }
+
+    #[test]
+    fn the_discover_boards_windows_and_sources_decode() {
+        let f: OppBoard = serde_json::from_str(
+            r#"{"asOf":1761000000000,"servedAt":1761000005000,
+                "pools":[{"key":"orca:W1","dex":"orca","address":"W1",
+                  "x":{"mint":"So1","symbol":"SOL","verified":true,"token2022":false,"change1h":-0.4,
+                       "traders1h":120,"buyVolume1h":5000.0,"sellVolume1h":4200.0,"topHoldersPct":12.5},
+                  "y":{"mint":"EPj","symbol":"USDC"},
+                  "binStep":4,"feePct":0.04,"tvl":2500000.0,"createdAt":null,"launchpad":null,
+                  "volume":{"30m":1000.0,"1h":2100.0,"4h":null,"24h":48000.0},
+                  "fees":{"30m":0.4,"1h":0.9,"4h":null,"24h":19.2}}],
+                "ok":{"meteora":true,"orca":true,"raydium":false,"tokens":true}}"#,
+        )
+        .unwrap();
+        let p = &f.pools[0];
+        assert_eq!(p.dex.as_deref(), Some("orca"));
+        assert_eq!(p.volume.get("24h"), Some(&Some(48000.0)));
+        // Raydium did not answer this read: the flag says so, honestly.
+        assert_eq!(p.volume.get("4h"), Some(&None));
+        assert_eq!(f.ok.as_ref().unwrap().raydium, Some(false));
+        let x = p.x.as_ref().unwrap();
+        assert_eq!(x.token_2022, Some(false));
+        assert_eq!(x.change_1h, Some(-0.4));
+        assert_eq!(x.buy_volume_1h, Some(5000.0));
+    }
+
+    #[test]
+    fn a_dlmm_pool_page_decodes_with_the_venues_daily_apr_left_alone() {
+        let page: DlmmPoolPage = serde_json::from_str(
+            r#"{"pools":[{"address":"P1","name":"SOL-USDC","tokenX":{"address":"So1","symbol":"SOL",
+                "name":"Solana","decimals":9,"priceUsd":150.2,"verified":true},
+                "tokenY":{"address":"EPj","symbol":"USDC","name":"USD Coin","decimals":6,"priceUsd":1.0,"verified":true},
+                "binStep":10,"baseFeePct":0.1,"maxFeePct":1.0,"protocolFeePct":5.0,"dynamicFeePct":0.02,
+                "currentPrice":150.2,"activeBinId":123,"tvlUsd":1000000.0,"volume24hUsd":200000.0,
+                "fees24hUsd":200.0,"volumeWindows":[1.0,2.0],"apr":0.02,"apy":7.5,
+                "reserveXAmount":10.0,"reserveYAmount":1500.0,"hasFarm":false,"isBlacklisted":false,"tags":[]}],
+                "total":5000,"page":1,"pageSize":50,"pages":100}"#,
+        )
+        .unwrap();
+        assert_eq!(page.total, Some(5000));
+        assert_eq!(page.page_size, Some(50));
+        let p = &page.pools[0];
+        // The venue's apr is percent per DAY. It decodes untouched.
+        assert_eq!(p.apr, Some(0.02));
+        assert_eq!(p.token_x.as_ref().unwrap().decimals, Some(9));
+    }
 
     #[test]
     fn the_x_trackers_digit_suffixed_camel_case_keys_decode() {

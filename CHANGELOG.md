@@ -3,6 +3,34 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.13.0 (2026-11-04)
+
+Rust only; the Python client is unchanged at 0.12.0.
+
+- **A command line.** `rust/cli` is a new crate, `ponk-cli`, whose binary is
+  `ponk`: `pools` (the Discover board across Meteora DLMM, Orca Whirlpools and
+  Raydium CLMM, or a Meteora board view with `--view hot|new|volume|tvl`),
+  `pool <address>` (probes the venues unless `--dex` names one), `agents`,
+  `agent <id or public slug>`, `create-agent`, `pause`, `resume`, `withdraw`,
+  `leaderboard` and `whoami`. Configuration is `PONK_API_KEY`, `PONK_API_URL`
+  and `PONK_WEB_URL`; `--json` prints the raw response for the same request.
+  Tables are aligned, and a figure the server did not send is a dash, never a
+  zero. Install: `cargo install --git
+  https://github.com/ponkexchange/ponk-sdk ponk-cli`.
+- **Pool market lists**, in the Rust client: `hot_pools` (the app's Meteora
+  pool board and its views), `opportunities` (the Discover board: Meteora,
+  Orca and Raydium in one read, each row with both legs' risk reads and
+  per-window volume and fees, plus per-source health in `ok`) and
+  `dlmm_pools` (the venue's paginated DLMM list; its `apr` is percent per
+  DAY, as upstream reports it). The two app-served boards read from a new
+  `web_url` (derived from the base URL, or set on the builder), and never
+  carry the API key.
+- **Raw escape hatches**: `post_json` beside the existing `get_json`, and
+  `get_web_json` for the web origin.
+- `Agent` now carries `activation_fee_bps`, `waiting` and the create
+  response's `pool_warning` (the deploy gate warns, it never refuses), and
+  `PoolSnapshot` the `token_price` fields the pool route serves.
+
 ## 0.12.0 (2026-11-02)
 
 Added, in the Python client:
