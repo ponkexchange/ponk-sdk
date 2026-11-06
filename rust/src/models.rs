@@ -47,6 +47,9 @@ pub struct ComponentStatus {
 ///
 /// `tvl_usd`, `volume_24h` and `fees_24h` come from market data rather than
 /// the account, and are `None` when that data is unavailable.
+///
+/// On `meteora_damm_v2` a position is a share of the whole pool with no bins,
+/// so `bin_step` and `active_bin_id` arrive as `0` and carry no meaning there.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct PoolSnapshot {
@@ -77,6 +80,17 @@ pub struct PoolSnapshot {
     pub token_price_quote_mint: Option<String>,
     /// The mint `token_price` prices (the volatile leg).
     pub token_price_base_mint: Option<String>,
+    /// Pool price against the pair's market price, a non-negative fraction
+    /// (0.02 is 2%). `None` when either leg has no market price.
+    pub price_divergence: Option<f64>,
+    /// One plain sentence when the pool trades more than 3% off the pair's
+    /// market price. Advice, never a block.
+    pub mispricing_warning: Option<String>,
+    /// One plain sentence when the honeypot sell check found a reason a leg
+    /// may not be sellable: a risky Token-2022 extension, no route back into
+    /// SOL, or a round trip worth a small fraction of its cost. Advice, never
+    /// a block; an unreadable mint or an errored probe never warns.
+    pub sell_warning: Option<String>,
 }
 
 impl PoolSnapshot {
@@ -155,7 +169,7 @@ pub struct Agent {
     pub id: Option<String>,
     pub name: Option<String>,
     pub wallet_address: Option<String>,
-    /// `meteora_dlmm`, `orca`, `ponk_clouds` or `raydium`.
+    /// `meteora_dlmm`, `meteora_damm_v2`, `orca`, `ponk_clouds` or `raydium`.
     pub dex: Option<String>,
     /// `None` for an entry agent that has not yet screened and bound a pool.
     pub pool_address: Option<String>,
@@ -623,7 +637,13 @@ pub struct RangeCostQuote {
 pub struct NewAgent {
     pub name: String,
     pub wallet_address: String,
-    /// `meteora_dlmm`, `orca`, `ponk_clouds` or `raydium`. An `entry_agent`
+    /// `meteora_dlmm`, `meteora_damm_v2`, `orca`, `ponk_clouds` or `raydium`.
+    /// A Meteora DAMM v2 position is a share of the pool with no range, so
+    /// only `monitor_only` and `fee_collector` run there. Autonomy is offered
+    /// there: a `fee_collector` created with no `position_address` opens its
+    /// own share of the pool from its agent wallet once it is funded and
+    /// autonomous; an agent that is not autonomous needs a position you hold.
+    /// An `entry_agent`
     /// (Degen Mode in the app) discovers its pool by screening, which works
     /// only on `meteora_dlmm`, and its config may carry a bin step filter,
     /// `min_bin_step` and `max_bin_step` (each 1 to 1000).
@@ -2167,6 +2187,13 @@ pub struct NotifySettings {
     pub mandate_telegram: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weekly_recap_telegram: Option<bool>,
+    /// A reply to your comment, or a comment on your call, is DMed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comments_telegram: Option<bool>,
+    /// Every action a Copy LP follow completed is pushed and DMed. The
+    /// notification bell row is written either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copy_alerts: Option<bool>,
 }
 
 /// A saved agent preset. `overrides` is the normalized document the server
@@ -2591,6 +2618,17 @@ pub struct Prepared {
     pub new_upper_bin_id: Option<i32>,
     pub fee_event_ids: Vec<String>,
     pub draft_event_ids: Vec<String>,
+    /// A Meteora DAMM v2 open: the position NFT's mint. Whoever holds the NFT
+    /// owns the position.
+    pub position_nft_mint: Option<String>,
+    /// Ponk's fee on the LP fees a claim or withdraw collects, per leg, for
+    /// the review. `None` when the transaction collects no fees.
+    pub fee: Option<serde_json::Value>,
+    /// A Meteora DAMM v2 withdraw: whether it also closes the position and
+    /// returns its rent. A position holding vested or locked liquidity, or on
+    /// a pool with a farming reward, cannot be closed; its liquidity and fees
+    /// still come out.
+    pub closes_position: Option<bool>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -3327,6 +3365,150 @@ pub struct TopCalls {
 }
 
 // --------------------------------------------------------------------------
+// Pool history (0.14.0)
+// --------------------------------------------------------------------------
+
+/// One bucket at least one source has a figure for. A field no source has
+/// for this bucket is `None`, never zero.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PoolHistoryPoint {
+    /// Bucket open, unix seconds (UTC aligned).
+    pub ts: Option<i64>,
+    /// Bucket open, RFC 3339.
+    pub date: Option<String>,
+    pub volume_usd: Option<f64>,
+    /// Every swap fee paid in the bucket, protocol share included.
+    pub fees_usd: Option<f64>,
+    /// The part of `fees_usd` that reached liquidity providers.
+    pub lp_fees_usd: Option<f64>,
+    /// The protocol's (and on Raydium the fund's) part of `fees_usd`.
+    pub protocol_fees_usd: Option<f64>,
+    /// Percent of volume paid as fees in the bucket.
+    pub fee_rate_pct: Option<f64>,
+    pub tvl_usd: Option<f64>,
+}
+
+/// Buckets a source returned that the route deliberately did not serve.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PoolHistoryOmitted {
+    /// Buckets that closed before the pool was created.
+    pub before_pool_created: Option<u32>,
+    /// Meteora datapi rows with no volume and no fees: the datapi zero fills,
+    /// so such a row cannot be told apart from a gap.
+    pub no_recorded_activity: Option<u32>,
+}
+
+/// The span a pool history covers, `[from, to)` in unix seconds, bucket
+/// aligned. `to` is the open of the in-progress bucket, which is never
+/// served.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PoolHistoryWindow {
+    pub bucket_secs: Option<i64>,
+    pub from: Option<i64>,
+    pub to: Option<i64>,
+    pub from_iso: Option<String>,
+    pub to_iso: Option<String>,
+    pub buckets_in_window: Option<u32>,
+    /// How many buckets carry a point. The rest are absent.
+    pub buckets_served: Option<u32>,
+    pub omitted: Option<PoolHistoryOmitted>,
+    /// When the venue says the pool was created, unix seconds; `None` when it
+    /// does not say.
+    pub pool_created_at: Option<i64>,
+}
+
+/// How one field's figures were obtained.
+///
+/// `status` is `ok` (read as published), `derived` (plain arithmetic on read
+/// figures; `detail` states it), `not_published` (no source has it for this
+/// venue at this resolution, so every point carries `None`), `unavailable`
+/// (the source failed this time) or `busy` (ponk's budget for the source is
+/// spent this minute; ask again shortly).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PoolHistorySource {
+    pub status: Option<String>,
+    /// `meteora_datapi`, `geckoterminal`, `orca_api` or `raydium_api`;
+    /// `None` when nothing was read.
+    pub source: Option<String>,
+    pub detail: Option<String>,
+}
+
+/// Where each series field of a pool history came from.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PoolHistorySources {
+    pub volume_usd: Option<PoolHistorySource>,
+    pub fees_usd: Option<PoolHistorySource>,
+    pub lp_fees_usd: Option<PoolHistorySource>,
+    pub protocol_fees_usd: Option<PoolHistorySource>,
+    pub fee_rate_pct: Option<PoolHistorySource>,
+    pub tvl_usd: Option<PoolHistorySource>,
+}
+
+/// The pool as its venue describes it now, next to the series.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PoolHistoryCurrent {
+    pub tvl_usd: Option<f64>,
+    /// The fee tier (Orca, Raydium) or the base half of the fee (Meteora).
+    pub base_fee_pct: Option<f64>,
+    /// Whether the fee moves with volatility; `None` when the venue states
+    /// nothing.
+    pub fee_is_dynamic: Option<bool>,
+    /// Percent of each fee that reaches LPs.
+    pub lp_share_pct: Option<f64>,
+    pub source: Option<String>,
+}
+
+/// The LVR edge NOW, never a bucket's: ponk stores no past readings.
+///
+/// `status` is `measured`, `unmeasured` (inputs too thin to read),
+/// `not_measured_recently` (nothing measured this pool in the last ten
+/// minutes; `GET /pools/{dex}/{address}/edge` measures it) or `unavailable`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PoolHistoryEdge {
+    pub status: Option<String>,
+    /// `pays`, `thin` or `bleeds` when measured.
+    pub verdict: Option<String>,
+    /// The engine's reading as sent (`r_min`, `binding_window_secs`,
+    /// `windows`).
+    pub reading: Option<serde_json::Value>,
+    pub admit_r: Option<f64>,
+    /// When the reading was taken, unix seconds.
+    pub measured_at: Option<i64>,
+}
+
+/// One pool's volume, fees, fee rate and TVL per day or hour
+/// (`GET /public/pools/{dex}/{address}/history`).
+///
+/// Every per-bucket figure is proxied from the venue's own data API or
+/// GeckoTerminal, or derived from proxied figures by plain arithmetic, and
+/// `sources` says which per field. A bucket no source has a figure for is not
+/// in `points` at all; nothing is zero filled or interpolated. `points` are
+/// oldest first. `dex` is `meteora_dlmm`, `orca` or `raydium`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PoolHistory {
+    pub dex: Option<String>,
+    pub pool: Option<String>,
+    /// `day` or `hour`.
+    pub resolution: Option<String>,
+    pub window: Option<PoolHistoryWindow>,
+    pub sources: Option<PoolHistorySources>,
+    pub points: Vec<PoolHistoryPoint>,
+    pub current: Option<PoolHistoryCurrent>,
+    pub edge: Option<PoolHistoryEdge>,
+    /// When this answer was assembled, unix seconds. A cached answer keeps
+    /// the time it was assembled.
+    pub generated_at: Option<i64>,
+}
+
+// --------------------------------------------------------------------------
 // Pool market lists (0.13.0)
 // --------------------------------------------------------------------------
 
@@ -3409,20 +3591,22 @@ pub struct OppToken {
     pub created_at: Option<i64>,
 }
 
-/// One pool on the Discover board: Meteora DLMM, Orca Whirlpools or Raydium
-/// CLMM. `volume` and `fees` are USD keyed by window (`30m`, `1h`, `4h`,
-/// `24h`); a `None` inside is a window that venue does not publish.
+/// One pool on the Discover board: Meteora DLMM, Meteora DAMM v2, Orca
+/// Whirlpools or Raydium CLMM. `volume` and `fees` are USD keyed by window
+/// (`30m`, `1h`, `4h`, `24h`); a `None` inside is a window that venue does not
+/// publish.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct OppPool {
     /// `dex:address`.
     pub key: Option<String>,
-    /// `meteora_dlmm`, `orca` or `raydium`.
+    /// `meteora_dlmm`, `meteora_damm_v2`, `orca` or `raydium`.
     pub dex: Option<String>,
     pub address: Option<String>,
     pub x: Option<OppToken>,
     pub y: Option<OppToken>,
-    /// Bin step (Meteora) or tick spacing (Orca, Raydium).
+    /// Bin step (Meteora DLMM) or tick spacing (Orca, Raydium). `None` on
+    /// Meteora DAMM v2, whose positions are shares of the pool, not ranges.
     pub bin_step: Option<u32>,
     /// The swap fee now, percent (base plus the live dynamic part on Meteora).
     pub fee_pct: Option<f64>,
@@ -3441,6 +3625,9 @@ pub struct OppSources {
     pub meteora: Option<bool>,
     pub orca: Option<bool>,
     pub raydium: Option<bool>,
+    /// Meteora DAMM v2.
+    #[serde(rename = "dammV2")]
+    pub damm_v2: Option<bool>,
     pub tokens: Option<bool>,
 }
 
@@ -3565,7 +3752,7 @@ mod live_shape_tests {
                   "binStep":4,"feePct":0.04,"tvl":2500000.0,"createdAt":null,"launchpad":null,
                   "volume":{"30m":1000.0,"1h":2100.0,"4h":null,"24h":48000.0},
                   "fees":{"30m":0.4,"1h":0.9,"4h":null,"24h":19.2}}],
-                "ok":{"meteora":true,"orca":true,"raydium":false,"tokens":true}}"#,
+                "ok":{"meteora":true,"orca":true,"raydium":false,"dammV2":true,"tokens":true}}"#,
         )
         .unwrap();
         let p = &f.pools[0];
@@ -3574,6 +3761,7 @@ mod live_shape_tests {
         // Raydium did not answer this read: the flag says so, honestly.
         assert_eq!(p.volume.get("4h"), Some(&None));
         assert_eq!(f.ok.as_ref().unwrap().raydium, Some(false));
+        assert_eq!(f.ok.as_ref().unwrap().damm_v2, Some(true));
         let x = p.x.as_ref().unwrap();
         assert_eq!(x.token_2022, Some(false));
         assert_eq!(x.change_1h, Some(-0.4));

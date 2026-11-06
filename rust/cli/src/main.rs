@@ -28,7 +28,7 @@ use table::{age, dash, pct, price, render, sol, usd, usd_str, Align, DASH};
 #[command(
     name = "ponk",
     version,
-    about = "Ponk from the terminal: LP pools on Meteora DLMM, Orca and Raydium, your agents, the leaderboard."
+    about = "Ponk from the terminal: LP pools on Meteora DLMM, Meteora DAMM v2, Orca and Raydium, your agents, the leaderboard."
 )]
 struct Cli {
     /// API base URL.
@@ -69,9 +69,9 @@ impl BoardView {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// LP pools. Default: the Discover board across Meteora DLMM, Orca
-    /// Whirlpools and Raydium CLMM, most 24h fees first. --view switches to
-    /// one of the Meteora board's own queries.
+    /// LP pools. Default: the Discover board across Meteora DLMM, Meteora
+    /// DAMM v2, Orca Whirlpools and Raydium CLMM, most 24h fees first. --view
+    /// switches to one of the Meteora DLMM board's own queries.
     Pools {
         /// A Meteora board view instead of the all-venue Discover board.
         #[arg(long, value_enum)]
@@ -84,11 +84,11 @@ enum Cmd {
         #[arg(long, default_value_t = 30)]
         limit: usize,
     },
-    /// One pool, decoded from chain. Tries Meteora DLMM, Orca and Raydium in
-    /// turn unless --dex names the venue.
+    /// One pool, decoded from chain. Tries Meteora DLMM, Meteora DAMM v2,
+    /// Orca, Raydium and Ponk Clouds in turn unless --dex names the venue.
     Pool {
         address: String,
-        /// meteora_dlmm, orca, raydium or ponk_clouds.
+        /// meteora_dlmm, meteora_damm_v2, orca, raydium or ponk_clouds.
         #[arg(long)]
         dex: Option<String>,
     },
@@ -101,7 +101,9 @@ enum Cmd {
     CreateAgent {
         #[arg(long)]
         name: String,
-        /// meteora_dlmm, orca or raydium.
+        /// meteora_dlmm, meteora_damm_v2, orca or raydium. On meteora_damm_v2
+        /// (a share of the pool, no range) only monitor_only and
+        /// fee_collector run.
         #[arg(long)]
         dex: String,
         /// bin_rebalancer, conservative_bin_rebalancer,
@@ -278,6 +280,7 @@ fn opp_select(mut pools: Vec<ponk::OppPool>, search: Option<&str>) -> Vec<ponk::
 fn venue_label(dex: Option<&str>) -> &'static str {
     match dex {
         Some("meteora_dlmm") => "meteora",
+        Some("meteora_damm_v2") => "damm v2",
         Some("orca") => "orca",
         Some("raydium") => "raydium",
         Some("ponk_clouds") => "clouds",
@@ -391,6 +394,9 @@ async fn pools(cli: &Cli, view: Option<BoardView>, search: Option<&str>, limit: 
             if ok.raydium == Some(false) {
                 down.push("raydium");
             }
+            if ok.damm_v2 == Some(false) {
+                down.push("meteora damm v2");
+            }
             if !down.is_empty() {
                 println!("\n{} did not answer this read; those venues' rows are missing.", down.join(", "));
             }
@@ -403,7 +409,14 @@ async fn pools(cli: &Cli, view: Option<BoardView>, search: Option<&str>, limit: 
 /* pool                                                                    */
 /* ---------------------------------------------------------------------- */
 
-const POOL_DEXES: [&str; 4] = ["meteora_dlmm", "orca", "raydium", "ponk_clouds"];
+const POOL_DEXES: [&str; 5] = ["meteora_dlmm", "meteora_damm_v2", "orca", "raydium", "ponk_clouds"];
+
+/// A venue whose position is a share of the whole pool, with no bins: its
+/// snapshot zero-fills `bin_step` and `active_bin_id`, which mean nothing
+/// there and print as a dash rather than a fabricated 0.
+fn has_bins(dex: &str) -> bool {
+    dex != "meteora_damm_v2"
+}
 
 async fn pool(cli: &Cli, address: &str, dex: Option<&str>) -> Result<()> {
     let client = client(cli, false)?;
@@ -435,6 +448,7 @@ async fn pool(cli: &Cli, address: &str, dex: Option<&str>) -> Result<()> {
         return print_json(&client.get_json(&format!("/pools/{dex}/{address}")).await?);
     }
     let line = |k: &str, v: String| println!("{k:<16} {v}");
+    let bins = has_bins(&dex);
     line("dex", dex);
     line("pool", dash(snapshot.pool_address.as_deref()));
     line(
@@ -453,8 +467,14 @@ async fn pool(cli: &Cli, address: &str, dex: Option<&str>) -> Result<()> {
             snapshot.token_y_decimals.map(|d| d.to_string()).unwrap_or_else(|| DASH.into())
         ),
     );
-    line("bin step", snapshot.bin_step.map(|b| b.to_string()).unwrap_or_else(|| DASH.into()));
-    line("active bin", snapshot.active_bin_id.map(|b| b.to_string()).unwrap_or_else(|| DASH.into()));
+    line(
+        "bin step",
+        snapshot.bin_step.filter(|_| bins).map(|b| b.to_string()).unwrap_or_else(|| DASH.into()),
+    );
+    line(
+        "active bin",
+        snapshot.active_bin_id.filter(|_| bins).map(|b| b.to_string()).unwrap_or_else(|| DASH.into()),
+    );
     line("price (y per x)", price(snapshot.human_price()));
     if snapshot.token_price.is_some() {
         line("token price", price(snapshot.token_price));
@@ -464,6 +484,12 @@ async fn pool(cli: &Cli, address: &str, dex: Option<&str>) -> Result<()> {
     line("volume 24h", usd_str(snapshot.volume_24h.as_deref()));
     line("fees 24h", usd_str(snapshot.fees_24h.as_deref()));
     line("fetched", dash(snapshot.fetched_at.as_deref()));
+    if let Some(w) = snapshot.mispricing_warning.as_deref() {
+        line("price warning", w.to_string());
+    }
+    if let Some(w) = snapshot.sell_warning.as_deref() {
+        line("sell warning", w.to_string());
+    }
     Ok(())
 }
 
@@ -804,6 +830,7 @@ mod tests {
             vec!["ponk", "pools", "--view", "hot", "--search", "SOL", "--limit", "10"],
             vec!["ponk", "pool", "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj"],
             vec!["ponk", "pool", "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj", "--dex", "orca"],
+            vec!["ponk", "pool", "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj", "--dex", "meteora_damm_v2"],
             vec!["ponk", "agents"],
             vec!["ponk", "agent", "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1"],
             vec!["ponk", "agent", "sunny-cloud-42"],
@@ -822,6 +849,20 @@ mod tests {
                 "cfg.json",
                 "--dry-run",
             ],
+            vec![
+                "ponk",
+                "create-agent",
+                "--name",
+                "d",
+                "--dex",
+                "meteora_damm_v2",
+                "--strategy",
+                "fee_collector",
+                "--pool",
+                "P",
+                "--config",
+                "-",
+            ],
             vec!["ponk", "pause", "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1"],
             vec!["ponk", "resume", "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1"],
             vec!["ponk", "withdraw", "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1", "--lamports", "100"],
@@ -833,6 +874,15 @@ mod tests {
                 panic!("{argv:?} did not parse: {e}");
             }
         }
+    }
+
+    #[test]
+    fn damm_v2_is_a_probed_venue_with_no_bins() {
+        assert!(POOL_DEXES.contains(&"meteora_damm_v2"));
+        assert_eq!(venue_label(Some("meteora_damm_v2")), "damm v2");
+        // Its zero-filled bin step and active bin print as a dash, not 0.
+        assert!(!has_bins("meteora_damm_v2"));
+        assert!(has_bins("meteora_dlmm") && has_bins("orca") && has_bins("raydium"));
     }
 
     #[test]

@@ -93,12 +93,15 @@
 //! history and decision record, sharing to the leaderboard, follows, points
 //! and referrals) plus the public reads that need no key at all
 //! ([`Client::health`], [`Client::pool`], [`Client::range_cost`],
-//! [`Client::ponk_perks`], the Top Ponkillionaires board
+//! [`Client::pool_history`], [`Client::ponk_perks`], the Top Ponkillionaires board
 //! [`Client::leaderboard`], [`Client::public_agent`] and its value history,
 //! the points board and [`Client::resolve_referral`]), the pool market lists
 //! ([`Client::hot_pools`], [`Client::opportunities`], which covers Meteora
-//! DLMM, Orca Whirlpools and Raydium CLMM in one board, and
-//! [`Client::dlmm_pools`]), the agent fleet
+//! DLMM, Meteora DAMM v2, Orca Whirlpools and Raydium CLMM in one board, and
+//! [`Client::dlmm_pools`]), the public self-custody LP builders that return
+//! an UNSIGNED transaction for a named owner ([`Client::damm_v2_open_prepare`],
+//! [`Client::damm_v2_claim_prepare`], [`Client::lp_add_liquidity_prepare`],
+//! [`Client::lp_withdraw_prepare_public`]), the agent fleet
 //! ([`Client::create_agents`], [`Client::fund_prepare`], which returns
 //! UNSIGNED transfers for your wallet to sign, [`Client::fleet_all`],
 //! [`Client::exit_agents`]) and the account parity routes (portfolio,
@@ -160,7 +163,8 @@ pub use models::{
 };
 pub use models::{
     BoardPool, BoardToken, DlmmPool, DlmmPoolPage, DlmmToken, OppBoard, OppPool, OppSources,
-    OppToken, PoolBoard,
+    OppToken, PoolBoard, PoolHistory, PoolHistoryCurrent, PoolHistoryEdge, PoolHistoryOmitted,
+    PoolHistoryPoint, PoolHistorySource, PoolHistorySources, PoolHistoryWindow,
 };
 pub use models::{
     ActivityRow, CopilotFleet, CopilotFleetSummary, CopilotParse, CopilotPlan, CopilotReplay,

@@ -56,13 +56,17 @@ impl Client {
     }
 
     /// Construct without a key, for the endpoints that need none: [`health`],
-    /// [`pool`], [`range_cost`] and [`ponk_perks`]. Every other method will
-    /// get a 401.
+    /// [`pool`], [`range_cost`], [`pool_history`], [`ponk_perks`], the public
+    /// boards and the public self-custody LP builders (for example
+    /// [`damm_v2_open_prepare`]). Every key-authenticated method will get a
+    /// 401.
     ///
     /// [`health`]: Client::health
     /// [`pool`]: Client::pool
     /// [`range_cost`]: Client::range_cost
+    /// [`pool_history`]: Client::pool_history
     /// [`ponk_perks`]: Client::ponk_perks
+    /// [`damm_v2_open_prepare`]: Client::damm_v2_open_prepare
     pub fn public(base_url: impl Into<String>) -> Result<Self> {
         Self::builder(base_url).build()
     }
@@ -111,9 +115,11 @@ impl Client {
 
     /// `GET /pools/{dex}/{address}`. One pool, decoded from chain.
     ///
-    /// `dex` is `meteora_dlmm`, `orca`, `ponk_clouds` or `raydium`. This
-    /// route is rate limited per IP (a 429 past the limit): it spends the same
-    /// RPC budget the live agents use.
+    /// `dex` is `meteora_dlmm`, `meteora_damm_v2`, `orca`, `ponk_clouds` or
+    /// `raydium`. This route is rate limited per IP (a 429 past the limit): it
+    /// spends the same RPC budget the live agents use. `sell_warning` and
+    /// `mispricing_warning` on the result are advice to show beside the pool,
+    /// never a refusal.
     pub async fn pool(&self, dex: &str, address: &str) -> Result<PoolSnapshot> {
         self.get(&format!("/pools/{}/{}", seg(dex), seg(address)))
             .await
@@ -140,6 +146,40 @@ impl Client {
             seg(address)
         ))
         .await
+    }
+
+    /// `GET /public/pools/{dex}/{address}/history?resolution=&buckets=`. One
+    /// pool's volume, fees, fee rate and TVL per bucket, each field's source
+    /// named in `sources`, plus the LVR edge where ponk measured it recently.
+    ///
+    /// `dex` is `meteora_dlmm`, `orca` or `raydium`; any other venue answers
+    /// 422. `resolution` is `day` (default 30 buckets, at most 90) or `hour`
+    /// (default 48, at most 96); a count outside that answers 400. The
+    /// in-progress bucket is never served, and a bucket no source has a figure
+    /// for is absent rather than zero. No key needed; rate limited per IP.
+    /// [`Client::pool_history_keyed`] reads the same body on the key's budget.
+    pub async fn pool_history(
+        &self,
+        dex: &str,
+        address: &str,
+        resolution: Option<&str>,
+        buckets: Option<u32>,
+    ) -> Result<PoolHistory> {
+        self.get(&pool_history_path("/public/pools", dex, address, resolution, buckets))
+            .await
+    }
+
+    /// `GET /v1/pools/{dex}/{address}/history`: [`Client::pool_history`] on
+    /// the API key's budget instead of the per-IP limit. Needs a key.
+    pub async fn pool_history_keyed(
+        &self,
+        dex: &str,
+        address: &str,
+        resolution: Option<&str>,
+        buckets: Option<u32>,
+    ) -> Result<PoolHistory> {
+        self.get(&pool_history_path("/v1/pools", dex, address, resolution, buckets))
+            .await
     }
 
     /// `GET /public/ponk/perks/{address}`. What fees a wallet pays.
@@ -760,8 +800,10 @@ impl Client {
 
     /// `POST /v1/agents/{id}/compound`. Claim fees and redeposit them now.
     ///
-    /// Meteora DLMM autonomous agents only. The range is read from chain, so
-    /// the re-deposit cannot be redirected.
+    /// Autonomous agents on Meteora DLMM, Meteora DAMM v2, Orca and Raydium
+    /// CLMM; a Ponk Clouds agent is refused (that venue has no fee claim). The
+    /// position is read from chain, so the re-deposit cannot be redirected: on
+    /// DAMM v2 it goes back into the same pool share.
     ///
     /// # `Ok` is not success
     ///
@@ -1597,8 +1639,13 @@ impl Client {
             .await
     }
 
-    /// `POST /v1/lp/{dex}/withdraw/prepare`. `dex` is `meteora_dlmm`, `orca`,
-    /// `raydium` or `ponk_clouds`; `bps_to_remove` 1 to 10000.
+    /// `POST /v1/lp/{dex}/withdraw/prepare`. `dex` is `meteora_dlmm`,
+    /// `meteora_damm_v2`, `orca`, `raydium` or `ponk_clouds`; `bps_to_remove`
+    /// 1 to 10000. The owner is the key's wallet.
+    ///
+    /// On `meteora_damm_v2` the closing 100% claims the fees first (and so
+    /// carries Ponk's fee on them), a partial withdraw collects no fees, and
+    /// [`Prepared::closes_position`] says whether the position is also closed.
     pub async fn lp_withdraw_prepare(
         &self,
         dex: &str,
@@ -1608,6 +1655,101 @@ impl Client {
     ) -> Result<Prepared> {
         let body = serde_json::json!({ "pool_address": pool_address, "position": position, "bps_to_remove": bps_to_remove });
         self.post(&format!("/v1/lp/{}/withdraw/prepare", seg(dex)), Some(&body), self.timeout)
+            .await
+    }
+
+    // -- self-custody builders for any wallet, no key needed --------------
+    //
+    // The `/public/lp/{dex}/...` routes build an UNSIGNED transaction for the
+    // `owner` named, simulated before it is returned. Nothing is signed or
+    // sent. Echo any `fee_event_ids` to `position_mark_tx` with the signature
+    // once it lands.
+
+    /// `POST /public/lp/{dex}/withdraw/prepare`. Withdraw from `owner`'s
+    /// position. `dex` is `meteora_damm_v2`, `orca`, `raydium` or
+    /// `ponk_clouds` (Meteora DLMM withdraws through
+    /// [`Client::lp_withdraw_prepare`] with a key); `bps_to_remove` 1 to 10000.
+    pub async fn lp_withdraw_prepare_public(
+        &self,
+        dex: &str,
+        pool_address: &str,
+        position: &str,
+        owner: &str,
+        bps_to_remove: u16,
+    ) -> Result<Prepared> {
+        let body = serde_json::json!({
+            "pool_address": pool_address,
+            "position": position,
+            "owner": owner,
+            "bps_to_remove": bps_to_remove,
+        });
+        self.post(&format!("/public/lp/{}/withdraw/prepare", seg(dex)), Some(&body), self.timeout)
+            .await
+    }
+
+    /// `POST /public/lp/{dex}/add-liquidity/prepare`. Add to `owner`'s
+    /// existing position. `dex` is `meteora_damm_v2`, `orca` or `raydium`.
+    /// Amounts are base units, sent as strings so a u64 survives JSON; on
+    /// `meteora_damm_v2` they are ceilings the pool's curve takes in its own
+    /// ratio.
+    pub async fn lp_add_liquidity_prepare(
+        &self,
+        dex: &str,
+        pool_address: &str,
+        position: &str,
+        owner: &str,
+        amount_x: u64,
+        amount_y: u64,
+    ) -> Result<Prepared> {
+        let body = serde_json::json!({
+            "pool_address": pool_address,
+            "position": position,
+            "owner": owner,
+            "amount_x": amount_x.to_string(),
+            "amount_y": amount_y.to_string(),
+        });
+        self.post(&format!("/public/lp/{}/add-liquidity/prepare", seg(dex)), Some(&body), self.timeout)
+            .await
+    }
+
+    /// `POST /public/lp/meteora_damm_v2/open/prepare`. Open a Meteora DAMM v2
+    /// position for `owner`.
+    ///
+    /// A DAMM v2 position is a share of the pool with NO price range, so it
+    /// opens with two amounts and nothing else. Amounts are base units (sent
+    /// as strings), ceilings the pool's curve takes in its own ratio; both
+    /// zero is refused. `max_slippage_bps` defaults to 100 on the server and
+    /// is clamped to 1..1000. The transaction is already partially signed by
+    /// the fresh position-NFT mint it creates; [`Prepared::position_address`]
+    /// and [`Prepared::position_nft_mint`] name the new position.
+    pub async fn damm_v2_open_prepare(
+        &self,
+        pool_address: &str,
+        owner: &str,
+        amount_x: u64,
+        amount_y: u64,
+        max_slippage_bps: Option<u16>,
+    ) -> Result<Prepared> {
+        let mut body = serde_json::json!({
+            "pool_address": pool_address,
+            "owner": owner,
+            "amount_x": amount_x.to_string(),
+            "amount_y": amount_y.to_string(),
+        });
+        if let Some(bps) = max_slippage_bps {
+            body["max_slippage_bps"] = serde_json::json!(bps);
+        }
+        self.post("/public/lp/meteora_damm_v2/open/prepare", Some(&body), self.timeout)
+            .await
+    }
+
+    /// `POST /public/lp/meteora_damm_v2/claim/prepare`. Claim a DAMM v2
+    /// position's fees, with Ponk's fee on them in the same transaction:
+    /// [`Prepared::fee`] is the per-leg review and `fee_event_ids` the drafts
+    /// to echo to [`Client::position_mark_tx`]. Nothing to claim answers 400.
+    pub async fn damm_v2_claim_prepare(&self, pool_address: &str, position: &str, owner: &str) -> Result<Prepared> {
+        let body = serde_json::json!({ "pool_address": pool_address, "position": position, "owner": owner });
+        self.post("/public/lp/meteora_damm_v2/claim/prepare", Some(&body), self.timeout)
             .await
     }
 
@@ -2125,8 +2267,9 @@ impl Client {
     }
 
     /// `GET <web>/discover/feed`. The Discover board: LP opportunities across
-    /// Meteora DLMM, Orca Whirlpools and Raydium CLMM in one read, each row
-    /// with both token legs' risk reads and per-window volume and fees.
+    /// Meteora DLMM, Meteora DAMM v2, Orca Whirlpools and Raydium CLMM in one
+    /// read, each row with both token legs' risk reads and per-window volume
+    /// and fees.
     ///
     /// Check `ok`: a source that did not answer leaves its rows out and the
     /// flag false, and nothing is substituted. Served from the web app origin
@@ -2721,6 +2864,16 @@ fn share_body(hide_usd: bool, show_onchain: Option<bool>) -> serde_json::Value {
 }
 
 /// `path` plus the set query parameters, each value percent-encoded.
+fn pool_history_path(prefix: &str, dex: &str, address: &str, resolution: Option<&str>, buckets: Option<u32>) -> String {
+    with_query(
+        &format!("{prefix}/{}/{}/history", seg(dex), seg(address)),
+        &[
+            ("resolution", resolution.map(str::to_string)),
+            ("buckets", buckets.map(|b| b.to_string())),
+        ],
+    )
+}
+
 fn with_query(path: &str, params: &[(&str, Option<String>)]) -> String {
     let set: Vec<String> = params
         .iter()
@@ -3520,5 +3673,140 @@ mod tests {
         let raw = server.join().unwrap();
         assert!(raw.starts_with("POST /v1/presets/rank HTTP/1.1\r\n"), "{raw}");
         assert_eq!(body_of(&raw), serde_json::json!({ "dex": "meteora_dlmm", "pool": "POOL", "window_days": 7 }));
+    }
+
+    #[tokio::test]
+    async fn the_damm_v2_open_sends_two_amounts_as_strings_and_no_range() {
+        let (base, server) = one_shot(
+            r#"{"unsigned_tx_b64":"AQAB","recent_blockhash":"H","position_address":"POS","position_nft_mint":"NFT"}"#,
+        );
+        let c = Client::public(base).unwrap();
+        let p = c.damm_v2_open_prepare("POOL", "OWNER", u64::MAX, 0, None).await.unwrap();
+        assert_eq!(p.position_address.as_deref(), Some("POS"));
+        assert_eq!(p.position_nft_mint.as_deref(), Some("NFT"));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /public/lp/meteora_damm_v2/open/prepare HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(
+            body_of(&raw),
+            serde_json::json!({ "pool_address": "POOL", "owner": "OWNER", "amount_x": "18446744073709551615", "amount_y": "0" })
+        );
+    }
+
+    #[tokio::test]
+    async fn the_damm_v2_open_passes_slippage_when_set() {
+        let (base, server) = one_shot(r#"{"unsigned_tx_b64":"AQAB"}"#);
+        let c = Client::public(base).unwrap();
+        c.damm_v2_open_prepare("POOL", "OWNER", 1, 2, Some(50)).await.unwrap();
+        assert_eq!(body_of(&server.join().unwrap())["max_slippage_bps"], 50);
+    }
+
+    #[tokio::test]
+    async fn the_damm_v2_claim_reads_the_fee_review() {
+        let (base, server) = one_shot(
+            r#"{"unsigned_tx_b64":"AQAB","recent_blockhash":"H","fee":{"bps":800},"fee_event_ids":["e1"]}"#,
+        );
+        let c = Client::public(base).unwrap();
+        let p = c.damm_v2_claim_prepare("POOL", "POS", "OWNER").await.unwrap();
+        assert_eq!(p.fee.as_ref().unwrap()["bps"], 800);
+        assert_eq!(p.fee_event_ids, vec!["e1".to_string()]);
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /public/lp/meteora_damm_v2/claim/prepare HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(body_of(&raw), serde_json::json!({ "pool_address": "POOL", "position": "POS", "owner": "OWNER" }));
+    }
+
+    #[tokio::test]
+    async fn the_damm_v2_withdraw_on_the_key_route_reads_closes_position() {
+        let (base, server) = one_shot(r#"{"unsigned_tx_b64":"AQAB","fee_event_ids":[],"closes_position":false}"#);
+        let c = Client::new(base, "k").unwrap();
+        let p = c.lp_withdraw_prepare("meteora_damm_v2", "POOL", "POS", 10_000).await.unwrap();
+        assert_eq!(p.closes_position, Some(false));
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /v1/lp/meteora_damm_v2/withdraw/prepare HTTP/1.1\r\n"), "{raw}");
+        assert!(body_of(&raw).get("owner").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_public_withdraw_and_add_name_the_owner() {
+        let (base, server) = one_shot(r#"{"unsigned_tx_b64":"AQAB"}"#);
+        let c = Client::public(base).unwrap();
+        c.lp_withdraw_prepare_public("meteora_damm_v2", "POOL", "POS", "OWNER", 2_500).await.unwrap();
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /public/lp/meteora_damm_v2/withdraw/prepare HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(
+            body_of(&raw),
+            serde_json::json!({ "pool_address": "POOL", "position": "POS", "owner": "OWNER", "bps_to_remove": 2500 })
+        );
+
+        let (base, server) = one_shot(r#"{"unsigned_tx_b64":"AQAB","recent_blockhash":"H"}"#);
+        let c = Client::public(base).unwrap();
+        c.lp_add_liquidity_prepare("meteora_damm_v2", "POOL", "POS", "OWNER", 5, 7).await.unwrap();
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("POST /public/lp/meteora_damm_v2/add-liquidity/prepare HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(
+            body_of(&raw),
+            serde_json::json!({ "pool_address": "POOL", "position": "POS", "owner": "OWNER", "amount_x": "5", "amount_y": "7" })
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_history_paths_and_absent_stays_absent() {
+        let (base, server) = one_shot(
+            r#"{"dex":"meteora_dlmm","pool":"P","resolution":"day",
+                "window":{"bucket_secs":86400,"from":10,"to":20,"buckets_in_window":3,"buckets_served":1,
+                          "omitted":{"before_pool_created":0,"no_recorded_activity":2},"pool_created_at":null},
+                "sources":{"tvl_usd":{"status":"not_published","source":null,"detail":"none"}},
+                "points":[{"ts":10,"date":"d","volume_usd":100.0,"fees_usd":0.25,"tvl_usd":null}],
+                "current":{"tvl_usd":5.0},"edge":{"status":"not_measured_recently"},"generated_at":30}"#,
+        );
+        let c = Client::public(base).unwrap();
+        let h = c.pool_history("meteora_dlmm", "P", Some("day"), Some(3)).await.unwrap();
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("GET /public/pools/meteora_dlmm/P/history?resolution=day&buckets=3 HTTP/1.1\r\n"), "{raw}");
+        assert_eq!(h.points.len(), 1);
+        assert_eq!(h.points[0].fees_usd, Some(0.25));
+        assert_eq!(h.points[0].tvl_usd, None);
+        let w = h.window.unwrap();
+        assert_eq!(w.omitted.unwrap().no_recorded_activity, Some(2));
+        assert_eq!(w.pool_created_at, None);
+        let tvl = h.sources.unwrap().tvl_usd.unwrap();
+        assert_eq!(tvl.status.as_deref(), Some("not_published"));
+        assert_eq!(tvl.source, None);
+        assert_eq!(h.edge.unwrap().status.as_deref(), Some("not_measured_recently"));
+
+        let (base, server) = one_shot(r#"{"points":[]}"#);
+        let c = Client::new(base, "k").unwrap();
+        c.pool_history_keyed("orca", "P", None, None).await.unwrap();
+        let raw = server.join().unwrap();
+        assert!(raw.starts_with("GET /v1/pools/orca/P/history HTTP/1.1\r\n"), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn the_pool_read_carries_the_sell_check() {
+        let (base, server) = one_shot(
+            r#"{"dex":"meteora_damm_v2","pool_address":"P","bin_step":0,"active_bin_id":0,
+                "price_divergence":0.01,"mispricing_warning":null,"sell_warning":"may not be sellable"}"#,
+        );
+        let c = Client::public(base).unwrap();
+        let p = c.pool("meteora_damm_v2", "P").await.unwrap();
+        assert_eq!(p.sell_warning.as_deref(), Some("may not be sellable"));
+        assert_eq!(p.mispricing_warning, None);
+        assert_eq!(p.price_divergence, Some(0.01));
+        assert!(server.join().unwrap().starts_with("GET /pools/meteora_damm_v2/P HTTP/1.1\r\n"));
+    }
+
+    #[tokio::test]
+    async fn copy_alerts_is_a_settings_switch() {
+        let (base, server) = one_shot(
+            r#"{"rebalance_telegram":false,"mandate_telegram":true,"weekly_recap_telegram":false,
+                "comments_telegram":true,"copy_alerts":false}"#,
+        );
+        let c = Client::new(base, "k").unwrap();
+        let s = c
+            .update_notify_settings(&NotifySettings { copy_alerts: Some(false), ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(s.copy_alerts, Some(false));
+        assert_eq!(s.comments_telegram, Some(true));
+        assert_eq!(body_of(&server.join().unwrap()), serde_json::json!({ "copy_alerts": false }));
     }
 }

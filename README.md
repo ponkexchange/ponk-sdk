@@ -24,8 +24,12 @@ move funds home, from Python or Rust.
 
 An agent opens a concentrated position, collects the fees, compounds them, and
 moves the range when the price does, across **Meteora DLMM**, **Orca
-Whirlpools**, **Raydium CLMM** and **Ponk Clouds**. These clients are how you
-drive that from your own code instead of the app.
+Whirlpools**, **Raydium CLMM** and **Ponk Clouds**. On **Meteora DAMM v2**,
+where a position is a share of the pool with no range, an agent monitors,
+collects and compounds fees, an autonomous one opens its own share of the pool
+from its agent wallet, and the clients build the open, add, claim and withdraw
+transactions for your own wallet to sign. These clients are how you drive that
+from your own code instead of the app.
 
 | | |
 |---|---|

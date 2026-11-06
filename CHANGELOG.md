@@ -3,6 +3,65 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.14.0 (2026-11-05)
+
+Both clients and the `ponk-cli` crate. The Python client skips 0.13.0 (that
+release was Rust only), so the two version numbers line up again.
+
+- **Meteora DAMM v2** (`meteora_damm_v2`) is a venue in both clients and the
+  CLI. A position there is a share of the pool with NO range, so nothing on it
+  takes a bin, a tick or a width, and only `monitor_only` and `fee_collector`
+  agents run on it. New self-custody builders, each returning an UNSIGNED
+  transaction for the `owner` you name, with no key needed:
+  `damm_v2_open_prepare` (`POST /public/lp/meteora_damm_v2/open/prepare`:
+  `pool_address`, `owner`, `amount_x`, `amount_y` in base units sent as
+  strings, optional `max_slippage_bps`; the result names `position_address`
+  and `position_nft_mint`) and `damm_v2_claim_prepare`
+  (`POST /public/lp/meteora_damm_v2/claim/prepare`: `pool_address`,
+  `position`, `owner`; Ponk's fee review in `fee`, drafts in
+  `fee_event_ids`).
+- **Meteora DAMM v2 agents run autonomously.** The server put the venue on
+  its autonomy allow-list on 2026-11-05, after every managed leg was simulated
+  through its executor against live mainnet pools. A `fee_collector` created
+  with no `position_address` opens its own share of the pool from its agent
+  wallet once it is funded and autonomous (`set_autonomous` under a mandate
+  signed in the app): it holds back the venue's SOL reserve, swaps part of the
+  SOL into the pool's other token at the pool's own deposit ratio, and needs
+  at least $5 deployable. It then compounds (`compound` reaches DAMM v2) or
+  claims with Ponk's fee, exits on `stop_loss_price`, `take_profit_price` and
+  the PnL thresholds (`price_stop_drop_pct` is still refused there), and
+  `exit_agent` claims, drains and closes the position; a position whose
+  liquidity is fully locked is claimed and kept, and the exit reports it
+  incomplete. An agent that is not autonomous still needs a position you
+  hold. No client method changed for this: the docstrings say it.
+- **Add and withdraw for any owner**: `lp_add_liquidity_prepare`
+  (`POST /public/lp/{dex}/add-liquidity/prepare`, `meteora_damm_v2`, `orca`
+  or `raydium`) and `lp_withdraw_prepare_public`
+  (`POST /public/lp/{dex}/withdraw/prepare`, `meteora_damm_v2`, `orca`,
+  `raydium` or `ponk_clouds`). The key route `lp_withdraw_prepare`
+  (`POST /v1/lp/{dex}/withdraw/prepare`) documents `meteora_damm_v2` too.
+  `Prepared` gains `position_nft_mint`, `fee` and `closes_position` (a DAMM v2
+  withdraw says whether it also closes the position).
+- **Pool history**: `pool_history` (`GET /public/pools/{dex}/{address}/history`,
+  `resolution` `day` or `hour`, `buckets` up to 90 days or 96 hours) and its
+  key-budget twin (`public=False` in Python, `pool_history_keyed` in Rust,
+  `GET /v1/pools/{dex}/{address}/history`). Volume, fees, LP and protocol
+  fees, fee rate and TVL per bucket on Meteora DLMM, Orca and Raydium, each
+  field's source in `sources`, the LVR edge where measured. A bucket no source
+  has is absent, never zero.
+- **The sell check on a pool read**: `PoolSnapshot` gains `sell_warning`,
+  `mispricing_warning` and `price_divergence` (and, in Python, the
+  `token_price` fields the Rust client already had). Advice, never a block.
+- **Copy alerts**: `NotifySettings` gains `copy_alerts` (push and Telegram for
+  every action a Copy LP follow completes) and `comments_telegram`, and
+  `update_notify_settings` sets either.
+- The Rust Discover board's `OppSources` gains `damm_v2` (`dammV2` on the
+  wire).
+- CLI: `ponk pool` probes `meteora_damm_v2` and accepts it in `--dex` (its
+  zero-filled bin step and active bin print as a dash), prints the price and
+  sell warnings when the pool has them, and `ponk pools` labels DAMM v2 rows
+  and says when that source did not answer.
+
 ## 0.13.0 (2026-11-04)
 
 Rust only; the Python client is unchanged at 0.12.0.

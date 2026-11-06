@@ -88,7 +88,7 @@ let agent = ponk
         &NewAgent::new(
             "sol-usdc runner",
             me.wallet_address.clone().unwrap(),  // must be the key's own wallet
-            "meteora_dlmm",                      // meteora_dlmm | orca | ponk_clouds | raydium
+            "meteora_dlmm",                      // meteora_dlmm | meteora_damm_v2 | orca | ponk_clouds | raydium
             "bin_rebalancer",
             serde_json::json!({
                 "kind": "bin_rebalancer",

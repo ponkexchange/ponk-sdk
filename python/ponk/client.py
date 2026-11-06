@@ -83,7 +83,7 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Union
 
 from ._version import __version__
 from .errors import PonkError, PonkTransportError, error_from_response
@@ -139,6 +139,7 @@ from .models import (
     MyPoints,
     PointsLeaderboard,
     PonkPerks,
+    PoolHistory,
     PoolSnapshot,
     Position,
     PublicAgent,
@@ -370,9 +371,11 @@ class PonkClient:
     def pool(self, dex: str, address: str) -> PoolSnapshot:
         """`GET /pools/{dex}/{address}`. One pool, decoded from chain.
 
-        `dex` is `meteora_dlmm`, `orca`, `ponk_clouds` or `raydium`. This
-        route is rate limited per IP (a 429 raises `PonkRateLimitedError`): it
-        spends the same RPC budget the live agents use.
+        `dex` is `meteora_dlmm`, `meteora_damm_v2`, `orca`, `ponk_clouds` or
+        `raydium`. This route is rate limited per IP (a 429 raises
+        `PonkRateLimitedError`): it spends the same RPC budget the live agents
+        use. `sell_warning` and `mispricing_warning` on the result are advice
+        to show beside the pool, never a refusal.
         """
         return PoolSnapshot.from_dict(
             self._request("GET", "/pools/{0}/{1}".format(_seg(dex), _seg(address)))
@@ -397,6 +400,38 @@ class PonkClient:
                 "GET",
                 "/pools/{0}/{1}/range-cost".format(_seg(dex), _seg(address)),
                 params={"bins": bins},
+            )
+        )
+
+    def pool_history(
+        self,
+        dex: str,
+        address: str,
+        *,
+        resolution: Optional[str] = None,
+        buckets: Optional[int] = None,
+        public: bool = True,
+    ) -> PoolHistory:
+        """`GET /public/pools/{dex}/{address}/history?resolution=&buckets=`.
+
+        One pool's volume, fees, fee rate and TVL per bucket, with each
+        field's source named in `sources` and the LVR edge where ponk measured
+        it recently. `dex` is `meteora_dlmm`, `orca` or `raydium`; any other
+        venue raises `PonkUnprocessableError`. `resolution` is `day` (default
+        30 buckets, at most 90) or `hour` (default 48, at most 96); a count
+        outside that raises `PonkBadRequestError`. The in-progress bucket is
+        never served, and a bucket no source has a figure for is absent rather
+        than zero.
+
+        `public=False` reads the `/v1` twin, `GET /v1/pools/{dex}/{address}/history`:
+        the same body, on the API key's budget instead of the per-IP limit.
+        """
+        prefix = "/public/pools" if public else "/v1/pools"
+        return PoolHistory.from_dict(
+            self._request(
+                "GET",
+                "{0}/{1}/{2}/history".format(prefix, _seg(dex), _seg(address)),
+                params={"resolution": resolution, "buckets": buckets},
             )
         )
 
@@ -1092,6 +1127,16 @@ class PonkClient:
         `external`, `mode` `manual`) until a mandate signed in the app makes it
         autonomous, so it can recommend but cannot sign for funds.
 
+        `dex` is `meteora_dlmm`, `meteora_damm_v2`, `orca`, `ponk_clouds` or
+        `raydium`. A Meteora DAMM v2 position is a share of the pool with no
+        range, so only `monitor_only` and `fee_collector` run there; a range
+        strategy on it is refused. Autonomy is offered there: a
+        `fee_collector` created with no `position_address` opens its own
+        share of the pool from its agent wallet once it is funded and
+        autonomous, then compounds or claims and exits on its take-profit or
+        stop-loss. An agent that is not autonomous never opens one there, so
+        give it the `position_address` of a position you hold.
+
         For `strategy="entry_agent"` (Degen Mode) the agent starts with no
         pool: `pool_address` and `position_address` are ignored, and the
         config's `venues` must include one where ponk can discover pools,
@@ -1434,8 +1479,11 @@ class PonkClient:
     def compound(self, agent_id: str) -> ActionReceipt:
         """`POST /v1/agents/{id}/compound`. Claim fees and redeposit them now.
 
-        Meteora DLMM autonomous agents only. The range is read from chain, so
-        the re-deposit cannot be redirected. Takes the fund timeout.
+        Autonomous agents on Meteora DLMM, Meteora DAMM v2, Orca and Raydium
+        CLMM; a Ponk Clouds agent is refused (that venue has no fee claim).
+        The position is read from chain, so the re-deposit cannot be
+        redirected: on DAMM v2 it goes back into the same pool share. Takes
+        the fund timeout.
 
         RETURNING IS NOT SUCCEEDING. A refusal at signing time, most commonly
         an expired custody mandate but also a risk halt or a daily-cap
@@ -2127,14 +2175,22 @@ class PonkClient:
         rebalance_telegram: Optional[bool] = None,
         mandate_telegram: Optional[bool] = None,
         weekly_recap_telegram: Optional[bool] = None,
+        comments_telegram: Optional[bool] = None,
+        copy_alerts: Optional[bool] = None,
     ) -> NotifySettings:
-        """`PUT /v1/notify-settings`. Only the switches you pass are changed. Needs a `trade` key."""
+        """`PUT /v1/notify-settings`. Only the switches you pass are changed. Needs a `trade` key.
+
+        `copy_alerts` switches push and Telegram for every action a Copy LP
+        follow completes; the notification bell row is written either way.
+        """
         body = {
             k: v
             for k, v in (
                 ("rebalance_telegram", rebalance_telegram),
                 ("mandate_telegram", mandate_telegram),
                 ("weekly_recap_telegram", weekly_recap_telegram),
+                ("comments_telegram", comments_telegram),
+                ("copy_alerts", copy_alerts),
             )
             if v is not None
         }
@@ -2849,13 +2905,19 @@ class PonkClient:
         )
 
     def position_compound_prepare(self, position_address: str) -> Prepared:
-        """`POST /v1/positions/{position}/compound/prepare`. Claim and re-deposit, unsigned."""
+        """`POST /v1/positions/{position}/compound/prepare`. Claim and re-deposit, unsigned.
+
+        Meteora DLMM, Meteora DAMM v2, Orca and Raydium."""
         return Prepared.from_dict(
             self._request("POST", "/v1/positions/{0}/compound/prepare".format(_seg(position_address)))
         )
 
     def position_claim_prepare(self, position_address: str) -> Prepared:
-        """`POST /v1/positions/{position}/claim-fees/prepare`. Claim fees, unsigned."""
+        """`POST /v1/positions/{position}/claim-fees/prepare`. Claim fees, unsigned.
+
+        A Meteora DAMM v2 position on the key's wallet claims here too (sync
+        it first with `positions_sync` if ponk has not seen it); without a key,
+        use `damm_v2_claim_prepare`."""
         return Prepared.from_dict(
             self._request("POST", "/v1/positions/{0}/claim-fees/prepare".format(_seg(position_address)))
         )
@@ -2865,14 +2927,120 @@ class PonkClient:
     ) -> Prepared:
         """`POST /v1/lp/{dex}/withdraw/prepare`. Withdraw from your own position, unsigned.
 
-        `dex` is `meteora_dlmm`, `orca`, `raydium` or `ponk_clouds` (Ponk
-        Clouds is closed to new liquidity and a held position can always be
-        withdrawn). `bps_to_remove` 1 to 10000; 10000 removes everything and
-        closes the position. The owner is the key's wallet.
+        `dex` is `meteora_dlmm`, `meteora_damm_v2`, `orca`, `raydium` or
+        `ponk_clouds` (Ponk Clouds is closed to new liquidity and a held
+        position can always be withdrawn). `bps_to_remove` 1 to 10000; 10000
+        removes everything and closes the position. The owner is the key's
+        wallet. On `meteora_damm_v2` the closing 100% claims the fees first
+        (and so carries Ponk's fee on them), a partial withdraw collects no
+        fees, and `closes_position` on the result says whether the position
+        is also closed: one holding vested or locked liquidity, or on a pool
+        with a farming reward, cannot be, though its liquidity and fees still
+        come out.
         """
         body = {"pool_address": pool_address, "position": position, "bps_to_remove": int(bps_to_remove)}
         return Prepared.from_dict(
             self._request("POST", "/v1/lp/{0}/withdraw/prepare".format(_seg(dex)), body=body)
+        )
+
+    # -- self-custody builders for any wallet, no key needed ------------------
+    #
+    # The `/public/lp/{dex}/...` routes build an UNSIGNED transaction for the
+    # `owner` you name, simulated before it is returned. Nothing is signed or
+    # sent: sign it in wallet software you control. Echo any `fee_event_ids`
+    # to `position_mark_tx` with the signature once it lands.
+
+    def lp_withdraw_prepare_public(
+        self, dex: str, *, pool_address: str, position: str, owner: str, bps_to_remove: int
+    ) -> Prepared:
+        """`POST /public/lp/{dex}/withdraw/prepare`. Withdraw from `owner`'s position, unsigned.
+
+        `dex` is `meteora_damm_v2`, `orca`, `raydium` or `ponk_clouds`
+        (Meteora DLMM withdraws through `lp_withdraw_prepare` with a key).
+        `bps_to_remove` 1 to 10000. The position must be `owner`'s and sit
+        on `pool_address`, or the server refuses before building.
+        """
+        body = {
+            "pool_address": pool_address,
+            "position": position,
+            "owner": owner,
+            "bps_to_remove": int(bps_to_remove),
+        }
+        return Prepared.from_dict(
+            self._request("POST", "/public/lp/{0}/withdraw/prepare".format(_seg(dex)), body=body)
+        )
+
+    def lp_add_liquidity_prepare(
+        self,
+        dex: str,
+        *,
+        pool_address: str,
+        position: str,
+        owner: str,
+        amount_x: Union[int, str],
+        amount_y: Union[int, str],
+    ) -> Prepared:
+        """`POST /public/lp/{dex}/add-liquidity/prepare`. Add to an existing position, unsigned.
+
+        `dex` is `meteora_damm_v2`, `orca` or `raydium`. `amount_x` and
+        `amount_y` are base units; they are sent as strings so a u64 survives
+        JSON. On `meteora_damm_v2` the pool's curve takes them in its own
+        ratio, so they are ceilings.
+        """
+        body = {
+            "pool_address": pool_address,
+            "position": position,
+            "owner": owner,
+            "amount_x": str(amount_x),
+            "amount_y": str(amount_y),
+        }
+        return Prepared.from_dict(
+            self._request("POST", "/public/lp/{0}/add-liquidity/prepare".format(_seg(dex)), body=body)
+        )
+
+    def damm_v2_open_prepare(
+        self,
+        *,
+        pool_address: str,
+        owner: str,
+        amount_x: Union[int, str],
+        amount_y: Union[int, str],
+        max_slippage_bps: Optional[int] = None,
+    ) -> Prepared:
+        """`POST /public/lp/meteora_damm_v2/open/prepare`. Open a Meteora DAMM v2 position, unsigned.
+
+        A DAMM v2 position is a share of the pool with NO price range, so it
+        opens with two amounts and nothing else. `amount_x` and `amount_y` are
+        base units (sent as strings), ceilings the pool's curve takes in its
+        own ratio; both zero is refused. `max_slippage_bps` defaults to 100
+        on the server and is clamped to 1..1000. The transaction is already
+        partially signed by the fresh position-NFT mint it creates;
+        `position_address` and `position_nft_mint` on the result name the
+        new position. Whoever holds the NFT owns the position.
+        """
+        body: Dict[str, Any] = {
+            "pool_address": pool_address,
+            "owner": owner,
+            "amount_x": str(amount_x),
+            "amount_y": str(amount_y),
+        }
+        if max_slippage_bps is not None:
+            body["max_slippage_bps"] = int(max_slippage_bps)
+        return Prepared.from_dict(
+            self._request("POST", "/public/lp/meteora_damm_v2/open/prepare", body=body)
+        )
+
+    def damm_v2_claim_prepare(self, *, pool_address: str, position: str, owner: str) -> Prepared:
+        """`POST /public/lp/meteora_damm_v2/claim/prepare`. Claim a DAMM v2 position's fees, unsigned.
+
+        Ponk's fee on the claimed fees is in the same transaction; `fee` on
+        the result is the per-leg review and `fee_event_ids` the drafts to
+        echo to `position_mark_tx` with the signature. A position with nothing
+        to claim raises `PonkBadRequestError`.
+        """
+        body = {"pool_address": pool_address, "position": position, "owner": owner}
+        return Prepared.from_dict(
+            self._request("POST", "/public/lp/meteora_damm_v2/claim/prepare", body=body)
         )
 
     def reclaim_wsol_prepare(self) -> Prepared:

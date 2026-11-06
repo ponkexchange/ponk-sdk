@@ -128,6 +128,13 @@ __all__ = [
     "PointsSeason",
     "PonkPerks",
     "PonkillionairesWeek",
+    "PoolHistory",
+    "PoolHistoryCurrent",
+    "PoolHistoryEdge",
+    "PoolHistoryPoint",
+    "PoolHistorySource",
+    "PoolHistorySources",
+    "PoolHistoryWindow",
     "PoolSnapshot",
     "Portfolio",
     "PortfolioHistory",
@@ -311,6 +318,18 @@ class PoolSnapshot(Model):
 
     `tvl_usd`, `volume_24h` and `fees_24h` come from market data, not the
     account, and are `None` when that data is unavailable.
+
+    On `meteora_damm_v2` a position is a share of the whole pool with no
+    bins, so `bin_step` and `active_bin_id` arrive as `0` and carry no
+    meaning there.
+
+    `price_divergence` is the pool price against the pair's market price, a
+    non-negative fraction (0.02 is 2%), `None` when either leg is unpriced.
+    `mispricing_warning` and `sell_warning` are one plain sentence each, or
+    `None`: the pool trading more than 3% off the market, and the honeypot
+    sell check finding a reason a leg may not be sellable (a risky Token-2022
+    extension, no route back into SOL, or a round trip worth a small fraction
+    of its cost). Both are advice, never a block.
     """
 
     dex: Optional[str] = None
@@ -327,6 +346,12 @@ class PoolSnapshot(Model):
     fees_24h: Optional[str] = None
     base_fee_pct: Optional[float] = None
     fetched_at: Optional[str] = None
+    token_price: Optional[float] = None
+    token_price_quote_mint: Optional[str] = None
+    token_price_base_mint: Optional[str] = None
+    price_divergence: Optional[float] = None
+    mispricing_warning: Optional[str] = None
+    sell_warning: Optional[str] = None
 
     def human_price(self) -> Optional[Decimal]:
         """`current_price` as a quote-per-base price, or `None` if unknown.
@@ -384,6 +409,157 @@ class RangeCost(Model):
     total_upfront_lamports: Optional[int] = None
     refundable_lamports: Optional[int] = None
     non_refundable_lamports: Optional[int] = None
+
+
+@dataclass
+class PoolHistoryPoint(Model):
+    """One bucket at least one source has a figure for.
+
+    `ts` is the bucket open in unix seconds (UTC aligned) and `date` the same
+    instant in RFC 3339. A field no source has for this bucket is `None`,
+    never zero. `fees_usd` is every swap fee paid, protocol share included;
+    `lp_fees_usd` is the part that reached liquidity providers and
+    `protocol_fees_usd` the rest. `fee_rate_pct` is percent of volume paid as
+    fees in the bucket.
+    """
+
+    ts: Optional[int] = None
+    date: Optional[str] = None
+    volume_usd: Optional[float] = None
+    fees_usd: Optional[float] = None
+    lp_fees_usd: Optional[float] = None
+    protocol_fees_usd: Optional[float] = None
+    fee_rate_pct: Optional[float] = None
+    tvl_usd: Optional[float] = None
+
+
+@dataclass
+class PoolHistoryWindow(Model):
+    """The span a pool history covers: `[from_, to)`, unix seconds, bucket aligned.
+
+    `to` is the open of the in-progress bucket, which is never served.
+    `buckets_served` of `buckets_in_window` carry a point; the rest are
+    absent. `omitted` counts buckets a source returned and the route
+    deliberately dropped (`before_pool_created`, and
+    `no_recorded_activity` for zero-filled Meteora rows that cannot be told
+    apart from a gap). `pool_created_at` is `None` when the venue does not
+    say.
+    """
+
+    _ALIASES: ClassVar[Mapping[str, str]] = {"from_": "from"}
+
+    bucket_secs: Optional[int] = None
+    from_: Optional[int] = None
+    to: Optional[int] = None
+    from_iso: Optional[str] = None
+    to_iso: Optional[str] = None
+    buckets_in_window: Optional[int] = None
+    buckets_served: Optional[int] = None
+    omitted: Optional[Dict[str, int]] = None
+    pool_created_at: Optional[int] = None
+
+
+@dataclass
+class PoolHistorySource(Model):
+    """How one field's figures were obtained.
+
+    `status` is `ok` (read as published), `derived` (plain arithmetic on read
+    figures; `detail` states it), `not_published` (no source has it for this
+    venue at this resolution, so every point carries `None`), `unavailable`
+    (the source failed this time) or `busy` (ponk's budget for the source is
+    spent this minute; ask again shortly). `source` is `meteora_datapi`,
+    `geckoterminal`, `orca_api` or `raydium_api`, `None` when nothing was read.
+    """
+
+    status: Optional[str] = None
+    source: Optional[str] = None
+    detail: Optional[str] = None
+
+
+@dataclass
+class PoolHistorySources(Model):
+    """Where each series field of a pool history came from."""
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "volume_usd": PoolHistorySource,
+        "fees_usd": PoolHistorySource,
+        "lp_fees_usd": PoolHistorySource,
+        "protocol_fees_usd": PoolHistorySource,
+        "fee_rate_pct": PoolHistorySource,
+        "tvl_usd": PoolHistorySource,
+    }
+
+    volume_usd: Optional[PoolHistorySource] = None
+    fees_usd: Optional[PoolHistorySource] = None
+    lp_fees_usd: Optional[PoolHistorySource] = None
+    protocol_fees_usd: Optional[PoolHistorySource] = None
+    fee_rate_pct: Optional[PoolHistorySource] = None
+    tvl_usd: Optional[PoolHistorySource] = None
+
+
+@dataclass
+class PoolHistoryCurrent(Model):
+    """The pool as its venue describes it now, next to the series.
+
+    `base_fee_pct` is the fee tier (Orca, Raydium) or the base half of the
+    fee (Meteora). `fee_is_dynamic` is `None` when the venue states nothing.
+    `lp_share_pct` is the percent of each fee that reaches LPs.
+    """
+
+    tvl_usd: Optional[float] = None
+    base_fee_pct: Optional[float] = None
+    fee_is_dynamic: Optional[bool] = None
+    lp_share_pct: Optional[float] = None
+    source: Optional[str] = None
+
+
+@dataclass
+class PoolHistoryEdge(Model):
+    """The LVR edge NOW, never a bucket's: ponk stores no past readings.
+
+    `status` is `measured`, `unmeasured` (inputs too thin to read),
+    `not_measured_recently` (nothing measured this pool in the last ten
+    minutes; `GET /pools/{dex}/{address}/edge` measures it) or `unavailable`.
+    `verdict` is `pays`, `thin` or `bleeds` when measured. `reading` is the
+    engine's reading as sent (`r_min`, `binding_window_secs`, `windows`).
+    """
+
+    status: Optional[str] = None
+    verdict: Optional[str] = None
+    reading: Optional[Dict[str, Any]] = None
+    admit_r: Optional[float] = None
+    measured_at: Optional[int] = None
+
+
+@dataclass
+class PoolHistory(Model):
+    """One pool's volume, fees, fee rate and TVL per day or hour.
+
+    Every per-bucket figure is proxied from the venue's own data API or
+    GeckoTerminal, or derived from proxied figures by plain arithmetic, and
+    `sources` says which per field. ABSENT IS ABSENT: a bucket no source has a
+    figure for is not in `points` at all, and nothing is zero filled or
+    interpolated. `points` are oldest first. `dex` is `meteora_dlmm`, `orca`
+    or `raydium`.
+    """
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "window": PoolHistoryWindow,
+        "sources": PoolHistorySources,
+        "points": (PoolHistoryPoint,),
+        "current": PoolHistoryCurrent,
+        "edge": PoolHistoryEdge,
+    }
+
+    dex: Optional[str] = None
+    pool: Optional[str] = None
+    resolution: Optional[str] = None
+    window: Optional[PoolHistoryWindow] = None
+    sources: Optional[PoolHistorySources] = None
+    points: Optional[List[PoolHistoryPoint]] = None
+    current: Optional[PoolHistoryCurrent] = None
+    edge: Optional[PoolHistoryEdge] = None
+    generated_at: Optional[int] = None
 
 
 @dataclass
@@ -2604,11 +2780,18 @@ class Recommendation(Model):
 
 @dataclass
 class NotifySettings(Model):
-    """Which Telegram messages the account receives."""
+    """Which Telegram messages the account receives.
+
+    `comments_telegram`: a reply to your comment, or a comment on your call,
+    is DMed. `copy_alerts`: every action a Copy LP follow completed is pushed
+    and DMed (the bell row is written either way).
+    """
 
     rebalance_telegram: Optional[bool] = None
     mandate_telegram: Optional[bool] = None
     weekly_recap_telegram: Optional[bool] = None
+    comments_telegram: Optional[bool] = None
+    copy_alerts: Optional[bool] = None
 
 
 @dataclass
@@ -2904,6 +3087,12 @@ class Prepared(Model):
     `unsigned_tx_b64` (or `open_tx_b64` for the reopen leg). Nothing was
     signed or sent: sign it in wallet software you control, send it, then
     report the signature with the matching mark call.
+
+    `position_nft_mint` is set on a Meteora DAMM v2 open (whoever holds the
+    NFT owns the position). `fee` is Ponk's fee on the LP fees a claim or
+    withdraw collects, per leg, for the review; `None` when it collects none.
+    `closes_position` is set on a DAMM v2 withdraw: whether it also closes
+    the position and returns its rent.
     """
 
     unsigned_tx_b64: Optional[str] = None
@@ -2919,6 +3108,9 @@ class Prepared(Model):
     new_upper_bin_id: Optional[int] = None
     fee_event_ids: Optional[List[str]] = None
     draft_event_ids: Optional[List[str]] = None
+    position_nft_mint: Optional[str] = None
+    fee: Optional[Dict[str, Any]] = None
+    closes_position: Optional[bool] = None
 
 
 @dataclass

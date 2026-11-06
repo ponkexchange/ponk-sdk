@@ -111,7 +111,7 @@ Create an agent, watch it think, then let it trade:
 agent = ponk.create_agent(
     name="sol-usdc runner",
     wallet_address=me.wallet_address,   # must be the key's own wallet
-    dex="meteora_dlmm",                 # meteora_dlmm | orca | ponk_clouds | raydium
+    dex="meteora_dlmm",                 # meteora_dlmm | meteora_damm_v2 | orca | ponk_clouds | raydium
     pool_address="POOL_ADDRESS",
     strategy="bin_rebalancer",
     config={"kind": "bin_rebalancer", "bin_range_width": 20, "rebalance_threshold_bins": 5},
