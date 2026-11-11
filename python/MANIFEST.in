@@ -1,0 +1,4 @@
+# The EVM tests read their recorded answers from these files, so the sdist
+# carries them beside the tests it already ships.
+recursive-include tests/fixtures *.json
+include tests/__init__.py
