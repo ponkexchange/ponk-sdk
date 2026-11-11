@@ -1,0 +1,110 @@
+{
+  "address": "eip155:1:0x000000000004444c5dc75cb358380d2e3de08a90:0x98316e8405502774a5d0a0761276b5d26505a8195c1905169864008d5e7a3eea",
+  "binStep": 4,
+  "chain": "ethereum",
+  "createdAt": 1791934535000,
+  "dataInsufficient": [
+    "fees: the hook sets this pool's fee on each swap, so no single fee rate describes its volume"
+  ],
+  "dex": "uniswap_v4",
+  "dynamicFee": true,
+  "farm": null,
+  "feePct": null,
+  "fees": {
+    "1h": null,
+    "24h": null,
+    "30m": null,
+    "4h": null
+  },
+  "hooks": {
+    "address": "0x000022ec4ebd6b12294396e852e4c3876b253cc0",
+    "agentEligible": false,
+    "points": [
+      "before_initialize",
+      "after_initialize",
+      "before_add_liquidity",
+      "after_add_liquidity",
+      "before_swap",
+      "after_swap"
+    ],
+    "policy": {
+      "status": "unreviewed"
+    },
+    "touchesLpFunds": true
+  },
+  "key": "uniswap_v4:eip155:1:0x000000000004444c5dc75cb358380d2e3de08a90:0x98316e8405502774a5d0a0761276b5d26505a8195c1905169864008d5e7a3eea",
+  "launchpad": null,
+  "liquidity": "771963995846390150",
+  "price": 2065.627837989398,
+  "sqrtPriceX96": "3600854910504766307050151",
+  "tick": -199989,
+  "tvl": 9310376.0086,
+  "tvlSource": "coingecko",
+  "volume": {
+    "1h": 247499.730862483,
+    "24h": 8360849.14593963,
+    "30m": 141362.90387221,
+    "4h": null
+  },
+  "volumeSource": "coingecko",
+  "x": {
+    "address": "0x0000000000000000000000000000000000000000",
+    "buyVolume1h": null,
+    "chain": "ethereum",
+    "change1h": 0.191,
+    "change24h": -2.648,
+    "createdAt": null,
+    "decimals": 18,
+    "freezeAuthorityDisabled": null,
+    "holders": null,
+    "logoUri": null,
+    "mint": "eip155:1:0x0000000000000000000000000000000000000000",
+    "mintAuthorityDisabled": null,
+    "name": "Ether",
+    "pendingMultiplier": null,
+    "priceSource": "chainlink",
+    "priceUsd": 2060.42675492,
+    "priceVia": null,
+    "sellVolume1h": null,
+    "stock": false,
+    "symbol": "ETH",
+    "token2022": null,
+    "topHoldersPct": null,
+    "traders1h": null,
+    "verification": {
+      "source": "native",
+      "status": "verified"
+    },
+    "verified": true
+  },
+  "y": {
+    "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "buyVolume1h": null,
+    "chain": "ethereum",
+    "change1h": 0.235,
+    "change24h": -0.42,
+    "createdAt": null,
+    "decimals": 6,
+    "freezeAuthorityDisabled": null,
+    "holders": null,
+    "logoUri": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+    "mint": "eip155:1:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "mintAuthorityDisabled": null,
+    "name": "USD Coin",
+    "pendingMultiplier": null,
+    "priceSource": "coingecko",
+    "priceUsd": 0.998832783630087,
+    "priceVia": null,
+    "sellVolume1h": null,
+    "stock": false,
+    "symbol": "USDC",
+    "token2022": null,
+    "topHoldersPct": null,
+    "traders1h": null,
+    "verification": {
+      "source": "uniswap_default_list",
+      "status": "verified"
+    },
+    "verified": true
+  }
+}

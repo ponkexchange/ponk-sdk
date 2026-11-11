@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ponk"
 dynamic = ["version"]
-description = "Python client for the ponk API: Solana DLMM liquidity agents, and webhook verification."
+description = "Python client for the ponk API: liquidity agents on Solana, Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain, and webhook verification."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
-keywords = ["solana", "dlmm", "liquidity", "meteora", "orca", "ponk", "webhooks", "jupiter", "limit-orders", "dca"]
+keywords = ["solana", "ethereum", "arbitrum", "base", "bnb-chain", "dlmm", "liquidity", "meteora", "orca", "raydium", "uniswap", "pancakeswap", "aerodrome", "ponk", "webhooks", "jupiter", "limit-orders", "dca"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.8",

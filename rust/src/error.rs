@@ -35,6 +35,11 @@ pub enum Error {
     #[error("invalid base url: {0}")]
     InvalidBaseUrl(String),
 
+    /// An argument was refused before any request was sent. The message is a
+    /// plain sentence naming it.
+    #[error("{0}")]
+    InvalidArgument(String),
+
     /// A 2xx body did not match the shape this crate expects.
     #[error("could not decode the response from {path}: {message}")]
     Decode { path: String, message: String },

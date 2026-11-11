@@ -1,0 +1,30 @@
+{
+  "address": "0x0000000000000000000000000000000000000000",
+  "buyVolume1h": null,
+  "chain": "bsc",
+  "change1h": null,
+  "change24h": null,
+  "createdAt": null,
+  "decimals": 18,
+  "freezeAuthorityDisabled": null,
+  "holders": null,
+  "logoUri": null,
+  "mint": "eip155:56:0x0000000000000000000000000000000000000000",
+  "mintAuthorityDisabled": null,
+  "name": "BNB",
+  "pendingMultiplier": null,
+  "priceSource": "chainlink",
+  "priceUsd": 680.4474563,
+  "priceVia": null,
+  "sellVolume1h": null,
+  "stock": false,
+  "symbol": "BNB",
+  "token2022": null,
+  "topHoldersPct": null,
+  "traders1h": null,
+  "verification": {
+    "source": "native",
+    "status": "verified"
+  },
+  "verified": true
+}

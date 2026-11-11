@@ -33,8 +33,9 @@ OWNER = "GYdJfRSH11111111111111111111111111111111111"
 
 
 class TestVersion(unittest.TestCase):
-    def test_version_is_0_14_0(self):
-        self.assertEqual(__version__, "0.14.0")
+    def test_version_is_at_least_0_14_0(self):
+        # The exact version is pinned by the newest release's own test file.
+        self.assertGreaterEqual(tuple(int(p) for p in __version__.split(".")[:2]), (0, 14))
 
 
 class TestDammV2(unittest.TestCase):

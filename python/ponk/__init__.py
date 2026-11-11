@@ -19,6 +19,52 @@ ACTIVATION_FEE_HOLDER_BPS = 50
 #: The referrer's share of an activation: 0.25% of the capital, paid in the
 #: opening transaction out of the fee (the user pays the same either way).
 ACTIVATION_REFERRER_BPS = 25
+#: The same two rates for an agent created with an API key (this client, the
+#: Rust crate, the CLI, an MCP connector): 1.5%, or 0.75% for a holder. Such
+#: an agent pays 15% of the fees it earns, against 8% for one created on
+#: ponk.exchange. `Agent.activation_fee_bps` and `Agent.managed_fee_bps` state
+#: the rates of one agent; `PonkClient.evm_open_cost` states them before a create.
+ACTIVATION_FEE_API_BPS = 150
+ACTIVATION_FEE_API_HOLDER_BPS = 75
+from . import evm
+from .evm import (
+    CHAINS,
+    EVM_CHAINS,
+    EVM_CHAIN_IDS,
+    EVM_VENUES,
+    EvmId,
+    agent_page_url,
+    fund_link,
+    fund_links,
+    native_token_id,
+    parse_evm_id,
+    pool_id,
+    token_id,
+    v4_pool_id,
+    wei_to_native,
+)
+from .models import (  # 0.15.0
+    EvmBoard,
+    EvmBoardStatus,
+    EvmChain,
+    EvmChains,
+    EvmFarm,
+    EvmFleet,
+    EvmFleetAgent,
+    EvmHook,
+    EvmOpenCost,
+    EvmPlan,
+    EvmPlanAgent,
+    EvmPlanAlternative,
+    EvmPlanChain,
+    EvmPlanDropped,
+    EvmPlanLeg,
+    EvmPool,
+    EvmReceived,
+    EvmToken,
+    EvmWindows,
+    FarmRewards,
+)
 from .client import (
     DEFAULT_BASE_URL,
     DEFAULT_FUND_TIMEOUT,
@@ -245,6 +291,43 @@ from .models import (  # 0.7.0
 )
 
 __all__ = [
+    "ACTIVATION_FEE_API_BPS",
+    "ACTIVATION_FEE_API_HOLDER_BPS",
+    "evm",
+    "CHAINS",
+    "EVM_CHAINS",
+    "EVM_CHAIN_IDS",
+    "EVM_VENUES",
+    "EvmId",
+    "agent_page_url",
+    "fund_link",
+    "fund_links",
+    "native_token_id",
+    "parse_evm_id",
+    "pool_id",
+    "token_id",
+    "v4_pool_id",
+    "wei_to_native",
+    "EvmBoard",
+    "EvmBoardStatus",
+    "EvmChain",
+    "EvmChains",
+    "EvmFarm",
+    "EvmFleet",
+    "EvmFleetAgent",
+    "EvmHook",
+    "EvmOpenCost",
+    "EvmPlan",
+    "EvmPlanAgent",
+    "EvmPlanAlternative",
+    "EvmPlanChain",
+    "EvmPlanDropped",
+    "EvmPlanLeg",
+    "EvmPool",
+    "EvmReceived",
+    "EvmToken",
+    "EvmWindows",
+    "FarmRewards",
     "ACTIVATION_FEE_BPS",
     "ACTIVATION_FEE_HOLDER_BPS",
     "ACTIVATION_REFERRER_BPS",

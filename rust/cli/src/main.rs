@@ -12,8 +12,10 @@
 //! Configuration is environment first, flags second:
 //!
 //! * `PONK_API_KEY`  the `ponk_live_...` key from Settings, API keys. Needed
-//!   by `agents`, `agent <uuid>`, `create-agent`, `pause`, `resume`,
-//!   `withdraw` and `whoami`. The pool and leaderboard reads need none.
+//!   by `agents`, `agent <uuid>`, `create-agent`, `create-evm-agent`,
+//!   `wallet`, `pause`, `resume`, `withdraw`, `exit`, `open-cost`, `plan`,
+//!   `start-plan`, `evm-fleet` and `whoami`. The pool, chain and leaderboard
+//!   reads and `fund-link` need none.
 //! * `PONK_API_URL`  the API base, default `https://ponk.exchange/api`.
 //! * `PONK_WEB_URL`  the web origin for the two app-served boards, only when
 //!   it is not the API base minus `/api` (local development).
@@ -28,7 +30,7 @@ use table::{age, dash, pct, price, render, sol, usd, usd_str, Align, DASH};
 #[command(
     name = "ponk",
     version,
-    about = "Ponk from the terminal: LP pools on Meteora DLMM, Meteora DAMM v2, Orca and Raydium, your agents, the leaderboard."
+    about = "Ponk from the terminal: LP pools and agents on Solana (Meteora DLMM, Meteora DAMM v2, Orca, Raydium) and on Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain (Uniswap, PancakeSwap, Aerodrome), the leaderboard."
 )]
 struct Cli {
     /// API base URL.
@@ -145,6 +147,112 @@ enum Cmd {
     },
     /// Confirm the key works and what it is allowed to do.
     Whoami,
+    /// Every chain ponk runs on, its gas coin and its venues.
+    Chains,
+    /// LP pools on an EVM chain, most 24h LP fees first.
+    EvmPools {
+        /// ethereum, arbitrum, base, bsc or robinhood.
+        chain: String,
+        /// One venue: uniswap_v2, uniswap_v3, uniswap_v4, pancakeswap_v2,
+        /// pancakeswap_v3, pancakeswap_infinity_cl, aerodrome_slipstream or
+        /// aerodrome_classic.
+        #[arg(long)]
+        venue: Option<String>,
+        /// Filter by token symbol or pool id.
+        #[arg(long)]
+        search: Option<String>,
+        /// Rows to print.
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+    /// One EVM pool by its id (eip155:<chain id>:0x...).
+    EvmPool { id: String },
+    /// What the first open of an agent costs on an EVM venue: gas, the
+    /// reserve kept for the exit, and the fee rates your key's agents pay.
+    OpenCost {
+        chain: String,
+        /// The venue id.
+        #[arg(long)]
+        dex: String,
+        /// The pool id, to check it against the venue and chain.
+        #[arg(long)]
+        pool: Option<String>,
+        /// Quote an open that does not stake for farm rewards.
+        #[arg(long)]
+        no_stake: bool,
+    },
+    /// Create an agent on an EVM chain, then print its deposit address and
+    /// the link where your own wallets sign its mandate. Live by default.
+    CreateEvmAgent {
+        #[arg(long)]
+        name: String,
+        /// ethereum, arbitrum, base, bsc or robinhood.
+        #[arg(long)]
+        chain: String,
+        /// The venue id.
+        #[arg(long)]
+        dex: String,
+        /// The pool id (eip155:<chain id>:0x...), from `ponk evm-pools`.
+        #[arg(long)]
+        pool: String,
+        /// How far the range reaches below the price, as a fraction: 0.05 is
+        /// 5%. Range venues only.
+        #[arg(long)]
+        down_pct: Option<f64>,
+        /// How far the range reaches above the price, as a fraction.
+        #[arg(long)]
+        up_pct: Option<f64>,
+        /// Your own strategy id, with --config.
+        #[arg(long)]
+        strategy: Option<String>,
+        /// Path to your own strategy config JSON, or - for stdin, instead of
+        /// --down-pct and --up-pct.
+        #[arg(long)]
+        config: Option<String>,
+        /// Stake the position for farm rewards: CAKE on pancakeswap_v3, AERO
+        /// on Aerodrome (there, AERO instead of swap fees).
+        #[arg(long)]
+        stake: bool,
+        /// The EVM address you intend withdrawals to go to, EIP-55 mixed case.
+        #[arg(long)]
+        withdrawal_address: Option<String>,
+        /// Simulate: evaluate and log every decision, send nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// An agent's own wallet: its deposit address, balance, what the first
+    /// open needs, and its mandate status.
+    Wallet { id: String },
+    /// The ponk.exchange link where your own wallets fund agents and sign
+    /// for them. Signs nothing and needs no key.
+    FundLink {
+        /// One or more agent ids.
+        #[arg(required = true)]
+        ids: Vec<String>,
+        /// The agents' chain. An agent on an EVM chain is funded in that
+        /// chain's own coin, so its link carries no amount.
+        #[arg(long)]
+        chain: Option<String>,
+        /// Lamports to send to each Solana agent. Omit to sign only.
+        #[arg(long)]
+        lamports: Option<u64>,
+    },
+    /// Every EVM agent you own and what each still needs from you.
+    EvmFleet,
+    /// Plan one sentence that names an EVM chain, in dollars:
+    /// ponk plan "$200 in the top 5 bnb pools". Creates nothing.
+    Plan { text: String },
+    /// Start a plan: one agent per pool. Moves no money; prints the link
+    /// where your own wallets sign and fund.
+    StartPlan { id: String },
+    /// Stop the agent, close its position and send everything home. On an
+    /// EVM chain that is the mandate's withdrawal address.
+    Exit {
+        id: String,
+        /// Required: an exit closes the position.
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -206,6 +314,51 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Withdraw { id, lamports } => withdraw(&cli, id, *lamports).await,
         Cmd::Leaderboard { window } => leaderboard(&cli, window.as_deref()).await,
         Cmd::Whoami => whoami(&cli).await,
+        Cmd::Chains => chains(&cli).await,
+        Cmd::EvmPools { chain, venue, search, limit } => {
+            evm_pools(&cli, chain, venue.as_deref(), search.as_deref(), *limit).await
+        }
+        Cmd::EvmPool { id } => evm_pool(&cli, id).await,
+        Cmd::OpenCost { chain, dex, pool, no_stake } => {
+            open_cost(&cli, chain, dex, pool.as_deref(), *no_stake).await
+        }
+        Cmd::CreateEvmAgent {
+            name,
+            chain,
+            dex,
+            pool,
+            down_pct,
+            up_pct,
+            strategy,
+            config,
+            stake,
+            withdrawal_address,
+            dry_run,
+        } => {
+            create_evm_agent(
+                &cli,
+                EvmCreate {
+                    name,
+                    chain,
+                    dex,
+                    pool,
+                    down_pct: *down_pct,
+                    up_pct: *up_pct,
+                    strategy: strategy.as_deref(),
+                    config: config.as_deref(),
+                    stake: *stake,
+                    withdrawal_address: withdrawal_address.as_deref(),
+                    dry_run: *dry_run,
+                },
+            )
+            .await
+        }
+        Cmd::Wallet { id } => wallet(&cli, id).await,
+        Cmd::FundLink { ids, chain, lamports } => fund_link(ids, chain.as_deref(), *lamports),
+        Cmd::EvmFleet => evm_fleet(&cli).await,
+        Cmd::Plan { text } => plan(&cli, text).await,
+        Cmd::StartPlan { id } => start_plan(&cli, id).await,
+        Cmd::Exit { id, confirm } => exit(&cli, id, *confirm).await,
     }
 }
 
@@ -284,6 +437,14 @@ fn venue_label(dex: Option<&str>) -> &'static str {
         Some("orca") => "orca",
         Some("raydium") => "raydium",
         Some("ponk_clouds") => "clouds",
+        Some("uniswap_v2") => "uniswap v2",
+        Some("uniswap_v3") => "uniswap v3",
+        Some("uniswap_v4") => "uniswap v4",
+        Some("pancakeswap_v2") => "pancake v2",
+        Some("pancakeswap_v3") => "pancake v3",
+        Some("pancakeswap_infinity_cl") => "pancake infinity",
+        Some("aerodrome_slipstream") => "slipstream",
+        Some("aerodrome_classic") => "aerodrome",
         _ => DASH,
     }
 }
@@ -513,6 +674,7 @@ async fn agents(cli: &Cli) -> Result<()> {
             vec![
                 dash(a.name.as_deref()),
                 dash(a.id.as_deref()),
+                dash(a.chain.as_deref()),
                 dash(a.dex.as_deref()),
                 dash(a.strategy.as_deref()),
                 dash(a.status.as_deref()),
@@ -529,8 +691,9 @@ async fn agents(cli: &Cli) -> Result<()> {
     println!(
         "{}",
         render(
-            &["NAME", "ID", "DEX", "STRATEGY", "STATUS", "MODE", "RUN", "POOL"],
+            &["NAME", "ID", "CHAIN", "DEX", "STRATEGY", "STATUS", "MODE", "RUN", "POOL"],
             &[
+                Align::Left,
                 Align::Left,
                 Align::Left,
                 Align::Left,
@@ -567,6 +730,7 @@ async fn agent(cli: &Cli, id_or_slug: &str) -> Result<()> {
         let line = |k: &str, v: String| println!("{k:<18} {v}");
         line("name", dash(a.name.as_deref()));
         line("id", dash(a.id.as_deref()));
+        line("chain", dash(a.chain.as_deref()));
         line("dex", dash(a.dex.as_deref()));
         line("pool", dash(a.pool_address.as_deref()));
         line("strategy", dash(a.strategy.as_deref()));
@@ -595,6 +759,25 @@ async fn agent(cli: &Cli, id_or_slug: &str) -> Result<()> {
         line("fees claimed", usd_str(perf.fees_claimed_usd.as_deref()));
         line("drawdown", pct(perf.drawdown_pct.map(|f| f * 100.0), 2));
         line("pnl source", dash(perf.pnl_source.as_deref()));
+        if let Some(farm) = &perf.farm_rewards {
+            let token = farm.token.as_deref().unwrap_or("reward");
+            line(
+                "farm pending",
+                format!("{} {token} ({})", dash(farm.pending_amount.as_deref()), usd_str(farm.pending_usd.as_deref())),
+            );
+            line("farm harvested", usd_str(farm.harvested_usd.as_deref()));
+            line(
+                "farm apr",
+                match farm.apr_basis.as_deref() {
+                    Some("position") => format!("{} (this position now)", pct(farm.apr_pct, 2)),
+                    Some(_) => format!("{} (the pool's rate)", pct(farm.apr_pct, 2)),
+                    None => pct(farm.apr_pct, 2),
+                },
+            );
+        }
+        if let Some(why) = &perf.figures_unavailable {
+            line("figures", why.clone());
+        }
         return Ok(());
     }
     // A public slug needs no key.
@@ -721,9 +904,648 @@ async fn withdraw(cli: &Cli, id: &str, lamports: Option<u64>) -> Result<()> {
         );
     }
     let w = client.withdraw(id, lamports).await?;
+    if w.chain.is_some() {
+        print_evm_move(&w);
+        return Ok(());
+    }
     println!("withdrew {}", sol(w.lamports));
     println!("to       {}", dash(w.destination.as_deref()));
     println!("signature {}", dash(w.signature.as_deref()));
+    Ok(())
+}
+
+/// An EVM withdraw or exit, as the server stated it: its sentence, what this
+/// call sent, and every transaction hash.
+fn print_evm_move(w: &ponk::Withdrawal) {
+    let chain = w.chain.as_deref().unwrap_or("");
+    let coin = ponk::evm::native_symbol(chain).unwrap_or("");
+    println!("{}: {}", chain, dash(w.status.as_deref()));
+    if let Some(sentence) = &w.sentence {
+        println!("{sentence}");
+    }
+    println!("to       {}", dash(w.destination.as_deref()));
+    if let Some(native) = w.amount_wei.as_deref().and_then(ponk::evm::wei_to_native) {
+        println!("sent     {native} {coin}");
+    }
+    for r in &w.received {
+        let token = r.token.as_deref().unwrap_or(DASH);
+        if ponk::evm::parse_evm_id(token).is_ok_and(|id| id.is_native()) {
+            continue;
+        }
+        println!("token    {} base units of {token}", dash(r.amount.as_deref()));
+    }
+    if w.tx_hashes.is_empty() {
+        println!("No transaction was sent.");
+    }
+    for hash in &w.tx_hashes {
+        println!("tx       {hash}");
+    }
+}
+
+async fn exit(cli: &Cli, id: &str, confirm: bool) -> Result<()> {
+    if !confirm {
+        bail!(
+            "an exit stops the agent, closes its position and sends everything home. \
+             Run it again with --confirm: ponk exit {id} --confirm"
+        );
+    }
+    let client = client(cli, true)?;
+    if cli.json {
+        return print_json(
+            &client
+                .post_json(&format!("/v1/agents/{id}/exit"), None, Some(client.fund_timeout()))
+                .await?,
+        );
+    }
+    let w = client.exit_agent(id, None).await?;
+    if w.chain.is_some() {
+        print_evm_move(&w);
+        return Ok(());
+    }
+    println!("exited   {}", sol(w.lamports));
+    println!("to       {}", dash(w.destination.as_deref()));
+    println!("signature {}", dash(w.signature.as_deref()));
+    Ok(())
+}
+
+/* ---------------------------------------------------------------------- */
+/* EVM chains: pools, open cost, create, wallet, fund link, plans          */
+/* ---------------------------------------------------------------------- */
+
+fn evm_board_path(chain: &str, venue: Option<&str>) -> String {
+    match venue {
+        Some(v) => format!("/public/evm/{}/board?venue={}", urlencode(chain), urlencode(v)),
+        None => format!("/public/evm/{}/board", urlencode(chain)),
+    }
+}
+
+fn evm_fees_24h(p: &ponk::EvmPool) -> Option<f64> {
+    p.fees.as_ref().and_then(|f| f.h24)
+}
+
+/// Filter by symbol or id, then order by 24h LP fees, pools with a figure
+/// first. A filter and an ordering of real rows, never a computed figure.
+fn evm_select(mut pools: Vec<ponk::EvmPool>, search: Option<&str>) -> Vec<ponk::EvmPool> {
+    if let Some(q) = search {
+        let q = q.to_lowercase();
+        pools.retain(|p| {
+            p.pair().to_lowercase().contains(&q)
+                || p.address.as_deref().is_some_and(|a| a.to_lowercase().contains(&q))
+        });
+    }
+    pools.sort_by(|a, b| match (evm_fees_24h(b), evm_fees_24h(a)) {
+        (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    pools
+}
+
+fn fee_tier(p: &ponk::EvmPool) -> String {
+    match (p.dynamic_fee, p.fee_pct) {
+        (Some(true), _) => "dynamic".to_string(),
+        (_, Some(f)) => format!("{f}%"),
+        _ => DASH.to_string(),
+    }
+}
+
+fn farm_text(p: &ponk::EvmPool) -> String {
+    match &p.farm {
+        None => DASH.to_string(),
+        Some(f) => {
+            let token = f.token.as_deref().unwrap_or("farm");
+            match (f.live, f.apr_pct) {
+                (Some(true), Some(apr)) => format!("{token} {apr:.2}%"),
+                (Some(true), None) => format!("{token} live"),
+                _ => format!("{token} not live"),
+            }
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Wei as whole coins with the symbol; `-` when the server sent none.
+fn native(wei: Option<&str>, symbol: &str) -> String {
+    match wei.and_then(ponk::evm::wei_to_native) {
+        Some(n) => format!("{n} {symbol}"),
+        None => DASH.to_string(),
+    }
+}
+
+async fn chains(cli: &Cli) -> Result<()> {
+    let client = client(cli, false)?;
+    if cli.json {
+        return print_json(&client.get_json("/public/evm/chains").await?);
+    }
+    let chains = client.evm_chains().await?;
+    let rows: Vec<Vec<String>> = chains
+        .chains
+        .iter()
+        .map(|c| {
+            vec![
+                dash(c.id.as_deref()),
+                dash(c.label.as_deref()),
+                c.evm_chain_id.map(|n| n.to_string()).unwrap_or_else(|| DASH.into()),
+                dash(c.native_symbol.as_deref()),
+                c.venues.join(", "),
+            ]
+        })
+        .collect();
+    println!(
+        "{}",
+        render(
+            &["CHAIN", "NAME", "CHAIN ID", "COIN", "VENUES"],
+            &[Align::Left, Align::Left, Align::Right, Align::Left, Align::Left],
+            &rows,
+        )
+    );
+    Ok(())
+}
+
+async fn evm_pools(cli: &Cli, chain: &str, venue: Option<&str>, search: Option<&str>, limit: usize) -> Result<()> {
+    let client = client(cli, false)?;
+    if cli.json {
+        return print_json(&client.get_json(&evm_board_path(chain, venue)).await?);
+    }
+    let board = client.evm_pools(chain, venue).await?;
+    if !board.ready() {
+        let why = board.status.as_ref().and_then(|s| s.last_error.clone());
+        println!("No pools yet for {chain}: {}", why.unwrap_or_else(|| "the board has not been read".into()));
+        return Ok(());
+    }
+    let now = now_ms();
+    let picked = evm_select(board.pools, search);
+    let rows: Vec<Vec<String>> = picked
+        .iter()
+        .take(limit)
+        .map(|p| {
+            let flags = p.flags(now);
+            vec![
+                p.pair(),
+                venue_label(p.dex.as_deref()).to_string(),
+                fee_tier(p),
+                usd(p.tvl),
+                usd(p.volume.as_ref().and_then(|v| v.h24)),
+                usd(evm_fees_24h(p)),
+                farm_text(p),
+                if flags.is_empty() { DASH.to_string() } else { flags.join(" ") },
+                dash(p.address.as_deref()),
+            ]
+        })
+        .collect();
+    println!(
+        "{}",
+        render(
+            &["PAIR", "VENUE", "FEE", "TVL", "VOL 24H", "FEES 24H", "FARM APR", "FLAGS", "POOL ID"],
+            &[
+                Align::Left,
+                Align::Left,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Left,
+                Align::Left,
+                Align::Left,
+            ],
+            &rows,
+        )
+    );
+    println!(
+        "\n{} of {} pools on {chain}. FARM APR on a concentrated pool is the rate of a staked position \
+         spread like the whole pool. Detail: ponk evm-pool <POOL ID>",
+        rows.len(),
+        picked.len()
+    );
+    Ok(())
+}
+
+async fn evm_pool(cli: &Cli, id: &str) -> Result<()> {
+    let client = client(cli, false)?;
+    if cli.json {
+        return print_json(&client.get_json(&format!("/public/evm/pools/{}", urlencode(id))).await?);
+    }
+    let p = client.evm_pool(id).await?;
+    let line = |k: &str, v: String| println!("{k:<14} {v}");
+    line("pair", p.pair());
+    line("pool id", dash(p.address.as_deref()));
+    line("chain", dash(p.chain.as_deref()));
+    line("venue", dash(p.dex.as_deref()));
+    line("fee tier", fee_tier(&p));
+    line("tick spacing", p.bin_step.map(|b| b.to_string()).unwrap_or_else(|| DASH.into()));
+    line("price", price(p.price));
+    line("tvl", usd(p.tvl));
+    line("volume 24h", usd(p.volume.as_ref().and_then(|v| v.h24)));
+    line("lp fees 24h", usd(evm_fees_24h(&p)));
+    line("farm", farm_text(&p));
+    let flags = p.flags(now_ms());
+    line("flags", if flags.is_empty() { DASH.to_string() } else { flags.join(" ") });
+    for why in &p.data_insufficient {
+        line("not read", why.clone());
+    }
+    Ok(())
+}
+
+fn open_cost_path(chain: &str, dex: &str, pool: Option<&str>, stake: Option<bool>) -> String {
+    let mut path = format!("/v1/evm/{}/open-cost?dex={}", urlencode(chain), urlencode(dex));
+    if let Some(p) = pool {
+        path.push_str(&format!("&pool={}", urlencode(p)));
+    }
+    if let Some(s) = stake {
+        path.push_str(&format!("&stake={s}"));
+    }
+    path
+}
+
+fn bps(v: Option<u16>) -> String {
+    match v {
+        Some(b) => format!("{}%", f64::from(b) / 100.0),
+        None => DASH.to_string(),
+    }
+}
+
+fn print_open_cost(c: &ponk::EvmOpenCost) {
+    let coin = c.native_symbol.as_deref().unwrap_or("");
+    let line = |k: &str, v: String| println!("{k:<18} {v}");
+    line("gas, first open", format!("{} ({})", native(c.gas_wei.as_deref(), coin), usd_str(c.gas_usd.as_deref())));
+    line("kept for the exit", native(c.reserve_wei.as_deref(), coin));
+    line("least to hold", format!("{}, plus the amount to deploy", native(c.min_open_wei.as_deref(), coin)));
+    line("coin price", usd_str(c.native_usd.as_deref()));
+    line("ponk fee", format!(
+        "{} of the first open, once; {} of fees earned",
+        bps(c.activation_fee_bps),
+        bps(c.performance_fee_bps)
+    ));
+}
+
+async fn open_cost(cli: &Cli, chain: &str, dex: &str, pool: Option<&str>, no_stake: bool) -> Result<()> {
+    let client = client(cli, true)?;
+    let stake = no_stake.then_some(false);
+    if cli.json {
+        return print_json(&client.get_json(&open_cost_path(chain, dex, pool, stake)).await?);
+    }
+    let cost = client.evm_open_cost(chain, dex, pool, stake).await?;
+    print_open_cost(&cost);
+    Ok(())
+}
+
+struct EvmCreate<'a> {
+    name: &'a str,
+    chain: &'a str,
+    dex: &'a str,
+    pool: &'a str,
+    down_pct: Option<f64>,
+    up_pct: Option<f64>,
+    strategy: Option<&'a str>,
+    config: Option<&'a str>,
+    stake: bool,
+    withdrawal_address: Option<&'a str>,
+    dry_run: bool,
+}
+
+/// The create body, built before any request so a bad combination is
+/// refused with the fix and nothing is sent.
+fn evm_new_agent(a: &EvmCreate<'_>, wallet: &str, own_config: Option<serde_json::Value>) -> Result<ponk::NewAgent> {
+    if !ponk::evm::is_evm_chain(a.chain) {
+        bail!("--chain is ethereum, arbitrum, base, bsc or robinhood. For a Solana agent use: ponk create-agent");
+    }
+    let chains = ponk::evm::venue_chains(a.dex);
+    if !chains.is_empty() && !chains.contains(&a.chain) {
+        bail!("{} runs on {}, not on {}", a.dex, chains.join(", "), a.chain);
+    }
+    let mut agent = match (own_config, ponk::evm::is_full_range_venue(a.dex)) {
+        (Some(config), _) => {
+            if a.down_pct.is_some() || a.up_pct.is_some() {
+                bail!("pass a range as --down-pct and --up-pct, or your own --config, not both");
+            }
+            let strategy = a
+                .strategy
+                .map(str::to_string)
+                .or_else(|| config.get("kind").and_then(|k| k.as_str()).map(str::to_string))
+                .context("--strategy is required with your own --config")?;
+            ponk::NewAgent::new(a.name, wallet, a.dex, strategy, config).pool_address(a.pool).chain(a.chain)
+        }
+        (None, true) => {
+            if a.down_pct.is_some() || a.up_pct.is_some() {
+                bail!("{} is a full-range venue: a position there has no range, so leave --down-pct and --up-pct out", a.dex);
+            }
+            ponk::NewAgent::evm_full_range(a.name, wallet, a.chain, a.dex, a.pool)
+        }
+        (None, false) => {
+            let (Some(down), Some(up)) = (a.down_pct, a.up_pct) else {
+                bail!("a range venue needs --down-pct and --up-pct as fractions (0.05 is 5%), or your own --config");
+            };
+            let mut agent = ponk::NewAgent::evm_range(a.name, wallet, a.chain, a.dex, a.pool, down, up)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if let Some(strategy) = a.strategy {
+                agent.strategy = strategy.to_string();
+                agent.config["kind"] = strategy.into();
+            }
+            agent
+        }
+    };
+    if a.stake {
+        if ponk::evm::stake_reward_token(a.dex).is_none() {
+            bail!("{} has no farm to stake in; --stake is for pancakeswap_v3, aerodrome_slipstream and aerodrome_classic", a.dex);
+        }
+        agent = agent.stake(true);
+    }
+    if let Some(address) = a.withdrawal_address {
+        agent = agent.withdrawal_address(address);
+    }
+    // /v1 defaults to LIVE; only a deliberate flag simulates.
+    agent.dry_run = a.dry_run.then_some(true);
+    Ok(agent)
+}
+
+async fn create_evm_agent(cli: &Cli, a: EvmCreate<'_>) -> Result<()> {
+    let own_config = match a.config {
+        Some("-") => {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf).context("could not read the config from stdin")?;
+            Some(serde_json::from_str(&buf).context("the config is not valid JSON")?)
+        }
+        Some(path) => {
+            let raw = std::fs::read_to_string(path).with_context(|| format!("could not read {path}"))?;
+            Some(serde_json::from_str(&raw).context("the config is not valid JSON")?)
+        }
+        None => None,
+    };
+    let client = client(cli, true)?;
+    let me = client.whoami().await?;
+    let Some(wallet) = me.wallet_address else {
+        bail!("the key answered without a wallet address, so no agent can be created");
+    };
+    let agent = evm_new_agent(&a, &wallet, own_config)?;
+    let created = client.create_evm_agent(&agent).await?;
+    let id = created.id.clone().unwrap_or_default();
+    if cli.json {
+        return print_json(&client.get_json(&format!("/v1/agents/{id}")).await?);
+    }
+    println!(
+        "created {} ({}) on {} {}: {}",
+        dash(created.name.as_deref()),
+        dash(created.id.as_deref()),
+        dash(created.chain.as_deref()),
+        dash(created.dex.as_deref()),
+        match created.dry_run {
+            Some(true) => "dry-run, it will simulate and send nothing",
+            _ => "live",
+        }
+    );
+    println!(
+        "ponk fee: {} of the first open, once; {} of fees earned",
+        bps(created.activation_fee_bps),
+        bps(created.managed_fee_bps)
+    );
+    let coin = ponk::evm::native_symbol(a.chain).unwrap_or("");
+    // The wallet is created here so the deposit address can be shown now.
+    let w = client.create_agent_wallet(&id).await?;
+    println!("\ndeposit address  {}", dash(w.address.as_deref()));
+    println!(
+        "least to hold    {}, plus the amount to deploy",
+        native(w.min_open_wei.as_deref(), coin)
+    );
+    println!(
+        "\nNothing has moved. Send {coin} you hold on {} to the deposit address, then sign the \
+         mandate with your own wallets (your Solana login wallet, then the EVM wallet that will \
+         receive withdrawals):",
+        a.chain
+    );
+    if let Some(link) = ponk::evm::fund_link(&id, Some(a.chain)) {
+        println!("{link}");
+    }
+    println!("{}", ponk::evm::agent_page_url(&id));
+    Ok(())
+}
+
+async fn wallet(cli: &Cli, id: &str) -> Result<()> {
+    let client = client(cli, true)?;
+    if cli.json {
+        return print_json(&client.get_json(&format!("/v1/agents/{id}/wallet")).await?);
+    }
+    let w = client.agent_wallet(id).await?;
+    let line = |k: &str, v: String| println!("{k:<18} {v}");
+    if !w.is_evm() {
+        line("address", dash(w.pubkey.as_deref()));
+        line("balance", sol(w.lamports));
+        line("least to open", sol(w.min_open_lamports));
+        line("withdrawable", sol(w.withdrawable_lamports));
+        line("scope", dash(w.scope.as_deref()));
+        return Ok(());
+    }
+    let coin = w.native_symbol.as_deref().unwrap_or("");
+    line("chain", dash(w.chain.as_deref()));
+    line("deposit address", dash(w.address.as_deref()));
+    line("balance", format!("{} ({})", native(w.balance_wei.as_deref(), coin), usd_str(w.balance_usd.as_deref())));
+    line("least to open", format!("{}, plus the amount to deploy", native(w.min_open_wei.as_deref(), coin)));
+    line("kept for the exit", native(w.reserve_wei.as_deref(), coin));
+    line("withdrawable", native(w.withdrawable_wei.as_deref(), coin));
+    line("pays out to", w.withdrawal_address.clone().unwrap_or_else(|| "no address yet: set by the mandate you sign".into()));
+    line("mandate", w.mandate_status.clone().unwrap_or_else(|| "none signed yet, so the agent cannot act".into()));
+    if w.mandate_status.as_deref() != Some("active") {
+        if let Some(link) = ponk::evm::fund_link(id, w.chain.as_deref()) {
+            println!("\nSign it with your own wallets: {link}");
+        }
+    }
+    Ok(())
+}
+
+fn fund_link(ids: &[String], chain: Option<&str>, lamports: Option<u64>) -> Result<()> {
+    let agents: Vec<ponk::evm::FundLinkAgent> = ids
+        .iter()
+        .map(|id| ponk::evm::FundLinkAgent { id: id.clone(), lamports, chain: chain.map(str::to_string) })
+        .collect();
+    let links = ponk::evm::fund_links(&agents, false);
+    if links.is_empty() {
+        bail!("none of those is an agent id");
+    }
+    for link in links {
+        println!("{link}");
+    }
+    Ok(())
+}
+
+async fn evm_fleet(cli: &Cli) -> Result<()> {
+    let client = client(cli, true)?;
+    if cli.json {
+        return print_json(&client.get_json("/agents/evm/fleet").await?);
+    }
+    let fleet = client.evm_fleet().await?;
+    if fleet.agents.is_empty() {
+        println!("No agents on an EVM chain yet. ponk create-evm-agent starts one.");
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = fleet
+        .agents
+        .iter()
+        .map(|a| {
+            vec![
+                dash(a.name.as_deref()),
+                dash(a.agent_id.as_deref()),
+                dash(a.chain.as_deref()),
+                venue_label(a.dex.as_deref()).to_string(),
+                dash(a.status.as_deref()),
+                dash(a.mandate_status.as_deref()),
+                match a.needs.as_deref() {
+                    Some("authorize_and_fund") => "sign the mandate, then fund".to_string(),
+                    Some("authorize") => "mandate lapsed: sign again".to_string(),
+                    Some("funding_or_waiting_to_open") => "funding, or waiting to open".to_string(),
+                    Some("nothing") => "nothing".to_string(),
+                    other => dash(other),
+                },
+                dash(a.address.as_deref()),
+            ]
+        })
+        .collect();
+    println!(
+        "{}",
+        render(
+            &["NAME", "ID", "CHAIN", "VENUE", "STATUS", "MANDATE", "NEEDS", "ADDRESS"],
+            &[
+                Align::Left,
+                Align::Left,
+                Align::Left,
+                Align::Left,
+                Align::Left,
+                Align::Left,
+                Align::Left,
+                Align::Left,
+            ],
+            &rows,
+        )
+    );
+    for link in &fleet.sign_urls {
+        println!("\nfund and sign: {link}");
+    }
+    Ok(())
+}
+
+fn print_plan(plan: &ponk::EvmPlan) {
+    println!("plan {} ({})", dash(plan.id.as_deref()), dash(plan.state.as_deref()));
+    if let Some(echo) = &plan.echo {
+        println!("{echo}");
+    }
+    if let Some(refusal) = &plan.refusal {
+        println!("refused: {}", refusal.get("message").and_then(|m| m.as_str()).unwrap_or("no reason was given"));
+    }
+    for c in &plan.funding_by_chain {
+        let coin = c.native_symbol.as_deref().unwrap_or("");
+        println!(
+            "\n{}: ${} ({} {coin})",
+            dash(c.chain.as_deref()),
+            dash(c.amount_usd.as_deref()),
+            dash(c.amount_native.as_deref())
+        );
+        if let Some(refusal) = &c.refusal {
+            println!("  {refusal}");
+        }
+        if let Some(alt) = &c.alternative {
+            println!("  instead: {}", dash(alt.sentence.as_deref()));
+            if let Some(id) = &alt.plan_id {
+                println!("  start it with: ponk start-plan {id}");
+            }
+            if let Some(sentence) = &alt.plan_sentence {
+                println!("  plan it with: ponk plan \"{sentence}\"");
+            }
+        }
+        let rows: Vec<Vec<String>> = c
+            .legs
+            .iter()
+            .map(|l| {
+                vec![
+                    dash(l.pair.as_deref()),
+                    venue_label(l.dex.as_deref()).to_string(),
+                    format!("${}", dash(l.fund_usd.as_deref())),
+                    format!("{} {coin}", dash(l.fund_native.as_deref())),
+                    format!("${}", dash(l.deploy_usd.as_deref())),
+                    pct(l.range_pct, 1),
+                    pct(l.ranked_apr_pct, 2),
+                    dash(l.pool_address.as_deref()),
+                ]
+            })
+            .collect();
+        if !rows.is_empty() {
+            println!(
+                "{}",
+                render(
+                    &["PAIR", "VENUE", "SEND", "IN COIN", "DEPLOYS", "RANGE", "INCOME APR", "POOL ID"],
+                    &[
+                        Align::Left,
+                        Align::Left,
+                        Align::Right,
+                        Align::Right,
+                        Align::Right,
+                        Align::Right,
+                        Align::Right,
+                        Align::Left,
+                    ],
+                    &rows,
+                )
+            );
+        }
+    }
+    for d in &plan.dropped {
+        println!("left out {} on {}: {}", dash(d.pair.as_deref()), dash(d.chain.as_deref()), dash(d.reason.as_deref()));
+    }
+    if let Some(fees) = &plan.fees {
+        println!("\n{fees}");
+    }
+    for note in &plan.notes {
+        println!("{note}");
+    }
+    for a in &plan.agents {
+        match (a.created, a.agent_id.as_deref()) {
+            (Some(true), Some(id)) => println!(
+                "agent {id}: {} on {}, send {} {}",
+                dash(a.pair.as_deref()),
+                dash(a.chain.as_deref()),
+                dash(a.fund_native.as_deref()),
+                dash(a.native_symbol.as_deref())
+            ),
+            _ => println!("not created, {}: {}", dash(a.pair.as_deref()), dash(a.refusal.as_deref())),
+        }
+    }
+    for link in &plan.sign_urls {
+        println!("fund and sign: {link}");
+    }
+}
+
+async fn plan(cli: &Cli, text: &str) -> Result<()> {
+    let client = client(cli, true)?;
+    let body = serde_json::json!({ "text": text });
+    if cli.json {
+        return print_json(&client.post_json("/copilot/evm/plans", Some(&body), None).await?);
+    }
+    let plan = client.copilot_evm_plan(text).await?;
+    print_plan(&plan);
+    if plan.state.as_deref() == Some("ready") {
+        if let Some(id) = &plan.id {
+            println!("\nNothing was created. Start it with: ponk start-plan {id}");
+        }
+    }
+    Ok(())
+}
+
+async fn start_plan(cli: &Cli, id: &str) -> Result<()> {
+    let client = client(cli, true)?;
+    if cli.json {
+        return print_json(
+            &client
+                .post_json(&format!("/copilot/evm/plans/{id}/start"), None, Some(client.fund_timeout()))
+                .await?,
+        );
+    }
+    let plan = client.copilot_evm_start(id).await?;
+    print_plan(&plan);
     Ok(())
 }
 
@@ -869,11 +1691,133 @@ mod tests {
             vec!["ponk", "leaderboard", "--window", "7d"],
             vec!["ponk", "whoami"],
             vec!["ponk", "--json", "pools"],
+            vec!["ponk", "chains"],
+            vec!["ponk", "evm-pools", "bsc"],
+            vec!["ponk", "evm-pools", "base", "--venue", "aerodrome_slipstream", "--search", "weth", "--limit", "5"],
+            vec!["ponk", "evm-pool", "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121"],
+            vec!["ponk", "open-cost", "bsc", "--dex", "pancakeswap_v3", "--no-stake"],
+            vec![
+                "ponk", "create-evm-agent", "--name", "b", "--chain", "bsc", "--dex", "pancakeswap_v3",
+                "--pool", "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
+                "--down-pct", "0.05", "--up-pct", "0.05", "--stake",
+                "--withdrawal-address", "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed", "--dry-run",
+            ],
+            vec!["ponk", "wallet", "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1"],
+            vec!["ponk", "fund-link", "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1", "--chain", "bsc"],
+            vec!["ponk", "evm-fleet"],
+            vec!["ponk", "plan", "$200 in the top 5 bnb pools"],
+            vec!["ponk", "start-plan", "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1"],
+            vec!["ponk", "exit", "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1", "--confirm"],
         ] {
             if let Err(e) = <Cli as clap::Parser>::try_parse_from(&argv) {
                 panic!("{argv:?} did not parse: {e}");
             }
         }
+    }
+
+    fn evm_args<'a>(dex: &'a str, chain: &'a str) -> EvmCreate<'a> {
+        EvmCreate {
+            name: "t",
+            chain,
+            dex,
+            pool: "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
+            down_pct: None,
+            up_pct: None,
+            strategy: None,
+            config: None,
+            stake: false,
+            withdrawal_address: None,
+            dry_run: false,
+        }
+    }
+
+    #[test]
+    fn an_evm_create_is_built_or_refused_before_any_request() {
+        let mut a = evm_args("pancakeswap_v3", "bsc");
+        a.down_pct = Some(0.05);
+        a.up_pct = Some(0.05);
+        a.stake = true;
+        let agent = evm_new_agent(&a, "W", None).unwrap();
+        assert_eq!(agent.chain.as_deref(), Some("bsc"));
+        assert_eq!(agent.strategy, "bin_rebalancer");
+        assert_eq!(agent.config["knobs"]["range_pct"]["down_pct"], 0.05);
+        assert_eq!(agent.config["evm"]["stake"], true);
+        // Live by default, as the API is.
+        assert_eq!(agent.dry_run, None);
+
+        let full = evm_new_agent(&evm_args("pancakeswap_v2", "bsc"), "W", None).unwrap();
+        assert_eq!(full.strategy, "fee_collector");
+
+        let err = |a: &EvmCreate<'_>| evm_new_agent(a, "W", None).unwrap_err().to_string();
+        assert!(err(&evm_args("pancakeswap_v3", "bsc")).contains("--down-pct"));
+        assert!(err(&evm_args("pancakeswap_v3", "base")).contains("runs on bsc"));
+        assert!(err(&evm_args("orca", "solana")).contains("ponk create-agent"));
+        let mut ranged_v2 = evm_args("pancakeswap_v2", "bsc");
+        ranged_v2.down_pct = Some(0.05);
+        ranged_v2.up_pct = Some(0.05);
+        assert!(err(&ranged_v2).contains("full-range venue"));
+        let mut no_farm = evm_args("uniswap_v3", "arbitrum");
+        no_farm.down_pct = Some(0.05);
+        no_farm.up_pct = Some(0.05);
+        no_farm.stake = true;
+        assert!(err(&no_farm).contains("no farm"));
+        let mut percent = evm_args("pancakeswap_v3", "bsc");
+        percent.down_pct = Some(5.0);
+        percent.up_pct = Some(5.0);
+        assert!(err(&percent).contains("fraction"));
+
+        let own = serde_json::json!({ "kind": "adaptive_range_recovery", "range_pct": { "down_pct": 0.1, "up_pct": 0.2 } });
+        let agent = evm_new_agent(&evm_args("uniswap_v3", "arbitrum"), "W", Some(own.clone())).unwrap();
+        assert_eq!((agent.strategy.as_str(), &agent.config), ("adaptive_range_recovery", &own));
+    }
+
+    #[test]
+    fn the_evm_json_paths_match_the_typed_calls() {
+        assert_eq!(evm_board_path("bsc", None), "/public/evm/bsc/board");
+        assert_eq!(evm_board_path("bsc", Some("pancakeswap_v3")), "/public/evm/bsc/board?venue=pancakeswap_v3");
+        assert_eq!(
+            open_cost_path("bsc", "pancakeswap_v3", Some("eip155:56:0xab"), Some(false)),
+            "/v1/evm/bsc/open-cost?dex=pancakeswap_v3&pool=eip155%3A56%3A0xab&stake=false"
+        );
+        assert_eq!(open_cost_path("bsc", "pancakeswap_v3", None, None), "/v1/evm/bsc/open-cost?dex=pancakeswap_v3");
+    }
+
+    #[test]
+    fn evm_rows_filter_order_and_print_without_inventing_figures() {
+        let mk = |sym: &str, addr: &str, fees: Option<f64>| -> ponk::EvmPool {
+            serde_json::from_value(serde_json::json!({
+                "dex": "pancakeswap_v3", "chain": "bsc", "address": addr,
+                "x": { "symbol": sym }, "y": { "symbol": "WBNB" },
+                "feePct": 0.05, "dynamicFee": false, "fees": { "24h": fees }, "farm": null,
+            }))
+            .unwrap()
+        };
+        let rows = vec![mk("AAA", "a1", Some(5.0)), mk("BBB", "b1", None), mk("CCC", "c1", Some(9.0))];
+        let picked = evm_select(rows.clone(), None);
+        let order: Vec<&str> = picked.iter().map(|p| p.address.as_deref().unwrap()).collect();
+        // Most 24h fees first; a row without the figure sinks, never zeroes.
+        assert_eq!(order, vec!["c1", "a1", "b1"]);
+        assert_eq!(evm_select(rows, Some("bbb")).len(), 1);
+        assert_eq!(fee_tier(&picked[0]), "0.05%");
+        assert_eq!(farm_text(&picked[0]), DASH);
+        let dynamic: ponk::EvmPool = serde_json::from_value(serde_json::json!({
+            "dynamicFee": true, "feePct": null, "farm": { "token": "CAKE", "live": true, "aprPct": 3.239 }
+        }))
+        .unwrap();
+        assert_eq!(fee_tier(&dynamic), "dynamic");
+        assert_eq!(farm_text(&dynamic), "CAKE 3.24%");
+        assert_eq!(native(Some("452200000000000"), "BNB"), "0.0004522 BNB");
+        assert_eq!(native(None, "BNB"), DASH);
+        assert_eq!(bps(Some(150)), "1.5%");
+        assert_eq!(bps(Some(1500)), "15%");
+        assert_eq!(bps(None), DASH);
+        assert_eq!(venue_label(Some("aerodrome_slipstream")), "slipstream");
+    }
+
+    #[test]
+    fn the_fund_link_command_needs_a_real_agent_id() {
+        assert!(fund_link(&["nope".to_string()], Some("bsc"), None).is_err());
+        assert!(fund_link(&["018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1".to_string()], Some("bsc"), None).is_ok());
     }
 
     #[test]

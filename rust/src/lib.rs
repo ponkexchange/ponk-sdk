@@ -1,6 +1,7 @@
-//! A thin Rust client for the ponk public API: create and drive Solana DLMM
-//! liquidity agents, read their live positions, PnL and fees, and move funds
-//! home.
+//! A thin Rust client for the ponk public API: create and drive liquidity
+//! agents on Solana, Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain,
+//! read their live positions, PnL and fees, and move funds home. The EVM
+//! chains, venues, CAIP ids and the fund-and-sign link are in [`evm`].
 //!
 //! One method per endpoint, typed results, and no behaviour of its own. It
 //! builds the request, sends it, maps the shared error envelope to
@@ -118,6 +119,7 @@
 
 mod client;
 mod error;
+pub mod evm;
 mod models;
 #[cfg(feature = "webhooks")]
 pub mod webhooks;
@@ -127,6 +129,11 @@ pub use client::{
     DEFAULT_FUND_TIMEOUT, DEFAULT_TIMEOUT, JUPITER_SESSION_HEADER,
 };
 pub use error::{ApiError, Error, ErrorKind};
+pub use models::{
+    EvmBoard, EvmBoardStatus, EvmChain, EvmChains, EvmFarm, EvmFleet, EvmFleetAgent, EvmHook,
+    EvmOpenCost, EvmPlan, EvmPlanAgent, EvmPlanAlternative, EvmPlanChain, EvmPlanDropped,
+    EvmPlanLeg, EvmPool, EvmReceived, EvmToken, EvmWindows, FarmRewards,
+};
 pub use models::{
     ActionLog, ActionReceipt, Agent, AgentCopy, AgentPerformance, AgentPosition, AgentWallet,
     AutonomousView, BinShare, ClaimPayout, ClaimPayoutToken, ComponentStatus, CreatorDashboard,

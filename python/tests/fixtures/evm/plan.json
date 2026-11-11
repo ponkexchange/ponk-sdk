@@ -1,0 +1,101 @@
+{
+  "id": "0190a1b2-aaaa-7000-8000-0000000000aa",
+  "state": "ready",
+  "text": "$100 in bnb and $50 in ethereum",
+  "echo": "$100 in the top 1 BNB Chain pool and $50 in the top 1 Ethereum pool, balanced risk.",
+  "refusal": null,
+  "total_usd": "150.00",
+  "funding_by_chain": [
+    {
+      "chain": "bsc",
+      "native_symbol": "BNB",
+      "amount_usd": "100.00",
+      "amount_native": "0.146918",
+      "legs": [
+        {
+          "chain": "bsc",
+          "dex": "pancakeswap_v3",
+          "pool_address": "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
+          "pair": "USDT/USDC",
+          "native_symbol": "BNB",
+          "fund_usd": "100.00",
+          "fund_native": "0.146918",
+          "fund_native_wei": "146918000000000000",
+          "deploy_usd": "99.69",
+          "strategy": "bin_rebalancer",
+          "config": {
+            "kind": "bin_rebalancer",
+            "target_bin_width": 977,
+            "auto_compound": true,
+            "knobs": {
+              "range_pct": {
+                "down_pct": 0.05,
+                "up_pct": 0.05
+              }
+            }
+          },
+          "range_pct": 5.0,
+          "fee_yield_24h_pct": 0.0012,
+          "ranked_apr_pct": 0.438,
+          "fee_apr_pct": 0.424,
+          "farm_apr_pct": 0.014,
+          "tvl_usd": 31488780.51,
+          "name": "USDT/USDC on PancakeSwap v3",
+          "open_gas_usd": "0.06",
+          "open_gas_native": "0.000083",
+          "wallet_floor_usd": "0.31"
+        }
+      ],
+      "dropped": [],
+      "notes": [],
+      "refusal": null,
+      "minimum_usd": null,
+      "alternative": null
+    },
+    {
+      "chain": "ethereum",
+      "native_symbol": "ETH",
+      "amount_usd": "50.00",
+      "amount_native": null,
+      "legs": [],
+      "dropped": [
+        {
+          "chain": "ethereum",
+          "dex": "uniswap_v4",
+          "pool_address": "eip155:1:0x000000000004444c5dc75cb358380d2e3de08a90:0xe63e32b2ae40601662f760d6bf5d771057324fbd97784fe1d3717069f7b75d45",
+          "pair": "PYUSD/USDS",
+          "reason": "Left out: $50 is under what one Ethereum pool needs at current gas."
+        }
+      ],
+      "notes": [],
+      "refusal": "$50 is not enough for one Ethereum pool at current gas: it needs at least $280 to deploy plus about $40 of ETH kept in its wallet for gas, $320 in all.",
+      "minimum_usd": "320",
+      "alternative": {
+        "kind": "same_pair_on_chain",
+        "chain": "base",
+        "pair": "PYUSD/USDS",
+        "dex": "aerodrome_slipstream",
+        "pool_address": "eip155:8453:0x4a7af46bc8abc00048c6c7920a1488daf568366c",
+        "amount_usd": "50.00",
+        "sentence": "The same pair runs on Base for $50.",
+        "plan_id": "0190a1b2-bbbb-7000-8000-0000000000bb",
+        "plan_sentence": null
+      }
+    }
+  ],
+  "dropped": [
+    {
+      "chain": "ethereum",
+      "dex": "uniswap_v4",
+      "pool_address": "eip155:1:0x000000000004444c5dc75cb358380d2e3de08a90:0xe63e32b2ae40601662f760d6bf5d771057324fbd97784fe1d3717069f7b75d45",
+      "pair": "PYUSD/USDS",
+      "reason": "Left out: $50 is under what one Ethereum pool needs at current gas."
+    }
+  ],
+  "solana": null,
+  "fees": "Ponk fees: 1.5% of each agent's first deposit when it opens, and 15% of the fees it earns, taken as they are claimed or compounded. Gas is paid from each agent's own wallet.",
+  "notes": [],
+  "agents": [],
+  "sign_urls": [],
+  "fleet_id": null
+}

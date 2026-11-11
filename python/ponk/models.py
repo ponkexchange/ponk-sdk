@@ -24,6 +24,26 @@ from decimal import Decimal
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Type, TypeVar
 
 __all__ = [
+    "EvmBoard",
+    "EvmBoardStatus",
+    "EvmChain",
+    "EvmChains",
+    "EvmFarm",
+    "EvmFleet",
+    "EvmFleetAgent",
+    "EvmHook",
+    "EvmOpenCost",
+    "EvmPlan",
+    "EvmPlanAgent",
+    "EvmPlanAlternative",
+    "EvmPlanChain",
+    "EvmPlanDropped",
+    "EvmPlanLeg",
+    "EvmPool",
+    "EvmReceived",
+    "EvmToken",
+    "EvmWindows",
+    "FarmRewards",
     "ActionCosts",
     "ActionLog",
     "ActionReceipt",
@@ -655,7 +675,16 @@ class Agent(Model):
     agent signs autonomously under a custody mandate you signed once in the
     app). `origin` is `web` or `api`, and it prices the agent:
     `managed_fee_bps` is the performance fee this agent's managed skim
-    actually charges, before any $PONK holder discount.
+    actually charges, before any $PONK holder discount, and
+    `activation_fee_bps` the one-time fee on its first open: 1500 and 150 for
+    an agent a key created.
+
+    `chain` is always present: `solana`, `ethereum`, `arbitrum`, `base`,
+    `bsc` or `robinhood`. On an EVM agent `dex` is an EVM venue id,
+    `pool_address` and `position_address` are CAIP ids (`ponk.evm`),
+    `wallet_address` is still the owner's Solana login wallet (the account;
+    the agent's own EVM address is on `agent_wallet`), `wallet_source` is
+    `managed` and `mode` is `auto`.
     """
 
     id: Optional[str] = None
@@ -674,6 +703,33 @@ class Agent(Model):
     wallet_source: Optional[str] = None
     origin: Optional[str] = None
     managed_fee_bps: Optional[int] = None
+    activation_fee_bps: Optional[int] = None
+    chain: Optional[str] = None
+    waiting: Optional[Any] = None
+    pool_warning: Optional[str] = None
+
+
+@dataclass
+class FarmRewards(Model):
+    """Farm rewards on an EVM agent or position: CAKE or AERO.
+
+    `pending_amount` is whole tokens as a decimal string; `pending_usd` and
+    `harvested_usd` are USD strings. `apr_pct` is a number in PERCENT (8.2 is
+    8.2%), paid in `token` on top of swap fees, and `apr_basis` says what it
+    is the APR of: `position` when the agent's position is staked on a
+    concentrated venue, where the figure is the position's own rate at this
+    instant and exactly 0 while it is out of range; `pool` otherwise, the
+    pool's figure (`EvmFarm.apr_pct`). Both are `None` when the farm is not
+    live or the figure cannot be computed.
+    """
+
+    token: Optional[str] = None
+    pending_amount: Optional[str] = None
+    pending_usd: Optional[str] = None
+    harvested_usd: Optional[str] = None
+    staked: Optional[bool] = None
+    apr_pct: Optional[float] = None
+    apr_basis: Optional[str] = None
 
 
 @dataclass
@@ -691,6 +747,17 @@ class AgentPerformance(Model):
 
     `pnl_source` is `meteora_datapi` (Meteora's own figures) or
     `oracle_estimate` (ponk's on-chain valuation).
+
+    `pnl_pct` and `drawdown_pct` are FRACTIONS on every chain: 0.05 is 5%.
+
+    On an EVM agent every dollar figure is USD from the agent's own priced
+    chain read, and one the runtime does not record is `None`. `pnl_usd` is
+    position value plus unclaimed fees minus the capital put in
+    (`cost_basis_usd`, also `deposits_usd`): the value at the open plus every
+    later top-up. `farm_rewards` is the CAKE or AERO block, `None` on a venue
+    with no farm. `figures_unavailable` is the one sentence that says why the
+    live figures are `None` when they are (no wallet yet, the chain could not
+    be read, no position, a token with no price).
     """
 
     current_value_usd: Optional[str] = None
@@ -721,6 +788,14 @@ class AgentPerformance(Model):
     positions_count: Optional[int] = None
     il_usd: Optional[str] = None
     pnl_source: Optional[str] = None
+    chain: Optional[str] = None
+    vs_hodl_usd: Optional[str] = None
+    hodl_value_usd: Optional[str] = None
+    pnl_note: Optional[str] = None
+    farm_rewards: Optional[FarmRewards] = None
+    figures_unavailable: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"farm_rewards": FarmRewards}
 
 
 @dataclass
@@ -745,6 +820,11 @@ class AgentPosition(Model):
     on-chain state; the `target_*` fields are the strategy's intent and are
     `None` when no target has been recorded. Units are bins on Meteora and Ponk
     Clouds, ticks on Orca, which is what `dex` is for.
+
+    On an EVM range venue the three ids are TICKS, `bin_step` is the tick
+    spacing and the prices are token1 per token0 as decimal strings. On a
+    full-range venue `is_full_range` is true and the ticks and prices are
+    `None`. `staked` says whether the position is staked for farm rewards.
 
     `price_samples` is process-local: it is empty after an API restart or
     before the agent's first tick, and every entry in it is a real observed
@@ -774,6 +854,9 @@ class AgentPosition(Model):
     bins: List[BinShare] = field(default_factory=list)
     price_samples: List[float] = field(default_factory=list)
     fees_unclaimed_usd: Optional[str] = None
+    bin_step: Optional[int] = None
+    chain: Optional[str] = None
+    staked: Optional[bool] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"bins": (BinShare,)}
 
@@ -787,6 +870,19 @@ class AgentWallet(Model):
     `recommended_open_lamports` clears that floor and leaves enough to open a
     small position. `scope` is `per_agent` for the agent's own wallet, or
     `shared` for the legacy per-user wallet.
+
+    AN EVM AGENT answers a different set of fields, and the Solana ones above
+    are then `None`. `address` is the agent's own address on `chain`, EIP-55:
+    the owner sends the gas coin (`native_symbol`, ETH or BNB) there from a
+    wallet they already hold on that chain; nothing is bridged. `balance_wei`,
+    `reserve_wei` (gas always kept back to exit), `min_open_wei` (what the
+    first open needs: the reserve plus the measured gas of the open, before
+    the amount to deploy) and `withdrawable_wei` are WEI as decimal strings;
+    `balance_usd` and `native_usd` (the gas coin's price) are USD strings.
+    `withdrawal_address` is the one address withdrawals and exits pay, set by
+    the mandate, `None` until one is granted. `mandate_status` is `active`,
+    `revoked`, `expired`, or `None` with no mandate yet: the mandate is signed
+    by the owner's own wallets on ponk.exchange (`ponk.evm.fund_link`).
     """
 
     pubkey: Optional[str] = None
@@ -798,6 +894,22 @@ class AgentWallet(Model):
     scope: Optional[str] = None
     withdrawable_lamports: Optional[int] = None
     token_accounts_with_value: Optional[int] = None
+    address: Optional[str] = None
+    chain: Optional[str] = None
+    native_symbol: Optional[str] = None
+    balance_wei: Optional[str] = None
+    reserve_wei: Optional[str] = None
+    min_open_wei: Optional[str] = None
+    withdrawable_wei: Optional[str] = None
+    balance_usd: Optional[str] = None
+    native_usd: Optional[str] = None
+    withdrawal_address: Optional[str] = None
+    mandate_status: Optional[str] = None
+
+    @property
+    def is_evm(self) -> bool:
+        """True for the wallet of an agent on an EVM chain."""
+        return self.address is not None and self.pubkey is None
 
 
 @dataclass
@@ -829,6 +941,7 @@ class Mandate(Model):
     max_slippage_bps: Optional[int] = None
     pool_allowlist: List[str] = field(default_factory=list)
     withdrawal_address: Optional[str] = None
+    chain: Optional[str] = None
 
 
 @dataclass
@@ -888,9 +1001,13 @@ class AutonomousState(Model):
 
 @dataclass
 class TokenAmount(Model):
-    """A token amount in base units, with the mint's decimals."""
+    """A token amount in base units, with the mint's decimals.
 
-    raw: Optional[int] = None
+    `raw` is a number on a Solana row and a decimal string on an EVM row,
+    where wei amounts do not fit a float. `to_decimal` reads both exactly.
+    """
+
+    raw: Optional[Any] = None
     decimals: Optional[int] = None
 
     def to_decimal(self) -> Optional[Decimal]:
@@ -914,6 +1031,14 @@ class Position(Model):
     `cost_basis_estimated` marks a position ponk did not open: the basis is
     then a first-observation stamp rather than a true entry, so lifetime PnL
     fields stay `None` instead of asserting a gain.
+
+    `chain` is on every row. An EVM agent's position is its own row: `id` and
+    `position_address` are the position's CAIP id, `wallet_address` the
+    agent's address, `token_x` / `token_y` token ids, the bin ids TICKS, and
+    `fees_claimable_x.raw` a decimal STRING (wei does not fit a float).
+    `pnl_pct` on this list is PERCENT on every chain (2.0 is 2%), unlike the
+    fraction on `AgentPerformance`. `farm_rewards`, `farm_rewards_usd` and
+    `staked` carry the CAKE or AERO side.
     """
 
     id: Optional[str] = None
@@ -957,10 +1082,23 @@ class Position(Model):
     price_position_pct: Optional[float] = None
     agent_id: Optional[str] = None
     agent_name: Optional[str] = None
+    chain: Optional[str] = None
+    token_x: Optional[str] = None
+    token_y: Optional[str] = None
+    bin_step: Optional[int] = None
+    is_full_range: Optional[bool] = None
+    deposited_usd: Optional[float] = None
+    fees_earned_usd: Optional[float] = None
+    farm_rewards: Optional[FarmRewards] = None
+    farm_rewards_usd: Optional[float] = None
+    staked: Optional[bool] = None
+    vs_hodl_usd: Optional[float] = None
+    figures_unavailable: Optional[str] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {
         "fees_claimable_x": TokenAmount,
         "fees_claimable_y": TokenAmount,
+        "farm_rewards": FarmRewards,
     }
 
 
@@ -1083,6 +1221,20 @@ class ExitSwapLeg(Model):
 
 
 @dataclass
+class EvmReceived(Model):
+    """One transfer that landed at the withdrawal address.
+
+    `token` is a token id (`eip155:<chainId>:0x...`; the zero address is the
+    gas coin) and `amount` is BASE UNITS as a decimal string. `evm_token`
+    gives a token's decimals and symbol.
+    """
+
+    token: Optional[str] = None
+    amount: Optional[str] = None
+    tx_hash: Optional[str] = None
+
+
+@dataclass
 class Withdrawal(Model):
     """The result of a withdraw or an exit.
 
@@ -1091,6 +1243,17 @@ class Withdrawal(Model):
     an exit that closed a live managed position. `exit_swaps` and `exit_notes`
     are present only on an exit that swapped (or tried to swap) leftover tokens
     to SOL: one leg per token, and one plain sentence per outcome.
+
+    ON AN EVM AGENT the funds go only to the mandate's proven
+    `withdrawal_address` on the same chain, and the answer carries what THIS
+    call sent, from the sweep's own receipts: `tx_hashes` (every hash, in
+    order; `signature` is the last, `None` when nothing was sent),
+    `amount_wei` (the gas coin that landed, WEI as a decimal string; `"0"`
+    when only tokens were sent, `None` when nothing was), `received` (one
+    entry per transfer that landed), `status` (`completed`, or `incomplete`
+    while something has not landed and the agent keeps retrying it by itself:
+    calling again is safe and never pays twice) and `sentence`, what happened
+    in plain words. `lamports` is 0.
     """
 
     signature: Optional[str] = None
@@ -1100,8 +1263,18 @@ class Withdrawal(Model):
     pnl: Optional[ExitSnapshot] = None
     exit_swaps: List[ExitSwapLeg] = field(default_factory=list)
     exit_notes: List[str] = field(default_factory=list)
+    tx_hashes: List[str] = field(default_factory=list)
+    amount_wei: Optional[str] = None
+    received: List[EvmReceived] = field(default_factory=list)
+    chain: Optional[str] = None
+    status: Optional[str] = None
+    sentence: Optional[str] = None
 
-    _NESTED: ClassVar[Mapping[str, Any]] = {"pnl": ExitSnapshot, "exit_swaps": (ExitSwapLeg,)}
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "pnl": ExitSnapshot,
+        "exit_swaps": (ExitSwapLeg,),
+        "received": (EvmReceived,),
+    }
 
 
 @dataclass
@@ -1248,6 +1421,10 @@ class ValueHistory(Model):
 
     `points` is the bucketed series as sent; a bucket with no reading is
     `None`, never interpolated.
+
+    An EVM agent answers from its own recorded readings: 15 minute buckets
+    for the last 26 hours, hourly to 8 days, four hourly to 31 days, and
+    nothing older, so `range="all"` reaches back 31 days at most.
     """
 
     range: Optional[str] = None
@@ -2046,12 +2223,22 @@ class AgentWalletCreated(Model):
     active one was returned, so calling it twice is safe. An empty wallet
     grants no authority: nothing signs from it until the owner signs a custody
     mandate in the app.
+
+    For an agent on an EVM chain the answer is the wallet view instead:
+    `address` (the deposit address on `chain`, EIP-55), `native_symbol`,
+    `min_open_wei` and `mandate_status`, with the rest in `raw_json`. Read it
+    in full with `agent_wallet`.
     """
 
     pubkey: Optional[str] = None
     status: Optional[str] = None
     created_at: Optional[str] = None
     created: Optional[bool] = None
+    address: Optional[str] = None
+    chain: Optional[str] = None
+    native_symbol: Optional[str] = None
+    min_open_wei: Optional[str] = None
+    mandate_status: Optional[str] = None
 
 
 @dataclass
@@ -3672,3 +3859,513 @@ class StreamEvent(Model):
 
     event: Optional[str] = None
     data: Optional[Mapping[str, Any]] = None
+
+
+# --------------------------------------------------------------------------
+# EVM chains: Ethereum, Arbitrum, Base, BNB Chain, Robinhood Chain (0.15.0)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class EvmChain(Model):
+    """One chain ponk has fixed an id for.
+
+    `id` is the chain word every route takes (`solana`, `ethereum`,
+    `arbitrum`, `base`, `bsc`, `robinhood`), `evm_chain_id` the EIP-155 id
+    (`None` on Solana), `native_symbol` the gas coin, `venues` the venue ids
+    that run there, and `reads_served` whether the pool board is answering
+    for it right now.
+    """
+
+    _CAMEL: ClassVar[bool] = True
+
+    id: Optional[str] = None
+    label: Optional[str] = None
+    status: Optional[str] = None
+    evm_chain_id: Optional[int] = None
+    native_symbol: Optional[str] = None
+    explorer: Optional[str] = None
+    l2_kind: Optional[str] = None
+    inclusion: Optional[str] = None
+    venues: List[str] = field(default_factory=list)
+    reads_served: Optional[bool] = None
+
+
+@dataclass
+class EvmChains(Model):
+    """`evm_chains()`: the chain dimension. `read_enabled` false means the EVM
+    pool boards are switched off on this server."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    read_enabled: Optional[bool] = None
+    market_sources: List[str] = field(default_factory=list)
+    chains: List[EvmChain] = field(default_factory=list)
+    capabilities: Optional[Dict[str, Any]] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"chains": (EvmChain,)}
+
+    def chain(self, chain_id: str) -> Optional[EvmChain]:
+        """The row for one chain word, or `None`."""
+        for c in self.chains:
+            if c.id == chain_id:
+                return c
+        return None
+
+
+@dataclass
+class EvmToken(Model):
+    """A token on an EVM chain, as the pool board knows it.
+
+    `mint` is the token id (`eip155:<chainId>:0x...`; the gas coin is the
+    zero address), `address` the bare address. `price_usd` is a number in USD
+    with `price_source` naming where it came from, `None` when no source ponk
+    stands behind has one. `verified` is whether the token is on its venue's
+    token list; `stock` marks a Robinhood Chain stock token.
+    """
+
+    _CAMEL: ClassVar[bool] = True
+
+    mint: Optional[str] = None
+    chain: Optional[str] = None
+    address: Optional[str] = None
+    symbol: Optional[str] = None
+    name: Optional[str] = None
+    decimals: Optional[int] = None
+    logo_uri: Optional[str] = None
+    price_usd: Optional[float] = None
+    price_source: Optional[str] = None
+    price_via: Optional[str] = None
+    change_1h: Optional[float] = None
+    change_24h: Optional[float] = None
+    verified: Optional[bool] = None
+    verification: Optional[Dict[str, Any]] = None
+    stock: Optional[Any] = None
+    created_at: Optional[int] = None
+
+
+@dataclass
+class EvmWindows(Model):
+    """A USD figure over the board's four windows. A window with no reading is `None`."""
+
+    m30: Optional[float] = None
+    h1: Optional[float] = None
+    h4: Optional[float] = None
+    h24: Optional[float] = None
+
+    _ALIASES: ClassVar[Mapping[str, str]] = {"m30": "30m", "h1": "1h", "h4": "4h", "h24": "24h"}
+
+
+@dataclass
+class EvmFarm(Model):
+    """Farm rewards for staked liquidity on a pool.
+
+    `token` is `CAKE` or `AERO`. `live` means staking there earns the token
+    now. `apr_pct` is emissions per year in dollars over the dollars staked,
+    a number in PERCENT, computed from chain reads only. ON A CONCENTRATED
+    POOL (PancakeSwap v3, Aerodrome Slipstream) it is the rate of a staked
+    position spread like the whole pool: a tighter range earns more per
+    dollar while in range and nothing out of it, so it reads lower than the
+    venue's own headline. On Aerodrome Classic it is the rate of any staked
+    LP. `None` when the farm is not live or an input could not be read. An
+    agent's own rate is `AgentPerformance.farm_rewards`.
+    """
+
+    _CAMEL: ClassVar[bool] = True
+
+    token: Optional[str] = None
+    live: Optional[bool] = None
+    apr_pct: Optional[float] = None
+
+
+@dataclass
+class EvmHook(Model):
+    """The hook of a Uniswap v4 or PancakeSwap Infinity pool.
+
+    The zero address is a pool with no hook. `agent_eligible` false means an
+    agent on this pool is refused at create; `touches_lp_funds` says the hook
+    can change what an LP holds.
+    """
+
+    _CAMEL: ClassVar[bool] = True
+
+    address: Optional[str] = None
+    agent_eligible: Optional[bool] = None
+    points: List[str] = field(default_factory=list)
+    policy: Optional[Dict[str, Any]] = None
+    touches_lp_funds: Optional[bool] = None
+
+
+@dataclass
+class EvmPool(Model):
+    """One pool on an EVM chain's board.
+
+    `address` is the CAIP pool id to pass as `pool_address` (`eip155:56:0x...`,
+    or the four part form for Uniswap v4 and PancakeSwap Infinity CL). `x`
+    and `y` are token0 and token1. `fee_pct` is the LP fee tier in PERCENT
+    (0.05 is 0.05%), `None` on a `dynamic_fee` pool, where a hook sets the fee
+    on each swap. `bin_step` is the tick spacing, `None` on a full-range (v2
+    style) venue. `tvl` is USD with `tvl_source`; `volume` and `fees` (LP fees
+    earned, net of the protocol's share) are USD per window. `price` is token1
+    per token0 in whole units. `farm` is `None` when the pool has no farm.
+    `created_at` is milliseconds. `data_insufficient` names every figure that
+    is `None` and why. On Base, `aerodrome` carries the pool's gauge facts
+    (`gauge`, `gaugeLive`, `stakedShare`, `curve`).
+    """
+
+    _CAMEL: ClassVar[bool] = True
+
+    key: Optional[str] = None
+    dex: Optional[str] = None
+    chain: Optional[str] = None
+    address: Optional[str] = None
+    x: Optional[EvmToken] = None
+    y: Optional[EvmToken] = None
+    bin_step: Optional[int] = None
+    fee_pct: Optional[float] = None
+    dynamic_fee: Optional[bool] = None
+    tvl: Optional[float] = None
+    tvl_source: Optional[str] = None
+    created_at: Optional[int] = None
+    launchpad: Optional[str] = None
+    volume: Optional[EvmWindows] = None
+    fees: Optional[EvmWindows] = None
+    volume_source: Optional[str] = None
+    price: Optional[float] = None
+    tick: Optional[int] = None
+    liquidity: Optional[str] = None
+    sqrt_price_x96: Optional[str] = None
+    hooks: Optional[EvmHook] = None
+    farm: Optional[EvmFarm] = None
+    data_insufficient: List[str] = field(default_factory=list)
+    aerodrome: Optional[Dict[str, Any]] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "x": EvmToken,
+        "y": EvmToken,
+        "volume": EvmWindows,
+        "fees": EvmWindows,
+        "hooks": EvmHook,
+        "farm": EvmFarm,
+    }
+
+    @property
+    def pair(self) -> str:
+        """`USDT/WBNB`, a `?` standing in for a symbol the board does not have."""
+        sym = lambda t: (t.symbol if t is not None and t.symbol else "?")  # noqa: E731
+        return "{0}/{1}".format(sym(self.x), sym(self.y))
+
+    def flags(self, now_ms: Optional[int] = None) -> List[str]:
+        """The risk flags the ponk.exchange board shows for this row.
+
+        `unverified_token`: a token is not on the venue's token list.
+        `hook_not_agent_eligible`: the pool has a hook an agent cannot use.
+        `under_1h_old`: the pool was created under an hour ago. Empty when
+        none applies. These are read off fields the server sent; the copilot
+        never picks a flagged pool. `now_ms` is for tests.
+        """
+        out: List[str] = []
+        if any(t is not None and t.verified is False for t in (self.x, self.y)):
+            out.append("unverified_token")
+        hook = self.hooks
+        if (
+            hook is not None
+            and hook.address
+            and hook.address.lower().replace("0x", "", 1).strip("0") != ""
+            and hook.agent_eligible is not True
+        ):
+            out.append("hook_not_agent_eligible")
+        if self.created_at:
+            import time
+
+            now = int(time.time() * 1000) if now_ms is None else now_ms
+            created = self.created_at * 1000 if self.created_at < 10**12 else self.created_at
+            if now - created < 3_600_000:
+                out.append("under_1h_old")
+        return out
+
+
+@dataclass
+class EvmBoardStatus(Model):
+    """How fresh a board is. `stale` true means the last live read failed and
+    the pools are an older snapshot; `last_error` says why."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    stale: Optional[bool] = None
+    consecutive_failures: Optional[int] = None
+    last_error: Optional[str] = None
+    market_source: Optional[str] = None
+    market_sources: List[str] = field(default_factory=list)
+    block_timestamp: Optional[int] = None
+
+
+@dataclass
+class EvmBoard(Model):
+    """One chain's pool board.
+
+    `as_of` is when the pools' chain state was read, in milliseconds; 0 means
+    the server has not finished its first read of the chain, and `pools` is
+    then empty. On Base, `aerodrome` is the gauge facts array, joined to the
+    pools by `key`.
+    """
+
+    _CAMEL: ClassVar[bool] = True
+
+    chain: Optional[str] = None
+    as_of: Optional[int] = None
+    served_at: Optional[int] = None
+    pools: List[EvmPool] = field(default_factory=list)
+    ok: Optional[Dict[str, Any]] = None
+    status: Optional[EvmBoardStatus] = None
+    aerodrome: List[Dict[str, Any]] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"pools": (EvmPool,), "status": EvmBoardStatus}
+
+    @property
+    def ready(self) -> bool:
+        """False until the server has finished its first read of the chain."""
+        return bool(self.as_of)
+
+
+@dataclass
+class EvmOpenCost(Model):
+    """What the first open of an agent costs on an EVM venue.
+
+    `gas_wei` is the measured gas of the first open at the live fee, WEI as a
+    decimal string, and `gas_usd` the same in USD. `reserve_wei` is always
+    kept back for the exit, and `min_open_wei` is their sum: the least the
+    agent wallet must hold before it can open, before the amount to deploy.
+    `native_usd` is the gas coin's price. Each is `None` when the chain could
+    not be read, never an estimate.
+
+    The fee rates are in basis points and are the ones an agent THIS CALLER
+    creates pays: with an API key 150 (1.5% of the first open, once) and 1500
+    (15% of fees earned); the keyless public route states the rates of an
+    agent created on ponk.exchange, 100 and 800. `exit_fee_bps` is 0.
+    """
+
+    chain: Optional[str] = None
+    dex: Optional[str] = None
+    pool: Optional[str] = None
+    native_symbol: Optional[str] = None
+    gas_wei: Optional[str] = None
+    gas_usd: Optional[str] = None
+    reserve_wei: Optional[str] = None
+    min_open_wei: Optional[str] = None
+    native_usd: Optional[str] = None
+    activation_fee_bps: Optional[int] = None
+    performance_fee_bps: Optional[int] = None
+    exit_fee_bps: Optional[int] = None
+
+
+@dataclass
+class EvmPlanLeg(Model):
+    """One pool of an EVM plan: one agent once the plan is started.
+
+    `fund_usd` is what the owner sends to this agent in USD, `fund_native`
+    the same in whole coins of the chain and `fund_native_wei` in wei, all
+    decimal strings. `deploy_usd` is what is left to deploy after the wallet
+    keeps its exit reserve and gas (`wallet_floor_usd`, part of `fund_usd`).
+    `range_pct` is the range either side of the price in PERCENT (5.0 is 5%).
+    `ranked_apr_pct` is what the pool was ranked on, percent a year:
+    `fee_apr_pct` plus `farm_apr_pct` where the agent stakes. It is income per
+    dollar of pool liquidity, not a forecast. `fee_yield_24h_pct` is percent
+    per DAY. `config` is the strategy config the agent is created with.
+    """
+
+    chain: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    pair: Optional[str] = None
+    native_symbol: Optional[str] = None
+    fund_usd: Optional[str] = None
+    fund_native: Optional[str] = None
+    fund_native_wei: Optional[str] = None
+    deploy_usd: Optional[str] = None
+    strategy: Optional[str] = None
+    config: Optional[Any] = None
+    range_pct: Optional[float] = None
+    fee_yield_24h_pct: Optional[float] = None
+    ranked_apr_pct: Optional[float] = None
+    fee_apr_pct: Optional[float] = None
+    farm_apr_pct: Optional[float] = None
+    tvl_usd: Optional[float] = None
+    name: Optional[str] = None
+    open_gas_usd: Optional[str] = None
+    open_gas_native: Optional[str] = None
+    wallet_floor_usd: Optional[str] = None
+
+
+@dataclass
+class EvmPlanDropped(Model):
+    """A pool the planner looked at and left out, with the sentence that says why."""
+
+    chain: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    pair: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@dataclass
+class EvmPlanAlternative(Model):
+    """What works instead when a chain's share is under its minimum.
+
+    `kind` is `same_pair_on_chain` (the same pair on a cheaper chain;
+    `plan_id` is a plan already made for it, started like any plan) or
+    `minimum_on_chain` (`plan_sentence` plans it when sent to
+    `copilot_evm_plan`). `amount_usd` is what it needs sent. Never applied by
+    itself.
+    """
+
+    kind: Optional[str] = None
+    chain: Optional[str] = None
+    pair: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    amount_usd: Optional[str] = None
+    sentence: Optional[str] = None
+    plan_id: Optional[str] = None
+    plan_sentence: Optional[str] = None
+
+
+@dataclass
+class EvmPlanChain(Model):
+    """One chain of an EVM plan: one deposit, funded by the owner on that chain.
+
+    `amount_usd` is the share of the budget on this chain and `amount_native`
+    the same in whole coins of the chain (`native_symbol`). `refusal` is set,
+    with no `legs`, when nothing on this chain could be planned; the other
+    chains still plan. `minimum_usd` (whole dollars) is set with it when size
+    is the only reason, and `alternative` is the cheapest thing that works
+    instead.
+    """
+
+    chain: Optional[str] = None
+    native_symbol: Optional[str] = None
+    amount_usd: Optional[str] = None
+    amount_native: Optional[str] = None
+    legs: List[EvmPlanLeg] = field(default_factory=list)
+    dropped: List[EvmPlanDropped] = field(default_factory=list)
+    notes: List[str] = field(default_factory=list)
+    refusal: Optional[str] = None
+    minimum_usd: Optional[str] = None
+    alternative: Optional[EvmPlanAlternative] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "legs": (EvmPlanLeg,),
+        "dropped": (EvmPlanDropped,),
+        "alternative": EvmPlanAlternative,
+    }
+
+
+@dataclass
+class EvmPlanAgent(Model):
+    """One agent a started plan created, in leg order.
+
+    `created` false carries `refusal`, the sentence that says why that leg
+    could not be created, and no `agent_id`. `fund_native` is the amount of
+    the chain's coin (`native_symbol`) to send to the agent's address, which
+    is on `agent_wallet(agent_id).address`.
+    """
+
+    agent_id: Optional[str] = None
+    chain: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    pair: Optional[str] = None
+    fund_usd: Optional[str] = None
+    fund_native: Optional[str] = None
+    fund_native_wei: Optional[str] = None
+    native_symbol: Optional[str] = None
+    created: Optional[bool] = None
+    refusal: Optional[str] = None
+
+
+@dataclass
+class EvmPlan(Model):
+    """A plan made from one sentence that names an EVM chain.
+
+    `state` is `ready`, `solana_only` (no EVM leg could be planned but the
+    Solana part was; start answers 422 and `notes[0]` says what to do),
+    `refused` or `started`. `echo` is what was understood. `total_usd` is the
+    whole budget in dollars and `funding_by_chain` its split, one entry per
+    EVM chain. `refusal` is `{code, message}` when the plan as a whole is
+    refused. `solana` is the Solana part of a plan across chains: an ordinary
+    Solana plan with its own id under `solana["plan"]`, read and started
+    through `copilot_get_plan` and `copilot_start`. `fees` is the fee
+    sentence for this caller, from the server's fee model.
+
+    `agents`, `sign_urls` and `fleet_id` are filled by `copilot_evm_start`.
+    `sign_urls` is never empty after a start: the ponk.exchange pages where
+    the owner signs each agent's mandate and funds it.
+    """
+
+    id: Optional[str] = None
+    state: Optional[str] = None
+    text: Optional[str] = None
+    echo: Optional[str] = None
+    refusal: Optional[Dict[str, Any]] = None
+    total_usd: Optional[str] = None
+    funding_by_chain: List[EvmPlanChain] = field(default_factory=list)
+    dropped: List[EvmPlanDropped] = field(default_factory=list)
+    solana: Optional[Dict[str, Any]] = None
+    fees: Optional[str] = None
+    notes: List[str] = field(default_factory=list)
+    agents: List[EvmPlanAgent] = field(default_factory=list)
+    sign_urls: List[str] = field(default_factory=list)
+    fleet_id: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "funding_by_chain": (EvmPlanChain,),
+        "dropped": (EvmPlanDropped,),
+        "agents": (EvmPlanAgent,),
+    }
+
+    @property
+    def chains(self) -> List[str]:
+        """The EVM chains this plan covers, in order."""
+        return [c.chain for c in self.funding_by_chain if c.chain]
+
+    @property
+    def legs(self) -> List[EvmPlanLeg]:
+        """Every leg across the chains, in order."""
+        return [leg for c in self.funding_by_chain for leg in c.legs]
+
+
+@dataclass
+class EvmFleetAgent(Model):
+    """One EVM agent the caller owns.
+
+    `address` is the agent's own address on `chain`, `None` until its wallet
+    exists. `mandate_status` is `active`, `expired` or `None` with none.
+    `needs` is what the agent still needs from its owner: `authorize_and_fund`,
+    `authorize` (the mandate lapsed: sign again), `funding_or_waiting_to_open`
+    or `nothing`.
+    """
+
+    agent_id: Optional[str] = None
+    name: Optional[str] = None
+    chain: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    position_address: Optional[str] = None
+    status: Optional[str] = None
+    strategy: Optional[str] = None
+    address: Optional[str] = None
+    mandate_status: Optional[str] = None
+    mandate_expires_at: Optional[str] = None
+    needs: Optional[str] = None
+
+
+@dataclass
+class EvmFleet(Model):
+    """`evm_fleet()`: every EVM agent the caller owns, with the links that
+    fund and authorize the ones still running, 40 agents to a link."""
+
+    agents: List[EvmFleetAgent] = field(default_factory=list)
+    sign_urls: List[str] = field(default_factory=list)
+    fund_page: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"agents": (EvmFleetAgent,)}

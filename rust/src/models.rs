@@ -169,8 +169,15 @@ pub struct Agent {
     pub id: Option<String>,
     pub name: Option<String>,
     pub wallet_address: Option<String>,
-    /// `meteora_dlmm`, `meteora_damm_v2`, `orca`, `ponk_clouds` or `raydium`.
+    /// `meteora_dlmm`, `meteora_damm_v2`, `orca`, `ponk_clouds` or `raydium`
+    /// on Solana; an EVM venue id ([`crate::evm::EVM_VENUES`]) on an EVM chain.
     pub dex: Option<String>,
+    /// Always present: `solana`, `ethereum`, `arbitrum`, `base`, `bsc` or
+    /// `robinhood`. On an EVM agent `pool_address` and `position_address` are
+    /// CAIP ids ([`crate::evm`]), `wallet_address` is still the owner's Solana
+    /// login wallet (the account; the agent's own EVM address is on
+    /// [`AgentWallet`]), `wallet_source` is `managed` and `mode` is `auto`.
+    pub chain: Option<String>,
     /// `None` for an entry agent that has not yet screened and bound a pool.
     pub pool_address: Option<String>,
     pub position_address: Option<String>,
@@ -190,7 +197,8 @@ pub struct Agent {
     /// non-managed agent, which pays a per-action platform fee instead.
     pub managed_fee_bps: Option<u16>,
     /// The one-time activation fee the agent's FIRST open pays, in basis
-    /// points of that open's capital. Zero for a non-managed agent.
+    /// points of that open's capital. Zero for a non-managed agent. 150 (and
+    /// `managed_fee_bps` 1500) for an agent a key created.
     pub activation_fee_bps: Option<u16>,
     /// What the agent is WAITING on (funds, or an authorization), when an
     /// action was refused for a reason only an external event can change.
@@ -210,6 +218,12 @@ pub struct Agent {
 /// `price_pnl_usd` the principal leg and `fee_pnl_usd` the yield leg of the
 /// CURRENT position. `fees_earned_lifetime_usd` spans every position the agent
 /// has run on its pool, so it does not reset when the agent recenters.
+///
+/// On an EVM agent every dollar figure is USD from the agent's own priced
+/// chain read, and one the runtime does not record is `None`. `pnl_usd` is
+/// position value plus unclaimed fees minus the capital put in
+/// (`cost_basis_usd`, also `deposits_usd`): the value at the open plus every
+/// later top-up. `pnl_pct` and `drawdown_pct` are FRACTIONS there too.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct AgentPerformance {
@@ -255,6 +269,41 @@ pub struct AgentPerformance {
     /// `meteora_datapi` (Meteora's own figures) or `oracle_estimate` (ponk's
     /// on-chain valuation).
     pub pnl_source: Option<String>,
+    /// The agent's chain, on an EVM agent's view.
+    pub chain: Option<String>,
+    /// Position value plus unclaimed fees against holding the opening tokens.
+    pub vs_hodl_usd: Option<String>,
+    pub hodl_value_usd: Option<String>,
+    /// How `pnl_usd` is counted on an EVM agent, in a sentence.
+    pub pnl_note: Option<String>,
+    /// CAKE or AERO on an EVM agent. `None` on a venue with no farm.
+    pub farm_rewards: Option<FarmRewards>,
+    /// The one sentence that says why the live dollar figures are `None`
+    /// when they are: no wallet yet, the chain could not be read, no
+    /// position, a token with no price.
+    pub figures_unavailable: Option<String>,
+}
+
+/// Farm rewards on an EVM agent or position: CAKE or AERO.
+///
+/// `pending_amount` is whole tokens as a decimal string; `pending_usd` and
+/// `harvested_usd` are USD strings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FarmRewards {
+    pub token: Option<String>,
+    pub pending_amount: Option<String>,
+    pub pending_usd: Option<String>,
+    pub harvested_usd: Option<String>,
+    pub staked: Option<bool>,
+    /// A number in PERCENT (8.2 is 8.2%), paid in `token` on top of swap
+    /// fees. `None` when the farm is not live or it cannot be computed.
+    pub apr_pct: Option<f64>,
+    /// What `apr_pct` is the APR of. `position`: the agent's position is
+    /// staked on a concentrated venue and the figure is the position's own
+    /// rate at this instant, exactly 0 while it is out of range. `pool`: the
+    /// pool's figure ([`EvmFarm::apr_pct`]).
+    pub apr_basis: Option<String>,
 }
 
 /// One bin's slice of a position's liquidity.
@@ -313,6 +362,14 @@ pub struct AgentPosition {
     /// the agent's first tick. Every entry is a real observed price.
     pub price_samples: Vec<f64>,
     pub fees_unclaimed_usd: Option<String>,
+    /// On an EVM range venue the three bin ids above are TICKS and this is
+    /// the tick spacing; `None` on a full-range venue, where `is_full_range`
+    /// is true and the ticks and prices are `None` too.
+    pub bin_step: Option<i32>,
+    /// The agent's chain, on an EVM agent's view.
+    pub chain: Option<String>,
+    /// Whether the position is staked for farm rewards.
+    pub staked: Option<bool>,
 }
 
 /// The isolated wallet an autonomous agent owns.
@@ -337,14 +394,75 @@ pub struct AgentWallet {
     /// Token accounts holding a balance a sweep would move. `None` when the
     /// read failed: treat tokens as unknown then, never as zero.
     pub token_accounts_with_value: Option<u64>,
+    /// EVM agents only, from here down; the Solana fields above are then
+    /// `None`. The agent's own address on `chain`, EIP-55: the owner sends
+    /// the gas coin there from a wallet they already hold on that chain.
+    /// Nothing is bridged.
+    pub address: Option<String>,
+    pub chain: Option<String>,
+    /// `ETH`, or `BNB` on BNB Chain.
+    pub native_symbol: Option<String>,
+    /// The gas coin balance, WEI as a decimal string.
+    pub balance_wei: Option<String>,
+    /// Gas always kept back to exit, wei.
+    pub reserve_wei: Option<String>,
+    /// What the first open needs, wei: the reserve plus the measured gas of
+    /// the open at the live fee, before the amount to deploy.
+    pub min_open_wei: Option<String>,
+    /// The balance above the reserve, wei.
+    pub withdrawable_wei: Option<String>,
+    /// USD, a decimal string.
+    pub balance_usd: Option<String>,
+    /// The gas coin's price in USD, a decimal string.
+    pub native_usd: Option<String>,
+    /// The one address withdrawals and exits pay, EIP-55, set by the mandate.
+    /// `None` until one is granted.
+    pub withdrawal_address: Option<String>,
+    /// `active`, `revoked`, `expired`, or `None` with no mandate yet. The
+    /// mandate is signed by the owner's own wallets on ponk.exchange
+    /// ([`crate::evm::fund_link`]); this crate offers no signer.
+    pub mandate_status: Option<String>,
+}
+
+impl AgentWallet {
+    /// True for the wallet of an agent on an EVM chain.
+    pub fn is_evm(&self) -> bool {
+        self.address.is_some() && self.pubkey.is_none()
+    }
 }
 
 /// A token amount in base units, with the mint's decimals.
+///
+/// The server sends `raw` as a number on a Solana row and as a decimal
+/// string on an EVM row, where wei amounts do not fit a JSON number. Both
+/// decode here.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct TokenAmount {
+    #[serde(deserialize_with = "de_u128_number_or_string")]
     pub raw: Option<u128>,
     pub decimals: Option<u8>,
+}
+
+/// `12345`, `"12345"` or `null`, as a `u128`. Anything else is a decode error
+/// naming what arrived, never a silent zero.
+fn de_u128_number_or_string<'de, D>(deserializer: D) -> Result<Option<u128>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Number(n)) => n
+            .as_u64()
+            .map(|v| Some(u128::from(v)))
+            .ok_or_else(|| D::Error::custom(format!("a base unit amount is a whole number, got {n}"))),
+        Some(serde_json::Value::String(text)) => text
+            .parse::<u128>()
+            .map(Some)
+            .map_err(|_| D::Error::custom(format!("a base unit amount is a whole number, got \"{text}\""))),
+        Some(other) => Err(D::Error::custom(format!("a base unit amount is a whole number, got {other}"))),
+    }
 }
 
 impl TokenAmount {
@@ -416,6 +534,26 @@ pub struct Position {
     /// agents.
     pub agent_id: Option<String>,
     pub agent_name: Option<String>,
+    /// On every row: `solana`, or the EVM chain of an EVM agent's position.
+    /// On an EVM row `id` and `position_address` are the position's CAIP id,
+    /// `wallet_address` the agent's address, the bin ids TICKS, and `pnl_pct`
+    /// PERCENT (2.0 is 2%) as on a Solana row of this list.
+    pub chain: Option<String>,
+    /// Token ids (`eip155:<chainId>:0x...`) of token0 and token1, EVM rows.
+    pub token_x: Option<String>,
+    pub token_y: Option<String>,
+    /// Tick spacing on an EVM row; `None` on a full-range venue.
+    pub bin_step: Option<i32>,
+    pub is_full_range: Option<bool>,
+    /// The capital put in, USD.
+    pub deposited_usd: Option<f64>,
+    pub fees_earned_usd: Option<f64>,
+    pub farm_rewards: Option<FarmRewards>,
+    /// Pending plus harvested farm rewards, USD.
+    pub farm_rewards_usd: Option<f64>,
+    pub staked: Option<bool>,
+    pub vs_hodl_usd: Option<f64>,
+    pub figures_unavailable: Option<String>,
 }
 
 /// One thing an agent did, or decided not to do.
@@ -518,6 +656,36 @@ pub struct Withdrawal {
     pub source: Option<String>,
     /// Present only on an exit that closed a live managed position.
     pub pnl: Option<ExitSnapshot>,
+    /// EVM agents only, from here down. Funds go only to the mandate's
+    /// proven withdrawal address on the same chain, and these carry what
+    /// THIS call sent, from the sweep's own receipts. Every transaction hash
+    /// of the run, in order; `signature` is the last, `None` when nothing
+    /// was sent.
+    pub tx_hashes: Vec<String>,
+    /// The gas coin that landed, WEI as a decimal string. `"0"` when only
+    /// tokens were sent, `None` when nothing was.
+    pub amount_wei: Option<String>,
+    /// One entry per transfer that landed at the withdrawal address.
+    pub received: Vec<EvmReceived>,
+    pub chain: Option<String>,
+    /// `completed`, or `incomplete` while something has not landed and the
+    /// agent keeps retrying it by itself. Calling again is safe and never
+    /// pays twice.
+    pub status: Option<String>,
+    /// What happened, in plain words.
+    pub sentence: Option<String>,
+}
+
+/// One transfer that landed at the withdrawal address.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct EvmReceived {
+    /// Token id (`eip155:<chainId>:0x...`); the zero address is the gas coin.
+    pub token: Option<String>,
+    /// BASE UNITS, a decimal string. [`crate::Client::evm_token`] gives a
+    /// token's decimals and symbol.
+    pub amount: Option<String>,
+    pub tx_hash: Option<String>,
 }
 
 /// The custody mandate an autonomous agent is signing under.
@@ -550,6 +718,8 @@ pub struct Mandate {
     pub pool_allowlist: Vec<String>,
     /// The address every withdrawal is locked to.
     pub withdrawal_address: Option<String>,
+    /// The chain the mandate covers, on an EVM agent's mandate.
+    pub chain: Option<String>,
 }
 
 /// The agent's custody state after a `set_autonomous` call, read back from
@@ -666,9 +836,93 @@ pub struct NewAgent {
     /// `dry_run` with a 400.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
+    /// The chain of an agent on an EVM chain: `ethereum`, `arbitrum`, `base`,
+    /// `bsc` or `robinhood`. It must be a chain `dex` runs on and the chain
+    /// in `pool_address`. Leave unset for a Solana agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain: Option<String>,
+    /// EVM agents only: the address you intend withdrawals to go to, EIP-55
+    /// mixed case. It is a hint; the mandate you sign is what binds it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withdrawal_address: Option<String>,
 }
 
 impl NewAgent {
+    /// A range agent on a concentrated EVM venue (Uniswap v3 and v4,
+    /// PancakeSwap v3 and Infinity CL, Aerodrome Slipstream).
+    ///
+    /// `wallet_address` is still your Solana login wallet: it is the account
+    /// the key belongs to. `pool_address` is the pool's CAIP id on `chain`
+    /// ([`EvmPool::address`]). `down_pct` and `up_pct` are how far the range
+    /// reaches below and above the price, as POSITIVE FRACTIONS: 0.05 is 5%.
+    /// The strategy is `bin_rebalancer` with the config
+    /// [`crate::evm::range_config`] builds; set `strategy` and `config`
+    /// yourself for another one. The agent opens its own position.
+    #[allow(clippy::too_many_arguments)]
+    pub fn evm_range(
+        name: impl Into<String>,
+        wallet_address: impl Into<String>,
+        chain: impl Into<String>,
+        dex: impl Into<String>,
+        pool_address: impl Into<String>,
+        down_pct: f64,
+        up_pct: f64,
+    ) -> Result<Self, crate::evm::EvmError> {
+        let config = crate::evm::range_config(down_pct, up_pct, "bin_rebalancer", None)?;
+        let mut agent = Self::new(name, wallet_address, dex, "bin_rebalancer", config);
+        agent.pool_address = Some(pool_address.into());
+        agent.chain = Some(chain.into());
+        Ok(agent)
+    }
+
+    /// A compound and hold agent on a full-range EVM venue (`uniswap_v2`,
+    /// `pancakeswap_v2`, `aerodrome_classic`): strategy `fee_collector`, no
+    /// range.
+    pub fn evm_full_range(
+        name: impl Into<String>,
+        wallet_address: impl Into<String>,
+        chain: impl Into<String>,
+        dex: impl Into<String>,
+        pool_address: impl Into<String>,
+    ) -> Self {
+        let mut agent = Self::new(
+            name,
+            wallet_address,
+            dex,
+            "fee_collector",
+            crate::evm::full_range_config(None),
+        );
+        agent.pool_address = Some(pool_address.into());
+        agent.chain = Some(chain.into());
+        agent
+    }
+
+    pub fn chain(mut self, chain: impl Into<String>) -> Self {
+        self.chain = Some(chain.into());
+        self
+    }
+
+    /// Stake the position for farm rewards (`config.evm.stake`): CAKE on
+    /// `pancakeswap_v3`, AERO on Aerodrome. On Aerodrome a staked position
+    /// earns AERO INSTEAD of swap fees, so choose it knowingly.
+    pub fn stake(mut self, stake: bool) -> Self {
+        if !self.config.is_object() {
+            self.config = serde_json::json!({});
+        }
+        match self.config.get_mut("evm").and_then(|e| e.as_object_mut()) {
+            Some(evm) => {
+                evm.insert("stake".into(), stake.into());
+            }
+            None => self.config["evm"] = serde_json::json!({ "stake": stake }),
+        }
+        self
+    }
+
+    pub fn withdrawal_address(mut self, address: impl Into<String>) -> Self {
+        self.withdrawal_address = Some(address.into());
+        self
+    }
+
     /// The five fields every agent needs.
     pub fn new(
         name: impl Into<String>,
@@ -686,6 +940,8 @@ impl NewAgent {
             pool_address: None,
             position_address: None,
             dry_run: None,
+            chain: None,
+            withdrawal_address: None,
         }
     }
 
@@ -703,6 +959,480 @@ impl NewAgent {
         self.dry_run = Some(dry_run);
         self
     }
+}
+
+// --------------------------------------------------------------------------
+// EVM chains: Ethereum, Arbitrum, Base, BNB Chain, Robinhood Chain (0.15.0)
+// --------------------------------------------------------------------------
+
+/// One chain ponk has fixed an id for.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EvmChain {
+    /// The chain word every route takes: `solana`, `ethereum`, `arbitrum`,
+    /// `base`, `bsc` or `robinhood`.
+    pub id: Option<String>,
+    pub label: Option<String>,
+    pub status: Option<String>,
+    /// The EIP-155 chain id. `None` on Solana.
+    pub evm_chain_id: Option<u64>,
+    /// The gas coin.
+    pub native_symbol: Option<String>,
+    pub explorer: Option<String>,
+    pub l2_kind: Option<String>,
+    pub inclusion: Option<String>,
+    /// The venue ids that run on this chain.
+    pub venues: Vec<String>,
+    /// Whether the pool board is answering for this chain right now.
+    pub reads_served: Option<bool>,
+}
+
+/// [`crate::Client::evm_chains`]: the chain dimension. `read_enabled` false
+/// means the EVM pool boards are switched off on this server.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EvmChains {
+    pub read_enabled: Option<bool>,
+    pub market_sources: Vec<String>,
+    pub chains: Vec<EvmChain>,
+    pub capabilities: Option<serde_json::Value>,
+}
+
+impl EvmChains {
+    /// The row for one chain word.
+    pub fn chain(&self, id: &str) -> Option<&EvmChain> {
+        self.chains.iter().find(|c| c.id.as_deref() == Some(id))
+    }
+}
+
+/// A token on an EVM chain, as the pool board knows it.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EvmToken {
+    /// The token id (`eip155:<chainId>:0x...`); the gas coin is the zero
+    /// address.
+    pub mint: Option<String>,
+    pub chain: Option<String>,
+    /// The bare address.
+    pub address: Option<String>,
+    pub symbol: Option<String>,
+    pub name: Option<String>,
+    pub decimals: Option<u8>,
+    pub logo_uri: Option<String>,
+    /// USD. `None` when no source ponk stands behind has a price.
+    pub price_usd: Option<f64>,
+    pub price_source: Option<String>,
+    pub price_via: Option<String>,
+    #[serde(rename = "change1h")]
+    pub change_1h: Option<f64>,
+    #[serde(rename = "change24h")]
+    pub change_24h: Option<f64>,
+    /// On its venue's token list.
+    pub verified: Option<bool>,
+    pub verification: Option<serde_json::Value>,
+    /// Marks a Robinhood Chain stock token.
+    pub stock: Option<serde_json::Value>,
+}
+
+/// A USD figure over the board's four windows. A window with no reading is
+/// `None`, never zero.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmWindows {
+    #[serde(rename = "30m")]
+    pub m30: Option<f64>,
+    #[serde(rename = "1h")]
+    pub h1: Option<f64>,
+    #[serde(rename = "4h")]
+    pub h4: Option<f64>,
+    #[serde(rename = "24h")]
+    pub h24: Option<f64>,
+}
+
+/// Farm rewards for staked liquidity on a pool.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EvmFarm {
+    /// `CAKE` or `AERO`.
+    pub token: Option<String>,
+    /// Staking there earns the token now.
+    pub live: Option<bool>,
+    /// Emissions per year in dollars over the dollars staked, a number in
+    /// PERCENT, computed from chain reads only. ON A CONCENTRATED POOL
+    /// (PancakeSwap v3, Aerodrome Slipstream) it is the rate of a staked
+    /// position spread like the whole pool: a tighter range earns more per
+    /// dollar while in range and nothing out of it, so it reads lower than
+    /// the venue's own headline. On Aerodrome Classic it is the rate of any
+    /// staked LP. `None` when the farm is not live or an input could not be
+    /// read. An agent's own rate is [`AgentPerformance::farm_rewards`].
+    pub apr_pct: Option<f64>,
+}
+
+/// The hook of a Uniswap v4 or PancakeSwap Infinity pool. The zero address
+/// is a pool with no hook.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EvmHook {
+    pub address: Option<String>,
+    /// False means an agent on this pool is refused at create.
+    pub agent_eligible: Option<bool>,
+    pub points: Vec<String>,
+    pub policy: Option<serde_json::Value>,
+    /// The hook can change what an LP holds.
+    pub touches_lp_funds: Option<bool>,
+}
+
+/// One pool on an EVM chain's board.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EvmPool {
+    pub key: Option<String>,
+    /// An EVM venue id ([`crate::evm::EVM_VENUES`]).
+    pub dex: Option<String>,
+    pub chain: Option<String>,
+    /// The CAIP pool id to pass as `pool_address`: `eip155:56:0x...`, or the
+    /// four part form for Uniswap v4 and PancakeSwap Infinity CL.
+    pub address: Option<String>,
+    /// token0.
+    pub x: Option<EvmToken>,
+    /// token1.
+    pub y: Option<EvmToken>,
+    /// Tick spacing. `None` on a full-range (v2 style) venue.
+    pub bin_step: Option<i32>,
+    /// The LP fee tier in PERCENT (0.05 is 0.05%). `None` on a `dynamic_fee`
+    /// pool, where a hook sets the fee on each swap.
+    pub fee_pct: Option<f64>,
+    pub dynamic_fee: Option<bool>,
+    /// USD.
+    pub tvl: Option<f64>,
+    pub tvl_source: Option<String>,
+    /// Milliseconds.
+    pub created_at: Option<i64>,
+    pub launchpad: Option<String>,
+    /// USD per window.
+    pub volume: Option<EvmWindows>,
+    /// LP fees earned, net of the protocol's share, USD per window.
+    pub fees: Option<EvmWindows>,
+    pub volume_source: Option<String>,
+    /// token1 per token0, whole units.
+    pub price: Option<f64>,
+    pub tick: Option<i32>,
+    pub liquidity: Option<String>,
+    #[serde(rename = "sqrtPriceX96")]
+    pub sqrt_price_x96: Option<String>,
+    pub hooks: Option<EvmHook>,
+    /// `None` when the pool has no farm.
+    pub farm: Option<EvmFarm>,
+    /// Plain sentences naming every figure above that is `None` and why.
+    pub data_insufficient: Vec<String>,
+    /// On Base: the pool's gauge facts (`gauge`, `gaugeLive`, `stakedShare`,
+    /// `curve`), on a single pool read.
+    pub aerodrome: Option<serde_json::Value>,
+}
+
+impl EvmPool {
+    /// `USDT/WBNB`, a `?` standing in for a symbol the board does not have.
+    pub fn pair(&self) -> String {
+        let sym = |t: &Option<EvmToken>| {
+            t.as_ref()
+                .and_then(|t| t.symbol.clone())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "?".to_string())
+        };
+        format!("{}/{}", sym(&self.x), sym(&self.y))
+    }
+
+    /// The risk flags the ponk.exchange board shows for this row.
+    ///
+    /// `unverified_token`: a token is not on the venue's token list.
+    /// `hook_not_agent_eligible`: the pool has a hook an agent cannot use.
+    /// `under_1h_old`: the pool was created under an hour before `now_ms`.
+    /// Empty when none applies. These are read off fields the server sent;
+    /// the copilot never picks a flagged pool.
+    pub fn flags(&self, now_ms: i64) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        let unverified = |t: &Option<EvmToken>| t.as_ref().is_some_and(|t| t.verified == Some(false));
+        if unverified(&self.x) || unverified(&self.y) {
+            out.push("unverified_token");
+        }
+        if let Some(hook) = &self.hooks {
+            let has_hook = hook
+                .address
+                .as_deref()
+                .is_some_and(|a| a.trim_start_matches("0x").bytes().any(|b| b != b'0'));
+            if has_hook && hook.agent_eligible != Some(true) {
+                out.push("hook_not_agent_eligible");
+            }
+        }
+        if let Some(created) = self.created_at.filter(|c| *c > 0) {
+            let created = if created < 1_000_000_000_000 { created * 1000 } else { created };
+            if now_ms - created < 3_600_000 {
+                out.push("under_1h_old");
+            }
+        }
+        out
+    }
+}
+
+/// How fresh a board is.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EvmBoardStatus {
+    /// The last live read failed and the pools are an older snapshot.
+    pub stale: Option<bool>,
+    pub consecutive_failures: Option<u32>,
+    pub last_error: Option<String>,
+    pub market_source: Option<String>,
+    pub market_sources: Vec<String>,
+    pub block_timestamp: Option<u64>,
+}
+
+/// One chain's pool board.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EvmBoard {
+    pub chain: Option<String>,
+    /// When the pools' chain state was read, in milliseconds. 0 means the
+    /// server has not finished its first read of the chain, and `pools` is
+    /// then empty.
+    pub as_of: Option<u64>,
+    pub served_at: Option<u64>,
+    pub pools: Vec<EvmPool>,
+    pub ok: Option<serde_json::Value>,
+    pub status: Option<EvmBoardStatus>,
+    /// On Base: the gauge facts, joined to the pools by `key`.
+    pub aerodrome: Vec<serde_json::Value>,
+}
+
+impl EvmBoard {
+    /// False until the server has finished its first read of the chain.
+    pub fn ready(&self) -> bool {
+        self.as_of.is_some_and(|t| t > 0)
+    }
+}
+
+/// What the first open of an agent costs on an EVM venue.
+///
+/// Each wei and USD figure is `None` when the chain could not be read, never
+/// an estimate.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmOpenCost {
+    pub chain: Option<String>,
+    pub dex: Option<String>,
+    pub pool: Option<String>,
+    pub native_symbol: Option<String>,
+    /// The measured gas of the first open at the live fee, WEI as a decimal
+    /// string.
+    pub gas_wei: Option<String>,
+    /// USD, a decimal string.
+    pub gas_usd: Option<String>,
+    /// Always kept back for the exit, wei.
+    pub reserve_wei: Option<String>,
+    /// `reserve_wei` plus `gas_wei`: the least the agent wallet must hold
+    /// before it can open, before the amount to deploy.
+    pub min_open_wei: Option<String>,
+    /// The gas coin's price in USD, a decimal string.
+    pub native_usd: Option<String>,
+    /// Basis points of the first open, once. The rate an agent THIS CALLER
+    /// creates pays: 150 with an API key; the keyless public route states
+    /// 100, the rate of an agent created on ponk.exchange.
+    pub activation_fee_bps: Option<u16>,
+    /// Basis points of the fees the agent earns: 1500 with an API key, 800
+    /// on the public route.
+    pub performance_fee_bps: Option<u16>,
+    pub exit_fee_bps: Option<u16>,
+}
+
+/// One pool of an EVM plan: one agent once the plan is started.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmPlanLeg {
+    pub chain: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub pair: Option<String>,
+    pub native_symbol: Option<String>,
+    /// What the owner sends to this agent, USD as a decimal string.
+    pub fund_usd: Option<String>,
+    /// The same in whole coins of the chain.
+    pub fund_native: Option<String>,
+    /// The same in wei.
+    pub fund_native_wei: Option<String>,
+    /// What is left to deploy after the wallet keeps its exit reserve and gas.
+    pub deploy_usd: Option<String>,
+    pub strategy: Option<String>,
+    /// The strategy config the agent is created with.
+    pub config: Option<serde_json::Value>,
+    /// The range either side of the price in PERCENT (5.0 is 5%).
+    pub range_pct: Option<f64>,
+    /// Percent per DAY over 24 hours.
+    pub fee_yield_24h_pct: Option<f64>,
+    /// What the pool was ranked on, percent a year: `fee_apr_pct` plus
+    /// `farm_apr_pct` where the agent stakes. Income per dollar of pool
+    /// liquidity, not a forecast.
+    pub ranked_apr_pct: Option<f64>,
+    pub fee_apr_pct: Option<f64>,
+    pub farm_apr_pct: Option<f64>,
+    pub tvl_usd: Option<f64>,
+    pub name: Option<String>,
+    pub open_gas_usd: Option<String>,
+    pub open_gas_native: Option<String>,
+    /// Kept in the agent wallet for gas, USD. Part of `fund_usd`.
+    pub wallet_floor_usd: Option<String>,
+}
+
+/// A pool the planner looked at and left out, with the sentence that says why.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmPlanDropped {
+    pub chain: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub pair: Option<String>,
+    pub reason: Option<String>,
+}
+
+/// What works instead when a chain's share is under its minimum. Never
+/// applied by itself.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmPlanAlternative {
+    /// `same_pair_on_chain` (the same pair on a cheaper chain; `plan_id` is a
+    /// plan already made for it) or `minimum_on_chain` (`plan_sentence` plans
+    /// it when sent to [`crate::Client::copilot_evm_plan`]).
+    pub kind: Option<String>,
+    pub chain: Option<String>,
+    pub pair: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    /// What it needs sent, USD.
+    pub amount_usd: Option<String>,
+    pub sentence: Option<String>,
+    pub plan_id: Option<String>,
+    pub plan_sentence: Option<String>,
+}
+
+/// One chain of an EVM plan: one deposit, funded by the owner on that chain.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmPlanChain {
+    pub chain: Option<String>,
+    pub native_symbol: Option<String>,
+    /// The share of the budget on this chain, USD.
+    pub amount_usd: Option<String>,
+    /// The same in whole coins of the chain.
+    pub amount_native: Option<String>,
+    pub legs: Vec<EvmPlanLeg>,
+    pub dropped: Vec<EvmPlanDropped>,
+    pub notes: Vec<String>,
+    /// Set, with no legs, when nothing on this chain could be planned. The
+    /// other chains still plan.
+    pub refusal: Option<String>,
+    /// Whole dollars: the least that plans one pool there at current gas,
+    /// when size is the only reason.
+    pub minimum_usd: Option<String>,
+    pub alternative: Option<EvmPlanAlternative>,
+}
+
+/// One agent a started plan created, in leg order.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmPlanAgent {
+    /// `None` when `created` is false; `refusal` then says why.
+    pub agent_id: Option<String>,
+    pub chain: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub pair: Option<String>,
+    pub fund_usd: Option<String>,
+    /// The amount of the chain's coin to send to the agent's address.
+    pub fund_native: Option<String>,
+    pub fund_native_wei: Option<String>,
+    pub native_symbol: Option<String>,
+    pub created: Option<bool>,
+    pub refusal: Option<String>,
+}
+
+/// A plan made from one sentence that names an EVM chain.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmPlan {
+    pub id: Option<String>,
+    /// `ready`, `solana_only` (no EVM leg could be planned but the Solana
+    /// part was; start answers 422 and `notes[0]` says what to do), `refused`
+    /// or `started`.
+    pub state: Option<String>,
+    pub text: Option<String>,
+    /// What was understood.
+    pub echo: Option<String>,
+    /// `{code, message}` when the plan as a whole is refused.
+    pub refusal: Option<serde_json::Value>,
+    /// The whole budget in dollars.
+    pub total_usd: Option<String>,
+    /// Its split, one entry per EVM chain.
+    pub funding_by_chain: Vec<EvmPlanChain>,
+    pub dropped: Vec<EvmPlanDropped>,
+    /// The Solana part of a plan across chains: an ordinary Solana plan with
+    /// its own id under `plan`, read and started through
+    /// [`crate::Client::copilot_get_plan`] and [`crate::Client::copilot_start`].
+    pub solana: Option<serde_json::Value>,
+    /// The fee sentence for this caller, from the server's fee model.
+    pub fees: Option<String>,
+    pub notes: Vec<String>,
+    /// Filled by start.
+    pub agents: Vec<EvmPlanAgent>,
+    /// Filled by start, and never empty after one: the ponk.exchange pages
+    /// where the owner signs each agent's mandate and funds it.
+    pub sign_urls: Vec<String>,
+    /// Filled by start when an agent was created: the copilot fleet these
+    /// agents form.
+    pub fleet_id: Option<String>,
+}
+
+impl EvmPlan {
+    /// The EVM chains this plan covers, in order.
+    pub fn chains(&self) -> Vec<&str> {
+        self.funding_by_chain.iter().filter_map(|c| c.chain.as_deref()).collect()
+    }
+
+    /// Every leg across the chains, in order.
+    pub fn legs(&self) -> Vec<&EvmPlanLeg> {
+        self.funding_by_chain.iter().flat_map(|c| c.legs.iter()).collect()
+    }
+}
+
+/// One EVM agent the caller owns.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmFleetAgent {
+    pub agent_id: Option<String>,
+    pub name: Option<String>,
+    pub chain: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub position_address: Option<String>,
+    pub status: Option<String>,
+    pub strategy: Option<String>,
+    /// The agent's own address on `chain`. `None` until its wallet exists.
+    pub address: Option<String>,
+    /// `active`, `expired` or `None` with none.
+    pub mandate_status: Option<String>,
+    pub mandate_expires_at: Option<String>,
+    /// What the agent still needs from its owner: `authorize_and_fund`,
+    /// `authorize` (the mandate lapsed: sign again),
+    /// `funding_or_waiting_to_open` or `nothing`.
+    pub needs: Option<String>,
+}
+
+/// [`crate::Client::evm_fleet`]: every EVM agent the caller owns, with the
+/// links that fund and authorize the ones still running, 40 agents to a link.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmFleet {
+    pub agents: Vec<EvmFleetAgent>,
+    pub sign_urls: Vec<String>,
+    pub fund_page: Option<String>,
 }
 
 #[cfg(test)]
@@ -1650,6 +2380,15 @@ pub struct AgentWalletCreated {
     /// RFC 3339.
     pub created_at: Option<String>,
     pub created: Option<bool>,
+    /// For an agent on an EVM chain the answer is the wallet view instead:
+    /// the deposit address on `chain` (EIP-55), the gas coin, what the first
+    /// open needs in wei, and the mandate status (`None` until one is
+    /// signed). Read it in full with [`crate::Client::agent_wallet`].
+    pub address: Option<String>,
+    pub chain: Option<String>,
+    pub native_symbol: Option<String>,
+    pub min_open_wei: Option<String>,
+    pub mandate_status: Option<String>,
 }
 
 /// One agent's outcome inside a batch.

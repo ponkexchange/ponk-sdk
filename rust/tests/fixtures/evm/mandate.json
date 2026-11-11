@@ -1,0 +1,17 @@
+{
+  "mandate_id": "0190a1b2-0000-7000-8000-00000000000a",
+  "status": "active",
+  "expires_at": "2026-12-10T18:05:00Z",
+  "granted_at": "2026-11-10T18:05:00Z",
+  "seconds_remaining": 2591000,
+  "actions": [
+    "claim_fees",
+    "compound"
+  ],
+  "max_action_value_usd": null,
+  "max_daily_transactions": 200,
+  "max_slippage_bps": 100,
+  "pool_allowlist": [],
+  "withdrawal_address": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+  "chain": "bsc"
+}

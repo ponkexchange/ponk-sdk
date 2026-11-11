@@ -1,10 +1,10 @@
 [package]
 name = "ponk-cli"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
-description = "Command line for the ponk public API: pools across Meteora DLMM, Meteora DAMM v2, Orca and Raydium, LP agents, the leaderboard, withdrawals."
+description = "Command line for the ponk public API: LP pools and agents on Solana, Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain, the leaderboard, withdrawals."
 readme = "README.md"
 repository = "https://github.com/ponkexchange/ponk-sdk"
 
@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 # The sibling crate is the only thing that talks HTTP. The CLI renders.
-ponk = { path = "..", version = "0.14.0", default-features = false, features = ["rustls-tls"] }
+ponk = { path = "..", version = "0.15.0", default-features = false, features = ["rustls-tls"] }
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde_json = "1"

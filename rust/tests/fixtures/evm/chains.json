@@ -1,0 +1,111 @@
+{
+  "capabilities": {
+    "version": "0.2.0",
+    "rows": []
+  },
+  "chains": [
+    {
+      "evmChainId": null,
+      "explorer": "https://solscan.io",
+      "id": "solana",
+      "inclusion": "solana_leader",
+      "l2Kind": "none",
+      "label": "Solana",
+      "nativeSymbol": "SOL",
+      "readsServed": false,
+      "status": "live",
+      "venues": [
+        "meteora_dlmm",
+        "orca",
+        "ponk_clouds",
+        "raydium",
+        "meteora_damm_v2"
+      ]
+    },
+    {
+      "evmChainId": 1,
+      "explorer": "https://etherscan.io",
+      "id": "ethereum",
+      "inclusion": "private_relay",
+      "l2Kind": "none",
+      "label": "Ethereum",
+      "nativeSymbol": "ETH",
+      "readsServed": true,
+      "status": "read_only",
+      "venues": [
+        "uniswap_v2",
+        "uniswap_v3",
+        "uniswap_v4"
+      ]
+    },
+    {
+      "evmChainId": 42161,
+      "explorer": "https://arbiscan.io",
+      "id": "arbitrum",
+      "inclusion": "fcfs_sequencer",
+      "l2Kind": "arbitrum_nitro",
+      "label": "Arbitrum",
+      "nativeSymbol": "ETH",
+      "readsServed": true,
+      "status": "read_only",
+      "venues": [
+        "uniswap_v2",
+        "uniswap_v3",
+        "uniswap_v4"
+      ]
+    },
+    {
+      "evmChainId": 4663,
+      "explorer": "https://robinhoodchain.blockscout.com",
+      "id": "robinhood",
+      "inclusion": "fcfs_sequencer",
+      "l2Kind": "arbitrum_nitro",
+      "label": "Robinhood Chain",
+      "nativeSymbol": "ETH",
+      "readsServed": true,
+      "status": "read_only",
+      "venues": [
+        "uniswap_v2",
+        "uniswap_v3",
+        "uniswap_v4"
+      ]
+    },
+    {
+      "evmChainId": 8453,
+      "explorer": "https://basescan.org",
+      "id": "base",
+      "inclusion": "priority_fee_sequencer",
+      "l2Kind": "op_stack",
+      "label": "Base",
+      "nativeSymbol": "ETH",
+      "readsServed": true,
+      "status": "read_only",
+      "venues": [
+        "aerodrome_classic",
+        "aerodrome_slipstream"
+      ]
+    },
+    {
+      "evmChainId": 56,
+      "explorer": "https://bscscan.com",
+      "id": "bsc",
+      "inclusion": "private_relay",
+      "l2Kind": "none",
+      "label": "BNB Chain",
+      "nativeSymbol": "BNB",
+      "readsServed": true,
+      "status": "read_only",
+      "venues": [
+        "pancakeswap_v2",
+        "pancakeswap_v3",
+        "pancakeswap_infinity_cl"
+      ]
+    }
+  ],
+  "marketSources": [
+    "coingecko",
+    "defillama",
+    "dexscreener"
+  ],
+  "readEnabled": true
+}

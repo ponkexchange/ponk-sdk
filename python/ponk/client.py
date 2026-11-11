@@ -87,6 +87,16 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 
 from ._version import __version__
 from .errors import PonkError, PonkTransportError, error_from_response
+from . import evm as _evm
+from .models import (  # 0.15.0
+    EvmBoard,
+    EvmChains,
+    EvmFleet,
+    EvmOpenCost,
+    EvmPlan,
+    EvmPool,
+    EvmToken,
+)
 from .models import (
     FollowState,
     MyFollowing,
@@ -939,7 +949,11 @@ class PonkClient:
     def agent_wallet(self, agent_id: str) -> AgentWallet:
         """`GET /v1/agents/{id}/wallet`. The agent's own managed wallet.
 
-        Autonomous agents only.
+        Autonomous agents only. For an agent on an EVM chain the answer is
+        the EVM view (`AgentWallet.is_evm`): the deposit address, the gas
+        coin and its balances in wei and USD, the one withdrawal address and
+        `mandate_status`. Raises `PonkNotFoundError` until the wallet exists;
+        `create_agent_wallet` creates it.
         """
         return AgentWallet.from_dict(
             self._request("GET", "/v1/agents/{0}/wallet".format(_seg(agent_id)))
@@ -1101,8 +1115,14 @@ class PonkClient:
         position_address: Optional[str] = None,
         dry_run: bool,
         accept_pool_risk: bool = False,
+        chain: Optional[str] = None,
+        withdrawal_address: Optional[str] = None,
     ) -> Agent:
         """`POST /v1/agents`. Create an agent.
+
+        This creates an agent on any chain. `chain` and `withdrawal_address`
+        are for an agent on an EVM chain, where `create_evm_agent` builds the
+        config for you; leave both out for a Solana agent.
 
         `wallet_address` must be this key's own wallet; anything else is
         rejected as a cross-account attempt. `config` is validated against
@@ -1172,6 +1192,10 @@ class PonkClient:
             body["position_address"] = position_address
         if accept_pool_risk:
             body["accept_pool_risk"] = True
+        if chain is not None:
+            body["chain"] = chain
+        if withdrawal_address is not None:
+            body["withdrawal_address"] = withdrawal_address
         return Agent.from_dict(self._request("POST", "/v1/agents", body=body))
 
     def pause_agent(self, agent_id: str) -> Agent:
@@ -1260,6 +1284,11 @@ class PonkClient:
         and `max_rebalances_per_day`. Any other key, the range width included, raises
         `PonkUnprocessableError` naming it. Moves no funds; applies to the
         next recenter.
+
+        On an EVM agent, `{"evm": {"stake": True}}` (`ponk.evm.stake_config`)
+        stakes the position for CAKE or AERO from the next open or recenter,
+        on `pancakeswap_v3`, `aerodrome_slipstream` and `aerodrome_classic`;
+        it is refused elsewhere. `set_stake_rewards` sends exactly that.
         """
         return Agent.from_dict(
             self._request(
@@ -1512,6 +1541,13 @@ class PonkClient:
 
         Omit `lamports` to sweep everything spendable. The destination is the
         wallet that owns the agent and cannot be named by the request.
+
+        ON AN EVM AGENT this sweeps the idle tokens and the gas coin to the
+        mandate's proven withdrawal address on the same chain, and only with
+        no position open: with one open it raises `PonkUnprocessableError`
+        with a sentence that says to exit. It stops the agent first
+        (`resume_agent` starts it again). `lamports` is ignored there. Read
+        `Withdrawal.status`, `sentence`, `amount_wei` and `received`.
         """
         body: Dict[str, Any] = {}
         if lamports is not None:
@@ -1538,6 +1574,17 @@ class PonkClient:
         them as they are, no swap, no fee. Omitted, the agent's own
         `exit_to_sol` setting decides, and it defaults to True. A token that
         cannot be swapped is sent as it is; `Withdrawal.exit_notes` says why.
+
+        ON AN EVM AGENT the exit stops the agent, unstakes and removes the
+        whole position, unwraps, and sweeps every token and the gas coin to
+        the mandate's proven withdrawal address on the same chain; `to_sol`
+        is ignored. The answer carries the real amounts this call sent
+        (`amount_wei`, `received`, `tx_hashes`) and `status`. An exit that
+        does not finish in the call raises `PonkUnprocessableError` with the
+        sentence, or answers `status` `incomplete`, and the agent keeps
+        running the exit by itself until everything has left its wallet;
+        calling again is safe and never pays twice. It works under an expired
+        mandate too.
         """
         return Withdrawal.from_dict(
             self._request(
@@ -1774,6 +1821,291 @@ class PonkClient:
         return AgentWalletCreated.from_dict(
             self._request("POST", "/v1/agents/{0}/wallet".format(_seg(agent_id)))
         )
+
+    # -- EVM chains: Ethereum, Arbitrum, Base, BNB Chain, Robinhood Chain -----
+
+    def evm_chains(self, *, public: bool = True) -> EvmChains:
+        """`GET /public/evm/chains`. Every chain, its gas coin and its venues.
+
+        No key needed. `public=False` reads the `/v1` twin,
+        `GET /v1/evm/chains`: the same body on the API key's budget instead
+        of the per-IP limit. That switch means the same on every EVM read.
+        """
+        return EvmChains.from_dict(self._request("GET", _evm_prefix(public) + "/chains"))
+
+    def evm_pools(
+        self, chain: str, *, venue: Optional[str] = None, public: bool = True
+    ) -> EvmBoard:
+        """`GET /public/evm/{chain}/board?venue=`. One chain's pool board.
+
+        `chain` is `ethereum`, `arbitrum`, `base`, `bsc` or `robinhood`.
+        `venue` keeps one venue's pools (an id from `ponk.evm.EVM_VENUES`
+        that runs on that chain; any other raises `PonkBadRequestError`).
+        Each `EvmPool` carries its CAIP id, fee tier, whether the fee is
+        dynamic, TVL, volume and LP fees per window, the farm (`token`,
+        `live`, `apr_pct`) and `flags()`. The board is a snapshot the server
+        refreshes by itself, so the call reads no chain; `EvmBoard.ready` is
+        false, with no pools, until its first read has finished. The rows
+        come unsorted: order them yourself, for example by `p.fees.h24`.
+        """
+        return EvmBoard.from_dict(
+            self._request(
+                "GET",
+                "{0}/{1}/board".format(_evm_prefix(public), _seg(chain)),
+                params={"venue": venue},
+            )
+        )
+
+    def evm_pool(self, pool_id: str, *, public: bool = True) -> EvmPool:
+        """`GET /public/evm/pools/{id}`. One pool by its CAIP id.
+
+        `pool_id` is `eip155:<chainId>:0x<address>`, or the four part form
+        for a Uniswap v4 or PancakeSwap Infinity CL pool
+        (`ponk.evm.pool_id`, `ponk.evm.v4_pool_id`). An id that is not one
+        raises `PonkBadRequestError`, an unknown pool `PonkNotFoundError`.
+        """
+        return EvmPool.from_dict(
+            self._request("GET", "{0}/pools/{1}".format(_evm_prefix(public), _seg(pool_id)))
+        )
+
+    def evm_token(self, token_id: str, *, public: bool = True) -> EvmToken:
+        """`GET /public/evm/tokens/{id}`. One token by its CAIP id.
+
+        The zero address is the chain's gas coin (`ponk.evm.native_token_id`),
+        whose `price_usd` is the ETH or BNB price. Use it to turn the base
+        unit amounts of `Withdrawal.received` into whole tokens.
+        """
+        return EvmToken.from_dict(
+            self._request("GET", "{0}/tokens/{1}".format(_evm_prefix(public), _seg(token_id)))
+        )
+
+    def evm_open_cost(
+        self,
+        chain: str,
+        dex: str,
+        *,
+        pool: Optional[str] = None,
+        stake: Optional[bool] = None,
+        public: Optional[bool] = None,
+    ) -> EvmOpenCost:
+        """`GET /v1/evm/{chain}/open-cost?dex=&pool=&stake=`. What the first open costs.
+
+        The measured gas of the first open at the live fee, the reserve kept
+        back for the exit, the least the agent wallet must hold, and ponk's
+        two fee rates. With an API key this reads the `/v1` route, which
+        states the rates an agent YOU create pays (1.5% of the first open,
+        once, and 15% of fees earned). Without a key, or with `public=True`,
+        it reads `GET /public/evm/{chain}/open-cost`, which states the rates
+        of an agent created on ponk.exchange (1% and 8%).
+
+        `stake` defaults to true on the server where the venue has a farm,
+        because a staked open costs more gas. A venue that does not run on
+        `chain` raises `PonkUnprocessableError`.
+        """
+        if public is None:
+            public = not self.api_key
+        return EvmOpenCost.from_dict(
+            self._request(
+                "GET",
+                "{0}/{1}/open-cost".format(_evm_prefix(public), _seg(chain)),
+                params={
+                    "dex": dex,
+                    "pool": pool,
+                    "stake": None if stake is None else ("true" if stake else "false"),
+                },
+            )
+        )
+
+    def create_evm_agent(
+        self,
+        *,
+        name: str,
+        wallet_address: str,
+        chain: str,
+        dex: str,
+        pool_address: str,
+        dry_run: bool,
+        strategy: Optional[str] = None,
+        down_pct: Optional[float] = None,
+        up_pct: Optional[float] = None,
+        config: Optional[Mapping[str, Any]] = None,
+        stake: Optional[bool] = None,
+        withdrawal_address: Optional[str] = None,
+    ) -> Agent:
+        """`POST /v1/agents`. Create an agent on an EVM chain.
+
+        `wallet_address` is still your Solana login wallet: it is the account
+        the key belongs to. `chain` is `ethereum`, `arbitrum`, `base`, `bsc`
+        or `robinhood`, `dex` a venue that runs there, and `pool_address` the
+        pool's CAIP id on that same chain (`EvmPool.address`). The agent
+        opens its own position; an existing one cannot be adopted.
+
+        The strategy ids are the Solana ones:
+
+        * On a range venue (Uniswap v3 and v4, PancakeSwap v3 and Infinity
+          CL, Aerodrome Slipstream) give the range as `down_pct` and `up_pct`,
+          POSITIVE FRACTIONS (0.05 is 5% either side). `strategy` defaults to
+          `bin_rebalancer`; `conservative_bin_rebalancer` works the same way
+          with your own `config`.
+        * On a full-range venue (`uniswap_v2`, `pancakeswap_v2`,
+          `aerodrome_classic`) there is no range: the agent is
+          `fee_collector`, compound and hold, and that is the default there.
+        * Pass `config` to send your own strategy config instead, exactly as
+          for a Solana tick venue (a range is `range_pct: {down_pct, up_pct}`).
+          Degen Mode (`entry_agent`) is not offered on an EVM venue.
+
+        `stake=True` stakes the position for farm rewards: CAKE on
+        `pancakeswap_v3`, AERO on Aerodrome. On Aerodrome a staked position
+        earns AERO INSTEAD of swap fees, so choose it knowingly.
+        `withdrawal_address` is the EVM address you intend withdrawals to go
+        to, EIP-55 mixed case; it is a hint, and the mandate you sign is what
+        binds it.
+
+        `dry_run` is required, as on `create_agent`. An agent created here
+        pays the API rates for its whole life: 1.5% of its first open, once,
+        and 15% of the fees it earns (`Agent.activation_fee_bps`,
+        `Agent.managed_fee_bps`).
+
+        NOTHING IS FUNDED OR SIGNED BY THIS CALL. The agent acts only after
+        you sign its mandate with your own wallets on ponk.exchange (two
+        signatures: the Solana login wallet, then the EVM wallet that will
+        receive withdrawals) and send the chain's gas coin to its address:
+
+            from ponk import fund_link
+
+            agent = client.create_evm_agent(...)
+            print(fund_link(agent.id, chain=agent.chain))
+            print(client.create_agent_wallet(agent.id).address)
+
+        A refusal is `PonkUnprocessableError` with a plain sentence: the venue
+        is not on that chain, the pool is not a pool of that venue, a v4 hook
+        an agent cannot use, a range strategy on a full-range venue.
+        """
+        if not _evm.is_evm_chain(chain):
+            raise ValueError(
+                "chain must be one of {0}, got {1!r}. For a Solana agent use "
+                "create_agent.".format(", ".join(_evm.EVM_CHAINS), chain)
+            )
+        if config is not None:
+            if down_pct is not None or up_pct is not None:
+                raise ValueError("pass a range as down_pct and up_pct, or your own config, not both")
+            built: Dict[str, Any] = dict(config)
+            if stake is not None:
+                merged = dict(built.get("evm") or {})
+                merged["stake"] = bool(stake)
+                built["evm"] = merged
+            if strategy is None:
+                strategy = built.get("kind")
+            if not strategy:
+                raise ValueError("strategy is required with your own config")
+        elif _evm.is_full_range_venue(dex):
+            if down_pct is not None or up_pct is not None:
+                raise ValueError(
+                    "{0} is a full-range venue: a position there has no range, so "
+                    "leave down_pct and up_pct out".format(dex)
+                )
+            strategy = strategy or "fee_collector"
+            built = (
+                _evm.full_range_config(stake=stake)
+                if strategy == "fee_collector"
+                else {"kind": strategy}
+            )
+        else:
+            if down_pct is None or up_pct is None:
+                raise ValueError(
+                    "a range venue needs down_pct and up_pct, as fractions (0.05 is 5%), "
+                    "or your own config"
+                )
+            strategy = strategy or "bin_rebalancer"
+            built = _evm.range_config(down_pct, up_pct, strategy=strategy, stake=stake)
+        return self.create_agent(
+            name=name,
+            wallet_address=wallet_address,
+            dex=dex,
+            strategy=strategy,
+            config=built,
+            pool_address=pool_address,
+            dry_run=dry_run,
+            chain=chain,
+            withdrawal_address=withdrawal_address,
+        )
+
+    def set_stake_rewards(self, agent_id: str, stake: bool) -> Agent:
+        """`PATCH /v1/agents/{id}/config` with `{"evm": {"stake": stake}}`.
+
+        Turn staking for farm rewards on or off for an EVM agent on
+        `pancakeswap_v3`, `aerodrome_slipstream` or `aerodrome_classic`.
+        Applies from the next open or recenter and moves nothing now. Any
+        other venue raises `PonkUnprocessableError`.
+        """
+        return self.update_config(agent_id, _evm.stake_config(stake))
+
+    def copilot_evm_plan(self, text: str) -> EvmPlan:
+        """`POST /copilot/evm/plans`. Plan one sentence that names an EVM chain.
+
+            plan = ponk.copilot_evm_plan("$200 in the top 5 bnb pools")
+            plan.total_usd, plan.chains, plan.legs
+
+        The grammar is closed and deterministic, with no language model:
+        dollars (`$200`, `200 usd`, `$1.5k`), a pool count (`top 5`,
+        `3 pools`, 1 to 10 per chain), one or more chains (`bnb`, `arbitrum`,
+        `base`, `ethereum`, `robinhood`, `solana`), optional venues
+        (`pancakeswap v3`, `uniswap v4`, `aerodrome slipstream`), risk
+        (`careful`, `balanced`, `aggressive`) and a range (`8%`). One amount
+        is the whole budget, split evenly across the chains named, or one
+        amount goes in front of each chain (`$60 in bnb and $40 in solana`).
+        Amounts are DOLLARS ONLY: SOL, ETH or BNB amounts are refused.
+
+        Answers at once and creates nothing. A sentence it cannot plan comes
+        back with `state` `refused` and `refusal` (`code`, `message`), not as
+        an exception. Plans last 15 minutes. Needs `session_token` or an API
+        key; `fees` on the answer is the fee sentence for that caller.
+        """
+        return EvmPlan.from_dict(
+            self._request("POST", "/copilot/evm/plans", body={"text": text}, session_only=True)
+        )
+
+    def copilot_evm_get_plan(self, plan_id: str) -> EvmPlan:
+        """`GET /copilot/evm/plans/{id}`. The same plan, readable only by its maker."""
+        return EvmPlan.from_dict(
+            self._request(
+                "GET", "/copilot/evm/plans/{0}".format(_seg(plan_id)), session_only=True
+            )
+        )
+
+    def copilot_evm_start(self, plan_id: str) -> EvmPlan:
+        """`POST /copilot/evm/plans/{id}/start`. Create one agent per leg.
+
+        MOVES NO MONEY. The plan comes back with `state` `started`, `agents`
+        (each with its `agent_id` and the amount of the chain's coin to send
+        it, or `created` false with the sentence that says why),
+        `sign_urls`, the ponk.exchange pages where your own wallets sign each
+        agent's mandate and fund it, and `fleet_id`: the agents form a
+        copilot fleet, so `copilot_fleet`, `copilot_stop_fleet` and
+        `copilot_tighten_stop` act on them. A second start returns the same
+        answer and creates nothing. Needs a `trade` key or a wallet session;
+        agents started with a key pay the API rates. Takes the fund timeout.
+        """
+        return EvmPlan.from_dict(
+            self._request(
+                "POST",
+                "/copilot/evm/plans/{0}/start".format(_seg(plan_id)),
+                timeout=self.fund_timeout,
+                session_only=True,
+            )
+        )
+
+    def evm_fleet(self) -> EvmFleet:
+        """`GET /agents/evm/fleet`. Every EVM agent you own and what each needs.
+
+        Each row has the agent's own address, its mandate status and expiry,
+        and `needs`: `authorize_and_fund`, `authorize`,
+        `funding_or_waiting_to_open` or `nothing`. `sign_urls` are the pages
+        that fund and authorize the ones still running. `fleet()` lists the
+        same agents beside the Solana ones, with wallet and performance.
+        Needs `session_token` or an API key.
+        """
+        return EvmFleet.from_dict(self._request("GET", "/agents/evm/fleet", session_only=True))
 
     # -- the copilot (wallet session, or an API key) ---------------------------
 
@@ -3415,6 +3747,10 @@ def _to_sol_body(to_sol: Optional[bool]) -> Dict[str, Any]:
 
 def _preset_body(name: str, overrides: Mapping[str, Any], dex: Optional[str]) -> Dict[str, Any]:
     return {"name": name, "overrides": dict(overrides), "dex": dex}
+
+
+def _evm_prefix(public: bool) -> str:
+    return "/public/evm" if public else "/v1/evm"
 
 
 def _seg(value: str) -> str:

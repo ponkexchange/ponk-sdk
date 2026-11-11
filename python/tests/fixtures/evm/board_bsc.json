@@ -1,0 +1,219 @@
+{
+  "asOf": 1794371666154,
+  "chain": "bsc",
+  "ok": {
+    "chainRpc": true,
+    "market": true,
+    "stockRegistry": null,
+    "tokenList": true
+  },
+  "pools": [
+    {
+      "address": "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
+      "binStep": 1,
+      "chain": "bsc",
+      "createdAt": 1763103867000,
+      "dataInsufficient": [],
+      "dex": "pancakeswap_v3",
+      "dynamicFee": false,
+      "farm": {
+        "aprPct": 0.01433059114221924,
+        "live": true,
+        "token": "CAKE"
+      },
+      "feePct": 0.01,
+      "fees": {
+        "1h": 6.103123201771332,
+        "24h": 365.8986085031852,
+        "30m": 3.6707914916790494,
+        "4h": null
+      },
+      "hooks": null,
+      "key": "pancakeswap_v3:eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
+      "launchpad": null,
+      "liquidity": "15205995822357648544906105510",
+      "price": 0.9990060472633366,
+      "sqrtPriceX96": "79188778200818828132670681945",
+      "tick": -10,
+      "tvl": 31488780.51251982,
+      "tvlSource": "onchain",
+      "volume": {
+        "1h": 91091.3910712139,
+        "24h": 5461173.26124157,
+        "30m": 54787.9327116276,
+        "4h": null
+      },
+      "volumeSource": "coingecko",
+      "x": {
+        "address": "0x55d398326f99059ff775485246999027b3197955",
+        "buyVolume1h": null,
+        "chain": "bsc",
+        "change1h": -0.092,
+        "change24h": -0.158,
+        "createdAt": null,
+        "decimals": 18,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": "https://tokens.pancakeswap.finance/images/0x55d398326f99059fF775485246999027B3197955.png",
+        "mint": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+        "mintAuthorityDisabled": null,
+        "name": "Tether USD",
+        "pendingMultiplier": null,
+        "priceSource": "coingecko",
+        "priceUsd": 0.998490212292388,
+        "priceVia": null,
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "USDT",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "pancakeswap_extended_list",
+          "status": "verified"
+        },
+        "verified": true
+      },
+      "y": {
+        "address": "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
+        "buyVolume1h": null,
+        "chain": "bsc",
+        "change1h": -0.006,
+        "change24h": -0.025,
+        "createdAt": null,
+        "decimals": 18,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": "https://tokens.pancakeswap.finance/images/0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d.png",
+        "mint": "eip155:56:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
+        "mintAuthorityDisabled": null,
+        "name": "USD Coin",
+        "pendingMultiplier": null,
+        "priceSource": "coingecko",
+        "priceUsd": 0.999210194060289,
+        "priceVia": null,
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "USDC",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "pancakeswap_extended_list",
+          "status": "verified"
+        },
+        "verified": true
+      }
+    },
+    {
+      "address": "eip155:56:0xcaaf3c41a40103a23eeaa4bba468af3cf5b0e0d8",
+      "binStep": null,
+      "chain": "bsc",
+      "createdAt": 1756206977000,
+      "dataInsufficient": [],
+      "dex": "pancakeswap_v2",
+      "dynamicFee": false,
+      "farm": null,
+      "feePct": 0.25,
+      "fees": {
+        "1h": 616.9409830672498,
+        "24h": 8282.03653095962,
+        "30m": 330.78470687836716,
+        "4h": null
+      },
+      "hooks": null,
+      "key": "pancakeswap_v2:eip155:56:0xcaaf3c41a40103a23eeaa4bba468af3cf5b0e0d8",
+      "launchpad": null,
+      "liquidity": null,
+      "price": 0.15552160162648646,
+      "sqrtPriceX96": null,
+      "tick": null,
+      "tvl": 58252689.762499236,
+      "tvlSource": "onchain",
+      "volume": {
+        "1h": 362906.460627794,
+        "24h": 4871786.19468213,
+        "30m": 194579.239340216,
+        "4h": null
+      },
+      "volumeSource": "coingecko",
+      "x": {
+        "address": "0x55d398326f99059ff775485246999027b3197955",
+        "buyVolume1h": null,
+        "chain": "bsc",
+        "change1h": -0.092,
+        "change24h": -0.158,
+        "createdAt": null,
+        "decimals": 18,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": "https://tokens.pancakeswap.finance/images/0x55d398326f99059fF775485246999027B3197955.png",
+        "mint": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+        "mintAuthorityDisabled": null,
+        "name": "Tether USD",
+        "pendingMultiplier": null,
+        "priceSource": "coingecko",
+        "priceUsd": 0.998490212292388,
+        "priceVia": null,
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "USDT",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "pancakeswap_extended_list",
+          "status": "verified"
+        },
+        "verified": true
+      },
+      "y": {
+        "address": "0xcae117ca6bc8a341d2e7207f30e180f0e5618b9d",
+        "buyVolume1h": null,
+        "chain": "bsc",
+        "change1h": 0.32,
+        "change24h": -0.272,
+        "createdAt": null,
+        "decimals": 18,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": null,
+        "mint": "eip155:56:0xcae117ca6bc8a341d2e7207f30e180f0e5618b9d",
+        "mintAuthorityDisabled": null,
+        "name": "ARK",
+        "pendingMultiplier": null,
+        "priceSource": "onchain_pool",
+        "priceUsd": 6.42026703589669,
+        "priceVia": "eip155:56:0xcaaf3c41a40103a23eeaa4bba468af3cf5b0e0d8",
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "ARK",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "status": "not_listed"
+        },
+        "verified": false
+      }
+    }
+  ],
+  "servedAt": 1794371669624,
+  "status": {
+    "blockTimestamp": 1794371665,
+    "consecutiveFailures": 0,
+    "dropped": {
+      "notUniswap": 0,
+      "unreadable": 0,
+      "v4KeyUnresolved": 0
+    },
+    "lastError": null,
+    "marketSource": "coingecko",
+    "marketSources": [
+      "coingecko",
+      "defillama",
+      "dexscreener"
+    ],
+    "stale": false
+  }
+}

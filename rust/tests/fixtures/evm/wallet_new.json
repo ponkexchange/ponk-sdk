@@ -1,0 +1,13 @@
+{
+  "address": "0x52908400098527886E0F7030069857D2E4169EE7",
+  "chain": "bsc",
+  "native_symbol": "BNB",
+  "balance_wei": "0",
+  "reserve_wei": "52200000000000",
+  "min_open_wei": "452200000000000",
+  "withdrawable_wei": "0",
+  "balance_usd": "0.00",
+  "native_usd": "680.65",
+  "withdrawal_address": null,
+  "mandate_status": null
+}

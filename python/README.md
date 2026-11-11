@@ -1,7 +1,8 @@
 # ponk (Python)
 
-A thin client for the ponk public API: create and drive Solana DLMM liquidity
-agents, read their live positions, PnL and fees, and move funds home.
+A thin client for the ponk public API: create and drive liquidity agents on
+Solana, Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain, read their
+live positions, PnL and fees, and move funds home.
 
 Standard library only. No dependencies, no code generation, one method per
 endpoint. It never computes a number the server did not send.
@@ -12,6 +13,7 @@ endpoint. It never computes a number the server did not send.
 pip install ponk
 ```
 
+0.15.0 adds the five EVM chains (see [Agents on EVM chains](#agents-on-evm-chains)).
 0.7.0 brings everything the site does to a key: Jupiter limit, trailing,
 TP/SL and DCA orders (a sign link, or self-sign with your own signer
 callback), copy and live follow, Copy LP, the self-custody prepare and mark
@@ -157,6 +159,90 @@ ponk.withdraw(agent.id, lamports=500_000_000)   # 0.5 SOL, or omit to sweep
 result = ponk.exit_agent(agent.id)              # stop, close, sweep everything
 print("swept to", result.destination, "sig", result.signature)
 ```
+
+## Agents on EVM chains
+
+Agents run on Solana and on Ethereum, Arbitrum, Base, BNB Chain and Robinhood
+Chain. The chain words are `solana`, `ethereum`, `arbitrum`, `base`, `bsc` and
+`robinhood`; the EVM venues are `uniswap_v2`, `uniswap_v3`, `uniswap_v4`
+(Ethereum, Arbitrum, Robinhood Chain), `pancakeswap_v2`, `pancakeswap_v3`,
+`pancakeswap_infinity_cl` (BNB Chain) and `aerodrome_slipstream`,
+`aerodrome_classic` (Base). `ponk.evm` holds those tables and the id helpers.
+
+```python
+from ponk import PonkClient, evm, fund_link
+
+ponk = PonkClient(api_key="ponk_live_...")
+
+# 1. Pools on BNB Chain. No key needed for this read.
+board = ponk.evm_pools("bsc", venue="pancakeswap_v3")
+pools = [p for p in board.pools if p.fees.h24 and not p.flags()]
+pool = max(pools, key=lambda p: p.fees.h24)
+print(pool.pair, pool.fee_pct, pool.tvl, pool.farm)   # farm: CAKE, live, apr_pct
+
+# 2. What the first open costs, and the rates this key's agents pay.
+cost = ponk.evm_open_cost("bsc", pool.dex, pool=pool.address)
+print(evm.wei_to_native(cost.min_open_wei), cost.native_symbol)
+
+# 3. Create. The range is fractions: 0.05 is 5% either side of the price.
+agent = ponk.create_evm_agent(
+    name="bnb " + pool.pair,
+    wallet_address=ponk.whoami().wallet_address,   # your Solana login wallet
+    chain="bsc", dex=pool.dex, pool_address=pool.address,
+    down_pct=0.05, up_pct=0.05,
+    stake=True,                                    # farm CAKE
+    dry_run=False,
+)
+
+# 4. Fund it and sign for it, with your own wallets.
+print("send BNB to", ponk.create_agent_wallet(agent.id).address)
+print("then sign:", fund_link(agent.id, chain="bsc"))
+```
+
+`examples/evm.py` is that flow, creating nothing unless `PONK_CREATE=1`.
+
+| Method | Route | What it does |
+|---|---|---|
+| `evm_chains()` | `GET /public/evm/chains` | Every chain, its gas coin and its venues. |
+| `evm_pools(chain, venue=None)` | `GET /public/evm/{chain}/board` | The pool board: fee tier, `dynamic_fee`, TVL, volume and LP fees per window, `farm`, `flags()`. |
+| `evm_pool(pool_id)` | `GET /public/evm/pools/{id}` | One pool by its CAIP id. |
+| `evm_token(token_id)` | `GET /public/evm/tokens/{id}` | One token; the zero address is the gas coin with its price. |
+| `evm_open_cost(chain, dex, pool=, stake=)` | `GET /v1/evm/{chain}/open-cost` | Gas of the first open, the exit reserve, the least to hold, and the fee rates. |
+| `create_evm_agent(...)` | `POST /v1/agents` | An agent on an EVM chain: `down_pct`, `up_pct`, `stake`, `withdrawal_address`. |
+| `set_stake_rewards(id, stake)` | `PATCH /v1/agents/{id}/config` | Stake for CAKE or AERO from the next open. |
+| `copilot_evm_plan(text)` | `POST /copilot/evm/plans` | Plan one sentence in dollars: `"$200 in the top 5 bnb pools"`. |
+| `copilot_evm_get_plan(id)` | `GET /copilot/evm/plans/{id}` | The plan again. |
+| `copilot_evm_start(id)` | `POST /copilot/evm/plans/{id}/start` | One agent per pool, plus `sign_urls` and `fleet_id`. Moves no money. |
+| `evm_fleet()` | `GET /agents/evm/fleet` | Every EVM agent and what it still needs from you. |
+
+Pass `public=False` to the four pool reads for their `/v1` twins, on the key's
+budget instead of the per-IP limit.
+
+An EVM agent is read and driven by id with the methods every agent uses:
+`get_agent` (`chain`), `agent_wallet` (`address`, `native_symbol`,
+`balance_wei`, `min_open_wei`, `withdrawable_wei`, `balance_usd`,
+`withdrawal_address`, `mandate_status`), `agent_position` (ticks, `bin_step`,
+`staked`), `agent_performance` (`farm_rewards` with `apr_basis`, `pnl_note`,
+`figures_unavailable`), `agent_decisions`, `agent_value_history`,
+`agent_mandate`, `list_positions`, `pause_agent`, `resume_agent`,
+`update_config`, `withdraw` and `exit_agent`, which return `tx_hashes`,
+`amount_wei`, `received`, `status` and `sentence`.
+
+Units: wei amounts are decimal strings and `evm.wei_to_native` reads one
+exactly; USD amounts are decimal strings; `pnl_pct` and `drawdown_pct` on
+`agent_performance` are fractions on every chain (0.05 is 5%); a figure the
+server could not read is `None`, never 0.
+
+The mandate of an EVM agent takes two signatures, your Solana login wallet and
+the EVM wallet that will receive withdrawals, and both are made on
+ponk.exchange. `fund_link(agent_id, chain=...)` and `fund_links([...])` build
+that page's link, 40 agents to a link; this client reads the mandate's status
+and never signs. Revoking a mandate and the exit card are on ponk.exchange too.
+
+An agent created with a key pays 1.5% of its first open, once, and 15% of the
+fees it earns (0.75% and 13.5% for a wallet holding 1,000,000 $PONK).
+`agent.activation_fee_bps`, `agent.managed_fee_bps` and `evm_open_cost` state
+the rates for you.
 
 ## What a key cannot do
 

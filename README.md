@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/banner.png" alt="ponk.exchange - Autonomous Liquidity Management, Built on Solana" width="640">
+  <img src=".github/banner.png" alt="ponk.exchange - Autonomous Liquidity Management" width="640">
 </p>
 
 <p align="center">
@@ -18,18 +18,29 @@
 
 ---
 
-Official clients for the **ponk public API**. Create and drive Solana
-concentrated-liquidity agents, read their live positions, PnL and fees, and
-move funds home, from Python or Rust.
+Official clients for the **ponk public API**. Create and drive liquidity
+agents on **Solana, Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain**,
+read their live positions, PnL and fees, and move funds home, from Python,
+Rust or the command line.
 
 An agent opens a concentrated position, collects the fees, compounds them, and
-moves the range when the price does, across **Meteora DLMM**, **Orca
-Whirlpools**, **Raydium CLMM** and **Ponk Clouds**. On **Meteora DAMM v2**,
-where a position is a share of the pool with no range, an agent monitors,
-collects and compounds fees, an autonomous one opens its own share of the pool
-from its agent wallet, and the clients build the open, add, claim and withdraw
-transactions for your own wallet to sign. These clients are how you drive that
-from your own code instead of the app.
+moves the range when the price does. Where a venue pays farm rewards it stakes
+the position and harvests them: CAKE on PancakeSwap v3, AERO on Aerodrome.
+
+| Chain | `chain` | Funded in | Venues (`dex`) |
+|---|---|---|---|
+| Solana | `solana` | SOL | Meteora DLMM `meteora_dlmm` · Meteora DAMM v2 `meteora_damm_v2` · Orca Whirlpools `orca` · Raydium CLMM `raydium` |
+| Ethereum | `ethereum` | ETH | Uniswap v2 `uniswap_v2` · v3 `uniswap_v3` · v4 `uniswap_v4` |
+| Arbitrum | `arbitrum` | ETH | Uniswap v2 `uniswap_v2` · v3 `uniswap_v3` · v4 `uniswap_v4` |
+| Base | `base` | ETH | Aerodrome Slipstream `aerodrome_slipstream` · Aerodrome Classic `aerodrome_classic` |
+| BNB Chain | `bsc` | BNB | PancakeSwap v2 `pancakeswap_v2` · v3 `pancakeswap_v3` · Infinity CL `pancakeswap_infinity_cl` |
+| Robinhood Chain | `robinhood` | ETH | Uniswap v2 `uniswap_v2` · v3 `uniswap_v3` · v4 `uniswap_v4` |
+
+On a full-range venue (Meteora DAMM v2, Uniswap v2, PancakeSwap v2, Aerodrome
+Classic) a position is a share of the pool with no range, and an agent there
+collects and compounds. You hold your own funds on each chain, and nothing is
+bridged: an agent on BNB Chain is funded with BNB you already hold there. These
+clients are how you drive all of it from your own code instead of the app.
 
 | | |
 |---|---|
@@ -124,6 +135,152 @@ async fn main() -> ponk::Result<()> {
 </tr>
 </table>
 
+## Agents on EVM chains
+
+List the pools on BNB Chain, create an agent on one, and print the link where
+your own wallets fund it and sign for it.
+
+<table>
+<tr><th align="left">Python</th><th align="left">Rust</th></tr>
+<tr valign="top">
+<td>
+
+```python
+import os
+from ponk import PonkClient, fund_link
+
+ponk = PonkClient(api_key=os.environ["PONK_API_KEY"])
+
+board = ponk.evm_pools("bsc", venue="pancakeswap_v3")
+pools = [p for p in board.pools
+         if p.fees.h24 and not p.flags()]
+pool = max(pools, key=lambda p: p.fees.h24)
+print(pool.pair, pool.fee_pct, pool.tvl, pool.farm)
+
+cost = ponk.evm_open_cost(
+    "bsc", pool.dex, pool=pool.address)
+print(cost.min_open_wei, "wei of BNB to open")
+
+agent = ponk.create_evm_agent(
+    name="bnb " + pool.pair,
+    wallet_address=ponk.whoami().wallet_address,
+    chain="bsc",
+    dex=pool.dex,
+    pool_address=pool.address,
+    down_pct=0.05,   # fractions: 5% either side
+    up_pct=0.05,
+    stake=True,      # farm CAKE
+    dry_run=False,
+)
+wallet = ponk.create_agent_wallet(agent.id)
+print("send BNB to", wallet.address)
+print("then sign:", fund_link(agent.id, chain="bsc"))
+```
+
+</td>
+<td>
+
+```rust
+use ponk::{evm, Client, NewAgent};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let ponk = Client::new(
+        ponk::DEFAULT_BASE_URL,
+        std::env::var("PONK_API_KEY")?,
+    )?;
+
+    let board = ponk
+        .evm_pools("bsc", Some("pancakeswap_v3"))
+        .await?;
+    let fees = |p: &ponk::EvmPool| {
+        p.fees.as_ref().and_then(|f| f.h24).unwrap_or(0.0)
+    };
+    let pool = board.pools.iter()
+        .filter(|p| p.flags(0).is_empty())
+        .max_by(|a, b| fees(a).total_cmp(&fees(b)))
+        .ok_or("no pools")?;
+    let id = pool.address.clone().ok_or("no id")?;
+
+    let me = ponk.whoami().await?;
+    let new = NewAgent::evm_range(
+        format!("bnb {}", pool.pair()),
+        me.wallet_address.ok_or("no wallet")?,
+        "bsc", "pancakeswap_v3", id,
+        0.05, 0.05, // fractions: 5% either side
+    )?
+    .stake(true) // farm CAKE
+    .dry_run(false);
+    let agent = ponk.create_evm_agent(&new).await?;
+    let agent_id = agent.id.ok_or("no id")?;
+
+    let wallet = ponk.create_agent_wallet(&agent_id).await?;
+    println!("send BNB to {:?}", wallet.address);
+    println!("then sign: {:?}",
+        evm::fund_link(&agent_id, Some("bsc")));
+    Ok(())
+}
+```
+
+</td>
+</tr>
+</table>
+
+The same from the terminal:
+
+```
+ponk evm-pools bsc --venue pancakeswap_v3
+ponk create-evm-agent --name "bnb usdt" --chain bsc --dex pancakeswap_v3 \
+  --pool eip155:56:0x... --down-pct 0.05 --up-pct 0.05 --stake
+```
+
+**Ids are CAIP strings.** A pool is `eip155:<chain id>:0x<address>`; a Uniswap
+v4 or PancakeSwap Infinity CL pool is
+`eip155:<chain id>:0x<pool manager>:0x<pool id>`. `pool_id`, `v4_pool_id`,
+`token_id` and `parse_evm_id` build and read them. `wallet_address` on an agent
+is always your Solana login wallet, which is the account; the agent's own
+address on its chain is on `agent_wallet`.
+
+**Units.** Wei amounts are decimal strings (`balance_wei`, `min_open_wei`,
+`amount_wei`): they do not fit a float, and `wei_to_native` turns one into
+whole ETH or BNB exactly. USD amounts are decimal strings. On
+`agent_performance`, `pnl_pct` and `drawdown_pct` are fractions on every chain:
+0.05 is 5%. A range is `down_pct` and `up_pct` as fractions too. A figure the
+server could not read is null, never 0.
+
+**Your wallets sign, on ponk.exchange.** An agent on an EVM chain acts under a
+mandate that takes two signatures: your Solana login wallet, then the EVM
+wallet that will receive withdrawals. Those are made in the browser, and
+`fund_link` is the page. From code you read `agent_wallet(id).mandate_status`
+(`active`, `expired`, `revoked`, or none yet) and `agent_mandate(id)`, and
+`evm_fleet()` says what every agent still needs from you. Withdrawals and
+exits pay only the address that mandate proved, and `exit_agent` returns the
+real amounts that landed there (`amount_wei`, `received`, `tx_hashes`).
+
+**One sentence to a fleet.** `copilot_evm_plan("$200 in the top 5 bnb pools")`
+plans in dollars across one or more chains, and `copilot_evm_start(plan.id)`
+creates one agent per pool and returns the `sign_urls`. The agents form a
+copilot fleet, so `copilot_fleet`, `copilot_stop_fleet` and
+`copilot_tighten_stop` act on them.
+
+### Fees for an agent created with a key
+
+An agent created through these clients, the CLI or any API key pays **1.5% of
+its first open, once, and 15% of the fees it earns**, taken as fees are
+claimed, compounded or recentered. A wallet holding 1,000,000 $PONK pays 0.75%
+and 13.5%. No exit fee is charged on an EVM chain. (An agent created on
+ponk.exchange pays 1% and 8%.) Every answer states the rate it applies:
+`Agent.activation_fee_bps` and `Agent.managed_fee_bps` on a create,
+`evm_open_cost` before one, and `fees` on a plan. Gas is paid from the agent's
+own wallet.
+
+### Done on ponk.exchange
+
+Four steps take your wallet in the browser and have no method here: signing an
+agent's mandate, renewing it, revoking it (which exits the position first), and
+the shareable exit card. `fund_link(agent_id)` opens the page for the first
+two.
+
 ## What the clients deliberately do not do
 
 **They never compute a number the server did not send.** Every USD field
@@ -151,6 +308,7 @@ retrying an authentication failure forever.
 |---|---|
 | **Read** | `whoami` · `list_agents` · `get_agent` · `agent_performance` · `agent_position` · `agent_value_history` · `agent_decisions` · `agent_wallet` · `agent_mandate` · `list_positions` · `list_logs` · `get_public_link` · `list_follows` · `points` · `points_leaderboard` · `referral` · `creator_dashboard` · `check_handle` |
 | **Act** (`trade` scope) | `create_agent` · `copy_agent` (Python) · `optimize_draft` · `pause_agent` · `resume_agent` · `set_dry_run` · `set_mode` · `update_config` · `update_exits` · `set_auto_compound` · `set_autonomous` · `share_agent` · `unshare_agent` · `follow` · `unfollow` · `claim_handle` · `compound` · `withdraw` · `exit_agent` · `rebalance` · `collect_fees` · `rename_agent` · `delete_agent` · `create_agent_wallet` · `custody_withdraw` · `custody_exit` |
+| **EVM chains** (0.15.0) | `evm_chains` · `evm_pools` · `evm_pool` · `evm_token` · `evm_open_cost` · `create_evm_agent` · `set_stake_rewards` · `copilot_evm_plan` · `copilot_evm_get_plan` · `copilot_evm_start` · `evm_fleet` · helpers `pool_id` · `v4_pool_id` · `token_id` · `parse_evm_id` · `wei_to_native` · `fund_link` · `fund_links`. Every agent read and control above works on an EVM agent by id. |
 | **Fleet** | `create_agents` · `fund_prepare` · `fleet` · `iter_fleet` / `fleet_all` · `get_batch` · `exit_agents` · `withdraw_agents` |
 | **Swap orders** | `plan_orders` (one sign link) · `orders_challenge` · `orders_verify` · `orders_refresh` · `orders_logout` · `order_mint_support` · `craft_order_deposit` · `create_price_order` · `create_dca_order` · `cancel_order` · `confirm_order_cancel` · `list_orders` · `cancel_orders` · `confirm_order_cancels` |
 | **Copy and follow** | `copy_source` · `follow_status` · `follow_leader` · `update_follow` · `unfollow_leader` · `answer_follow_offer` · `list_copy_follows` · `follow_leaders` · `follow_many` · `wallet_follow` · `unfollow_wallet` · `answer_wallet_offer` · `copy_log` · `copy_referral` · `attach_copy_referral` |

@@ -1,0 +1,14 @@
+{
+  "chain": "bsc",
+  "dex": "pancakeswap_v3",
+  "pool": "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
+  "native_symbol": "BNB",
+  "gas_wei": "82315437918268",
+  "gas_usd": "0.0560",
+  "reserve_wei": "52200000000000",
+  "min_open_wei": "452200000000000",
+  "native_usd": "680.65",
+  "activation_fee_bps": 150,
+  "performance_fee_bps": 1500,
+  "exit_fee_bps": 0
+}

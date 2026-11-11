@@ -1,0 +1,12 @@
+{
+  "signature": null,
+  "tx_hashes": [],
+  "destination": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+  "source": "0x52908400098527886E0F7030069857D2E4169EE7",
+  "lamports": 0,
+  "amount_wei": null,
+  "received": [],
+  "chain": "bsc",
+  "status": "incomplete",
+  "sentence": "The position is being removed. Nothing has reached your withdrawal address yet; the agent keeps running the exit by itself."
+}

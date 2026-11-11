@@ -1,0 +1,31 @@
+{
+  "position_address": "eip155:56:0x46a15b0b27311cedf172ab29e4f4766fbe7f4364:812345",
+  "lower_bin_id": -498,
+  "upper_bin_id": 478,
+  "active_bin_id": -10,
+  "in_range": true,
+  "out_of_range_since": null,
+  "distance_from_active_bin": 0,
+  "lower_price": "0.951432",
+  "upper_price": "1.048953",
+  "current_price": "0.999006",
+  "band_pct": null,
+  "price_position_pct": 0.5,
+  "target_lower_bin_id": null,
+  "target_upper_bin_id": null,
+  "target_lower_price": null,
+  "target_upper_price": null,
+  "target_source": null,
+  "recovery_direction": null,
+  "is_full_range": false,
+  "dex": "pancakeswap_v3",
+  "bins": [],
+  "price_samples": [
+    0.99899,
+    0.999006
+  ],
+  "fees_unclaimed_usd": "0.42",
+  "bin_step": 1,
+  "chain": "bsc",
+  "staked": true
+}

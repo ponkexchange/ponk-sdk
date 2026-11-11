@@ -402,6 +402,12 @@ impl Client {
 
     /// `GET /v1/agents/{id}/wallet`. The agent's own managed wallet.
     /// Autonomous agents only.
+    ///
+    /// For an agent on an EVM chain the answer is the EVM view
+    /// ([`AgentWallet::is_evm`]): the deposit address, the gas coin and its
+    /// balances in wei and USD, the one withdrawal address and
+    /// `mandate_status`. A 404 until the wallet exists;
+    /// [`Client::create_agent_wallet`] creates it.
     pub async fn agent_wallet(&self, agent_id: &str) -> Result<AgentWallet> {
         self.get(&format!("/v1/agents/{}/wallet", seg(agent_id)))
             .await
@@ -837,6 +843,13 @@ impl Client {
     ///
     /// Pass `None` to sweep everything spendable. The destination is the
     /// wallet that owns the agent and cannot be named by the request.
+    ///
+    /// ON AN EVM AGENT this sweeps the idle tokens and the gas coin to the
+    /// mandate's proven withdrawal address on the same chain, and only with
+    /// no position open: with one open it answers 422 with a sentence that
+    /// says to exit. It stops the agent first ([`Client::resume_agent`]
+    /// starts it again). `lamports` is ignored there. Read
+    /// [`Withdrawal::status`], `sentence`, `amount_wei` and `received`.
     pub async fn withdraw(&self, agent_id: &str, lamports: Option<u64>) -> Result<Withdrawal> {
         let body = match lamports {
             Some(n) => serde_json::json!({ "lamports": n }),
@@ -2308,6 +2321,216 @@ impl Client {
         Ok(envelope.data)
     }
 
+    // -- EVM chains: Ethereum, Arbitrum, Base, BNB Chain, Robinhood Chain (0.15.0)
+
+    /// `GET /public/evm/chains`. Every chain, its gas coin and its venues.
+    /// No key needed.
+    pub async fn evm_chains(&self) -> Result<EvmChains> {
+        self.get("/public/evm/chains").await
+    }
+
+    /// `GET /v1/evm/chains`. The same body as [`Client::evm_chains`], on the
+    /// API key's budget instead of the per-IP limit. Every `_keyed` EVM read
+    /// is that same trade.
+    pub async fn evm_chains_keyed(&self) -> Result<EvmChains> {
+        self.get("/v1/evm/chains").await
+    }
+
+    /// `GET /public/evm/{chain}/board?venue=`. One chain's pool board.
+    ///
+    /// `chain` is `ethereum`, `arbitrum`, `base`, `bsc` or `robinhood`.
+    /// `venue` keeps one venue's pools (an id from
+    /// [`crate::evm::EVM_VENUES`] that runs on that chain; any other answers
+    /// 400). Each [`EvmPool`] carries its CAIP id, fee tier, whether the fee
+    /// is dynamic, TVL, volume and LP fees per window, the farm and
+    /// [`EvmPool::flags`]. The board is a snapshot the server refreshes by
+    /// itself, so the call reads no chain; [`EvmBoard::ready`] is false, with
+    /// no pools, until its first read has finished. The rows come unsorted.
+    pub async fn evm_pools(&self, chain: &str, venue: Option<&str>) -> Result<EvmBoard> {
+        self.get(&evm_board_path("/public/evm", chain, venue)).await
+    }
+
+    /// `GET /v1/evm/{chain}/board?venue=`. [`Client::evm_pools`] on the key.
+    pub async fn evm_pools_keyed(&self, chain: &str, venue: Option<&str>) -> Result<EvmBoard> {
+        self.get(&evm_board_path("/v1/evm", chain, venue)).await
+    }
+
+    /// `GET /public/evm/pools/{id}`. One pool by its CAIP id:
+    /// `eip155:<chainId>:0x<address>`, or the four part form for a Uniswap v4
+    /// or PancakeSwap Infinity CL pool ([`crate::evm::pool_id`],
+    /// [`crate::evm::v4_pool_id`]). An id that is not one answers 400, an
+    /// unknown pool 404.
+    pub async fn evm_pool(&self, pool_id: &str) -> Result<EvmPool> {
+        self.get(&format!("/public/evm/pools/{}", seg(pool_id))).await
+    }
+
+    /// `GET /v1/evm/pools/{id}`. [`Client::evm_pool`] on the key.
+    pub async fn evm_pool_keyed(&self, pool_id: &str) -> Result<EvmPool> {
+        self.get(&format!("/v1/evm/pools/{}", seg(pool_id))).await
+    }
+
+    /// `GET /public/evm/tokens/{id}`. One token by its CAIP id.
+    ///
+    /// The zero address is the chain's gas coin
+    /// ([`crate::evm::native_token_id`]), whose `price_usd` is the ETH or BNB
+    /// price. Use it to turn the base unit amounts of
+    /// [`Withdrawal::received`] into whole tokens.
+    pub async fn evm_token(&self, token_id: &str) -> Result<EvmToken> {
+        self.get(&format!("/public/evm/tokens/{}", seg(token_id))).await
+    }
+
+    /// `GET /v1/evm/tokens/{id}`. [`Client::evm_token`] on the key.
+    pub async fn evm_token_keyed(&self, token_id: &str) -> Result<EvmToken> {
+        self.get(&format!("/v1/evm/tokens/{}", seg(token_id))).await
+    }
+
+    /// `GET /v1/evm/{chain}/open-cost?dex=&pool=&stake=`. What the first open
+    /// costs, with the rates an agent YOU create pays.
+    ///
+    /// The measured gas of the first open at the live fee, the reserve kept
+    /// back for the exit, the least the agent wallet must hold, and ponk's
+    /// two fee rates as an API key pays them: 1.5% of the first open, once,
+    /// and 15% of fees earned. `stake` defaults to true on the server where
+    /// the venue has a farm, because a staked open costs more gas. A venue
+    /// that does not run on `chain` answers 422. Needs a key; see
+    /// [`Client::evm_open_cost_public`] for the keyless quote.
+    pub async fn evm_open_cost(
+        &self,
+        chain: &str,
+        dex: &str,
+        pool: Option<&str>,
+        stake: Option<bool>,
+    ) -> Result<EvmOpenCost> {
+        self.get(&evm_open_cost_path("/v1/evm", chain, dex, pool, stake)).await
+    }
+
+    /// `GET /public/evm/{chain}/open-cost`. The same quote with no key. Its
+    /// two fee rates are those of an agent created on ponk.exchange (1% and
+    /// 8%), not of one this crate creates.
+    pub async fn evm_open_cost_public(
+        &self,
+        chain: &str,
+        dex: &str,
+        pool: Option<&str>,
+        stake: Option<bool>,
+    ) -> Result<EvmOpenCost> {
+        self.get(&evm_open_cost_path("/public/evm", chain, dex, pool, stake)).await
+    }
+
+    /// `POST /v1/agents`. Create an agent on an EVM chain.
+    ///
+    /// Build the body with [`NewAgent::evm_range`] (a range venue: the range
+    /// as `down_pct` and `up_pct`, positive fractions) or
+    /// [`NewAgent::evm_full_range`] (`uniswap_v2`, `pancakeswap_v2`,
+    /// `aerodrome_classic`: compound and hold), then
+    /// [`NewAgent::stake`], [`NewAgent::withdrawal_address`] and
+    /// [`NewAgent::dry_run`] as needed. The strategy ids are the Solana ones;
+    /// Degen Mode (`entry_agent`) is not offered on an EVM venue, and the
+    /// agent opens its own position, so `position_address` is refused here
+    /// before anything is sent.
+    ///
+    /// An agent created here pays the API rates for its whole life: 1.5% of
+    /// its first open, once, and 15% of the fees it earns
+    /// ([`Agent::activation_fee_bps`], [`Agent::managed_fee_bps`]).
+    ///
+    /// NOTHING IS FUNDED OR SIGNED BY THIS CALL. The agent acts only after
+    /// you sign its mandate with your own wallets on ponk.exchange (two
+    /// signatures: the Solana login wallet, then the EVM wallet that will
+    /// receive withdrawals; [`crate::evm::fund_link`] is the page) and send
+    /// the chain's gas coin to its address
+    /// ([`Client::create_agent_wallet`]). A refusal is a 422 with a plain
+    /// sentence: the venue is not on that chain, the pool is not a pool of
+    /// that venue, a v4 hook an agent cannot use.
+    pub async fn create_evm_agent(&self, agent: &NewAgent) -> Result<Agent> {
+        match agent.chain.as_deref() {
+            Some(chain) if crate::evm::is_evm_chain(chain) => {}
+            other => {
+                return Err(Error::InvalidArgument(format!(
+                    "chain must be one of ethereum, arbitrum, base, bsc, robinhood, got {}. \
+                     For a Solana agent use create_agent.",
+                    other.map(|c| format!("'{c}'")).unwrap_or_else(|| "none".into())
+                )))
+            }
+        }
+        if agent.position_address.is_some() {
+            return Err(Error::InvalidArgument(
+                "an agent on an EVM chain opens its own position, so leave position_address unset".into(),
+            ));
+        }
+        if agent.pool_address.is_none() {
+            return Err(Error::InvalidArgument(
+                "an agent on an EVM chain needs pool_address, the pool's CAIP id".into(),
+            ));
+        }
+        self.create_agent(agent).await
+    }
+
+    /// `PATCH /v1/agents/{id}/config` with `{"evm": {"stake": stake}}`.
+    ///
+    /// Turn staking for farm rewards on or off for an EVM agent on
+    /// `pancakeswap_v3`, `aerodrome_slipstream` or `aerodrome_classic`.
+    /// Applies from the next open or recenter and moves nothing now. Any
+    /// other venue answers 422.
+    pub async fn set_stake_rewards(&self, agent_id: &str, stake: bool) -> Result<Agent> {
+        self.update_config(agent_id, &crate::evm::stake_config(stake)).await
+    }
+
+    /// `POST /copilot/evm/plans`. Plan one sentence that names an EVM chain,
+    /// for example `"$200 in the top 5 bnb pools"`.
+    ///
+    /// The grammar is closed and deterministic, with no language model:
+    /// dollars (`$200`, `200 usd`, `$1.5k`), a pool count (`top 5`,
+    /// `3 pools`, 1 to 10 per chain), one or more chains (`bnb`, `arbitrum`,
+    /// `base`, `ethereum`, `robinhood`, `solana`), optional venues, risk
+    /// (`careful`, `balanced`, `aggressive`) and a range (`8%`). One amount
+    /// is the whole budget, split evenly across the chains named, or one
+    /// amount goes in front of each chain (`$60 in bnb and $40 in solana`).
+    /// Amounts are DOLLARS ONLY.
+    ///
+    /// Answers at once and creates nothing. A sentence it cannot plan comes
+    /// back with `state` `refused` and `refusal`, not as an `Err`. Plans last
+    /// 15 minutes. Needs an API key; `fees` on the answer is the fee sentence
+    /// for that caller.
+    pub async fn copilot_evm_plan(&self, text: &str) -> Result<EvmPlan> {
+        self.post("/copilot/evm/plans", Some(&serde_json::json!({ "text": text })), self.timeout)
+            .await
+    }
+
+    /// `GET /copilot/evm/plans/{id}`. The same plan, readable only by its maker.
+    pub async fn copilot_evm_get_plan(&self, plan_id: &str) -> Result<EvmPlan> {
+        self.get(&format!("/copilot/evm/plans/{}", seg(plan_id))).await
+    }
+
+    /// `POST /copilot/evm/plans/{id}/start`. Create one agent per leg.
+    ///
+    /// MOVES NO MONEY. The plan comes back with `state` `started`, `agents`
+    /// (each with its `agent_id` and the amount of the chain's coin to send
+    /// it, or `created` false with the sentence that says why), `sign_urls`,
+    /// the ponk.exchange pages where your own wallets sign each agent's
+    /// mandate and fund it, and `fleet_id`: the agents form a copilot fleet,
+    /// so [`Client::copilot_fleet`], [`Client::copilot_stop_fleet`] and
+    /// [`Client::copilot_tighten_stop`] act on them. A second start returns
+    /// the same answer and creates nothing. Needs a `trade` key. Takes the
+    /// fund timeout.
+    pub async fn copilot_evm_start(&self, plan_id: &str) -> Result<EvmPlan> {
+        self.post(
+            &format!("/copilot/evm/plans/{}/start", seg(plan_id)),
+            None::<&()>,
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `GET /agents/evm/fleet`. Every EVM agent you own and what each needs.
+    ///
+    /// Each row has the agent's own address, its mandate status and expiry,
+    /// and `needs`. `sign_urls` are the pages that fund and authorize the
+    /// ones still running. [`Client::fleet`] lists the same agents beside the
+    /// Solana ones, with wallet and performance. Needs an API key.
+    pub async fn evm_fleet(&self) -> Result<EvmFleet> {
+        self.get("/agents/evm/fleet").await
+    }
+
     // -- the copilot (0.8.0) -------------------------------------------------
 
     /// `POST /copilot/parse`. Read one sentence with ponk's closed grammar.
@@ -2467,6 +2690,16 @@ impl Client {
     /// lets the agent's own `exit_to_sol` setting decide (default true). Read
     /// the result like [`exit`]: a mandate denial is a 200 with a failed status
     /// and no signature, not an `Err`. Takes the fund timeout.
+    ///
+    /// ON AN EVM AGENT the exit stops the agent, unstakes and removes the
+    /// whole position, unwraps, and sweeps every token and the gas coin to
+    /// the mandate's proven withdrawal address on the same chain; `to_sol` is
+    /// ignored. The answer carries the real amounts this call sent
+    /// (`amount_wei`, `received`, `tx_hashes`) and `status`. An exit that
+    /// does not finish in the call answers 422 with the sentence, or `status`
+    /// `incomplete`, and the agent keeps running the exit by itself until
+    /// everything has left its wallet; calling again is safe and never pays
+    /// twice. It works under an expired mandate too.
     ///
     /// [`exit`]: Client::exit
     pub async fn exit_agent(&self, agent_id: &str, to_sol: Option<bool>) -> Result<Withdrawal> {
@@ -2870,6 +3103,24 @@ fn pool_history_path(prefix: &str, dex: &str, address: &str, resolution: Option<
         &[
             ("resolution", resolution.map(str::to_string)),
             ("buckets", buckets.map(|b| b.to_string())),
+        ],
+    )
+}
+
+fn evm_board_path(prefix: &str, chain: &str, venue: Option<&str>) -> String {
+    with_query(
+        &format!("{prefix}/{}/board", seg(chain)),
+        &[("venue", venue.map(str::to_string))],
+    )
+}
+
+fn evm_open_cost_path(prefix: &str, chain: &str, dex: &str, pool: Option<&str>, stake: Option<bool>) -> String {
+    with_query(
+        &format!("{prefix}/{}/open-cost", seg(chain)),
+        &[
+            ("dex", Some(dex.to_string())),
+            ("pool", pool.map(str::to_string)),
+            ("stake", stake.map(|s| s.to_string())),
         ],
     )
 }
@@ -3808,5 +4059,765 @@ mod tests {
         assert_eq!(s.copy_alerts, Some(false));
         assert_eq!(s.comments_telegram, Some(true));
         assert_eq!(body_of(&server.join().unwrap()), serde_json::json!({ "copy_alerts": false }));
+    }
+    // -- EVM chains (0.15.0) -------------------------------------------------
+    //
+    // The bodies are the files in `tests/fixtures/evm`. The chain list, the
+    // three pool boards, the v4 pool and the gas coin token are answers the
+    // public routes gave on 2026-11-10, cut down to a few rows. The agent,
+    // wallet, position, performance, exit, mandate, positions, plan and fleet
+    // bodies are written field for field from the routes document and the
+    // server's own Serialize structs, with illustrative values.
+
+    macro_rules! fx {
+        ($name:literal) => {
+            include_str!(concat!("../tests/fixtures/evm/", $name))
+        };
+    }
+
+    const EVM_AGENT: &str = "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b";
+    const EVM_POOL: &str = "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121";
+    const EVM_POOL_SEG: &str = "eip155%3A56%3A0x92b7807bf19b7dddf89b706143896d05228f3121";
+    const EVM_WITHDRAW: &str = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+    const SOL_WALLET: &str = "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe";
+
+    fn request_line(raw: &str) -> &str {
+        raw.lines().next().unwrap_or("")
+    }
+
+    fn has_key(raw: &str) -> bool {
+        raw.to_ascii_lowercase().contains("authorization: bearer ponk_live_k")
+    }
+
+    /// Like `one_shot`, with a status and a body of the caller's choosing.
+    fn one_shot_status(status: u16, body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut chunk).unwrap();
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Some(h) = text.find("\r\n\r\n") {
+                    let len = text[..h]
+                        .lines()
+                        .find_map(|l| {
+                            let l = l.to_ascii_lowercase();
+                            l.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= h + 4 + len {
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            write!(
+                sock,
+                "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+            String::from_utf8(buf).unwrap()
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn evm_chains_lists_six_chains_with_their_venues() {
+        let (base, server) = one_shot(fx!("chains.json"));
+        let chains = Client::public(base).unwrap().evm_chains().await.unwrap();
+        let raw = server.join().unwrap();
+        assert_eq!(request_line(&raw), "GET /public/evm/chains HTTP/1.1");
+        assert!(!raw.to_ascii_lowercase().contains("authorization:"), "{raw}");
+        assert_eq!(chains.read_enabled, Some(true));
+        assert_eq!(chains.chains.len(), 6);
+        let bsc = chains.chain("bsc").unwrap();
+        assert_eq!((bsc.evm_chain_id, bsc.native_symbol.as_deref()), (Some(56), Some("BNB")));
+        assert!(bsc.venues.iter().any(|v| v == "pancakeswap_v3"));
+        assert_eq!(chains.chain("solana").unwrap().evm_chain_id, None);
+        assert!(chains.chain("polygon").is_none());
+        // The crate's own tables agree with what the server states.
+        for row in &chains.chains {
+            let id = row.id.as_deref().unwrap();
+            if let Some(cid) = row.evm_chain_id {
+                assert_eq!(crate::evm::chain_id(id), Some(cid), "{id}");
+                assert_eq!(crate::evm::native_symbol(id), row.native_symbol.as_deref(), "{id}");
+                for venue in &row.venues {
+                    assert!(crate::evm::venue_chains(venue).contains(&id), "{venue} on {id}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_keyed_evm_reads_use_the_v1_twins_with_the_key() {
+        let (base, server) = one_shot(fx!("chains.json"));
+        Client::new(base, "ponk_live_k").unwrap().evm_chains_keyed().await.unwrap();
+        let raw = server.join().unwrap();
+        assert_eq!(request_line(&raw), "GET /v1/evm/chains HTTP/1.1");
+        assert!(has_key(&raw), "{raw}");
+
+        let (base, server) = one_shot(fx!("board_bsc.json"));
+        Client::new(base, "ponk_live_k").unwrap().evm_pools_keyed("bsc", None).await.unwrap();
+        assert_eq!(request_line(&server.join().unwrap()), "GET /v1/evm/bsc/board HTTP/1.1");
+
+        let (base, server) = one_shot(fx!("pool_base.json"));
+        let pool = Client::new(base, "ponk_live_k")
+            .unwrap()
+            .evm_pool_keyed("eip155:8453:0x4a7af46bc8abc00048c6c7920a1488daf568366c")
+            .await
+            .unwrap();
+        assert_eq!(
+            request_line(&server.join().unwrap()),
+            "GET /v1/evm/pools/eip155%3A8453%3A0x4a7af46bc8abc00048c6c7920a1488daf568366c HTTP/1.1"
+        );
+        assert_eq!(pool.aerodrome.unwrap()["gaugeLive"], true);
+
+        let (base, server) = one_shot(fx!("token_native.json"));
+        Client::new(base, "ponk_live_k")
+            .unwrap()
+            .evm_token_keyed(&crate::evm::native_token_id("bsc").unwrap())
+            .await
+            .unwrap();
+        assert!(request_line(&server.join().unwrap()).starts_with("GET /v1/evm/tokens/eip155%3A56%3A0x0000"));
+    }
+
+    #[tokio::test]
+    async fn the_bnb_board_reads_fee_tier_tvl_windows_farm_and_flags() {
+        let (base, server) = one_shot(fx!("board_bsc.json"));
+        let board = Client::public(base).unwrap().evm_pools("bsc", Some("pancakeswap_v3")).await.unwrap();
+        assert_eq!(
+            request_line(&server.join().unwrap()),
+            "GET /public/evm/bsc/board?venue=pancakeswap_v3 HTTP/1.1"
+        );
+        assert!(board.ready());
+        assert_eq!(board.chain.as_deref(), Some("bsc"));
+        assert_eq!(board.status.as_ref().unwrap().stale, Some(false));
+        let (v3, v2) = (&board.pools[0], &board.pools[1]);
+        assert_eq!(v3.dex.as_deref(), Some("pancakeswap_v3"));
+        assert_eq!(v3.address.as_deref(), Some(EVM_POOL));
+        assert_eq!(v3.pair(), "USDT/USDC");
+        assert_eq!((v3.fee_pct, v3.dynamic_fee, v3.bin_step), (Some(0.01), Some(false), Some(1)));
+        assert!(v3.tvl.unwrap() > 1_000_000.0);
+        assert_eq!(v3.tvl_source.as_deref(), Some("onchain"));
+        let (volume, fees) = (v3.volume.as_ref().unwrap(), v3.fees.as_ref().unwrap());
+        assert!(volume.h24.unwrap() > volume.h1.unwrap());
+        assert!(fees.h24.unwrap() > 0.0);
+        // A window with no reading is None, never 0.
+        assert_eq!(fees.h4, None);
+        let farm = v3.farm.as_ref().unwrap();
+        assert_eq!((farm.token.as_deref(), farm.live), (Some("CAKE"), Some(true)));
+        assert!(farm.apr_pct.is_some());
+        let x = v3.x.as_ref().unwrap();
+        assert_eq!(x.mint.as_deref(), Some("eip155:56:0x55d398326f99059ff775485246999027b3197955"));
+        assert_eq!(x.decimals, Some(18));
+        let now = v3.created_at.unwrap() + 86_400_000;
+        assert!(v3.flags(now).is_empty());
+        // Under an hour old is a flag.
+        assert_eq!(v3.flags(v3.created_at.unwrap() + 60_000), vec!["under_1h_old"]);
+        // PancakeSwap v2: full range, no farm, and a token off the list.
+        assert!(v2.farm.is_none());
+        assert_eq!(v2.bin_step, None);
+        assert_eq!(v2.flags(v2.created_at.unwrap() + 86_400_000), vec!["unverified_token"]);
+    }
+
+    #[tokio::test]
+    async fn a_dynamic_fee_v4_pool_has_no_fee_tier_and_a_hook_flag() {
+        let (base, server) = one_shot(fx!("board_ethereum.json"));
+        let board = Client::public(base).unwrap().evm_pools("ethereum", None).await.unwrap();
+        assert_eq!(request_line(&server.join().unwrap()), "GET /public/evm/ethereum/board HTTP/1.1");
+        let (hookless, dynamic) = (&board.pools[0], &board.pools[1]);
+        let id = crate::evm::parse_evm_id(hookless.address.as_deref().unwrap()).unwrap();
+        assert!(matches!(id.kind, crate::evm::EvmIdKind::V4Pool { .. }));
+        let later = |p: &EvmPool| p.created_at.unwrap() + 86_400_000;
+        // The zero address is a pool with no hook, so nothing is flagged.
+        assert!(hookless.flags(later(hookless)).is_empty());
+        assert_eq!(hookless.fee_pct, Some(0.0005));
+        assert_eq!(dynamic.dynamic_fee, Some(true));
+        assert_eq!(dynamic.fee_pct, None);
+        assert_eq!(dynamic.fees.as_ref().unwrap().h24, None);
+        let hook = dynamic.hooks.as_ref().unwrap();
+        assert_eq!((hook.agent_eligible, hook.touches_lp_funds), (Some(false), Some(true)));
+        assert_eq!(dynamic.flags(later(dynamic)), vec!["hook_not_agent_eligible"]);
+        assert!(dynamic.data_insufficient[0].starts_with("fees:"));
+    }
+
+    #[tokio::test]
+    async fn the_base_board_carries_aero_farms_and_gauge_facts() {
+        let (base, _server) = one_shot(fx!("board_base.json"));
+        let board = Client::public(base).unwrap().evm_pools("base", None).await.unwrap();
+        assert_eq!(board.pools.len(), 2);
+        for p in &board.pools {
+            let farm = p.farm.as_ref().unwrap();
+            assert_eq!((farm.token.as_deref(), farm.live), (Some("AERO"), Some(true)));
+            assert!(board.aerodrome.iter().any(|f| f["key"].as_str() == p.key.as_deref()));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unread_chain_is_an_empty_board_not_an_error() {
+        let (base, _server) = one_shot(
+            r#"{"chain":"arbitrum","asOf":0,"servedAt":1794371669624,"pools":[],"ok":{},"status":{"lastError":"the first read of this chain has not completed yet"}}"#,
+        );
+        let board = Client::public(base).unwrap().evm_pools("arbitrum", None).await.unwrap();
+        assert!(!board.ready());
+        assert!(board.pools.is_empty());
+        assert!(board.status.unwrap().last_error.unwrap().contains("first read"));
+    }
+
+    #[tokio::test]
+    async fn pool_detail_and_the_gas_coin_token() {
+        let (base, server) = one_shot(fx!("pool_v4.json"));
+        let id = "eip155:1:0x000000000004444c5dc75cb358380d2e3de08a90:0x98316e8405502774a5d0a0761276b5d26505a8195c1905169864008d5e7a3eea";
+        let pool = Client::public(base).unwrap().evm_pool(id).await.unwrap();
+        assert_eq!(
+            request_line(&server.join().unwrap()),
+            format!("GET /public/evm/pools/{} HTTP/1.1", id.replace(':', "%3A"))
+        );
+        assert_eq!(pool.address.as_deref(), Some(id));
+        assert!(pool.sqrt_price_x96.is_some());
+
+        let (base, server) = one_shot(fx!("token_native.json"));
+        let token = Client::public(base)
+            .unwrap()
+            .evm_token(&crate::evm::native_token_id("bsc").unwrap())
+            .await
+            .unwrap();
+        assert!(request_line(&server.join().unwrap()).starts_with("GET /public/evm/tokens/eip155%3A56%3A0x0000"));
+        assert_eq!((token.symbol.as_deref(), token.decimals), (Some("BNB"), Some(18)));
+        assert_eq!(token.price_source.as_deref(), Some("chainlink"));
+        assert!(token.price_usd.unwrap() > 0.0);
+        assert!(crate::evm::parse_evm_id(token.mint.as_deref().unwrap()).unwrap().is_native());
+    }
+
+    #[tokio::test]
+    async fn the_apis_sentence_is_the_error() {
+        let (base, _server) = one_shot_status(
+            422,
+            r#"{"error":{"code":"unprocessable","message":"Solana is not read yet: EVM reads cover Arbitrum, Robinhood Chain, Ethereum, BNB Chain, Base","request_id":"r1"}}"#,
+        );
+        let err = Client::public(base).unwrap().evm_pools("solana", None).await.unwrap_err();
+        let api = err.api().expect("an api error");
+        assert_eq!(api.status, 422);
+        assert!(api.message.starts_with("Solana is not read yet"), "{}", api.message);
+        assert_eq!(api.request_id.as_deref(), Some("r1"));
+        assert!(err.to_string().contains("Solana is not read yet"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn open_cost_reads_the_v1_quote_with_the_api_rates() {
+        let (base, server) = one_shot(fx!("open_cost_v1.json"));
+        let cost = Client::new(base, "ponk_live_k")
+            .unwrap()
+            .evm_open_cost("bsc", "pancakeswap_v3", Some(EVM_POOL), Some(true))
+            .await
+            .unwrap();
+        let raw = server.join().unwrap();
+        assert_eq!(
+            request_line(&raw),
+            format!("GET /v1/evm/bsc/open-cost?dex=pancakeswap_v3&pool={EVM_POOL_SEG}&stake=true HTTP/1.1")
+        );
+        assert!(has_key(&raw), "{raw}");
+        assert_eq!(
+            (cost.activation_fee_bps, cost.performance_fee_bps, cost.exit_fee_bps),
+            (Some(150), Some(1500), Some(0))
+        );
+        assert_eq!(cost.native_symbol.as_deref(), Some("BNB"));
+        // Wei stays a string; the minimum is the reserve plus the gas budget.
+        assert_eq!(cost.min_open_wei.as_deref(), Some("452200000000000"));
+        assert_eq!(
+            crate::evm::wei_to_native(cost.min_open_wei.as_deref().unwrap()).as_deref(),
+            Some("0.0004522")
+        );
+        assert_eq!((cost.gas_usd.as_deref(), cost.native_usd.as_deref()), (Some("0.0560"), Some("680.65")));
+    }
+
+    #[tokio::test]
+    async fn the_public_open_cost_needs_no_key_and_omits_what_was_not_set() {
+        let (base, server) = one_shot(
+            r#"{"chain":"bsc","dex":"pancakeswap_v3","pool":null,"native_symbol":"BNB","gas_wei":null,"gas_usd":null,"reserve_wei":null,"min_open_wei":null,"native_usd":null,"activation_fee_bps":100,"performance_fee_bps":800,"exit_fee_bps":0}"#,
+        );
+        let cost = Client::public(base)
+            .unwrap()
+            .evm_open_cost_public("bsc", "pancakeswap_v3", None, Some(false))
+            .await
+            .unwrap();
+        assert_eq!(
+            request_line(&server.join().unwrap()),
+            "GET /public/evm/bsc/open-cost?dex=pancakeswap_v3&stake=false HTTP/1.1"
+        );
+        assert_eq!((cost.activation_fee_bps, cost.performance_fee_bps), (Some(100), Some(800)));
+        // An unread chain quotes nothing rather than guessing.
+        assert_eq!((cost.gas_wei, cost.min_open_wei), (None, None));
+    }
+
+    #[tokio::test]
+    async fn create_evm_agent_sends_the_chain_the_pool_and_the_range_as_fractions() {
+        let (base, server) = one_shot(fx!("agent.json"));
+        let new = NewAgent::evm_range("bnb usdt", SOL_WALLET, "bsc", "pancakeswap_v3", EVM_POOL, 0.05, 0.05)
+            .unwrap()
+            .stake(true)
+            .withdrawal_address(EVM_WITHDRAW)
+            .dry_run(false);
+        let agent = Client::new(base, "ponk_live_k").unwrap().create_evm_agent(&new).await.unwrap();
+        let raw = server.join().unwrap();
+        assert_eq!(request_line(&raw), "POST /v1/agents HTTP/1.1");
+        assert!(has_key(&raw), "{raw}");
+        assert_eq!(
+            body_of(&raw),
+            serde_json::json!({
+                "name": "bnb usdt",
+                "wallet_address": SOL_WALLET,
+                "dex": "pancakeswap_v3",
+                "strategy": "bin_rebalancer",
+                "config": {
+                    "kind": "bin_rebalancer",
+                    "target_bin_width": 977,
+                    "auto_compound": true,
+                    "knobs": { "range_pct": { "down_pct": 0.05, "up_pct": 0.05 } },
+                    "evm": { "stake": true }
+                },
+                "pool_address": EVM_POOL,
+                "dry_run": false,
+                "chain": "bsc",
+                "withdrawal_address": EVM_WITHDRAW
+            })
+        );
+        assert_eq!(agent.chain.as_deref(), Some("bsc"));
+        assert_eq!(agent.origin.as_deref(), Some("api"));
+        assert_eq!((agent.wallet_source.as_deref(), agent.mode.as_deref()), (Some("managed"), Some("auto")));
+        // The rates an agent a key creates pays: 1.5% once, 15% of fees.
+        assert_eq!((agent.activation_fee_bps, agent.managed_fee_bps), (Some(150), Some(1500)));
+        assert_eq!(crate::evm::chain_of(agent.pool_address.as_deref().unwrap()), "bsc");
+    }
+
+    #[test]
+    fn a_full_range_evm_agent_is_compound_and_hold() {
+        let new = NewAgent::evm_full_range(
+            "aero",
+            SOL_WALLET,
+            "base",
+            "aerodrome_classic",
+            "eip155:8453:0xf634058dc94e6bf8e828e27621320c423bc8b18e",
+        )
+        .stake(true)
+        .dry_run(true);
+        assert_eq!(
+            serde_json::to_value(&new).unwrap(),
+            serde_json::json!({
+                "name": "aero",
+                "wallet_address": SOL_WALLET,
+                "dex": "aerodrome_classic",
+                "strategy": "fee_collector",
+                "config": {
+                    "kind": "fee_collector", "min_total_pending_base_units": 0,
+                    "auto_compound": true, "evm": { "stake": true }
+                },
+                "pool_address": "eip155:8453:0xf634058dc94e6bf8e828e27621320c423bc8b18e",
+                "dry_run": true,
+                "chain": "base"
+            })
+        );
+        assert!(NewAgent::evm_range("x", "w", "bsc", "pancakeswap_v3", EVM_POOL, 5.0, 0.05).is_err());
+    }
+
+    #[test]
+    fn a_solana_create_body_is_what_it_was() {
+        let body = NewAgent::new("a", SOL_WALLET, "orca", "monitor_only", serde_json::json!({}))
+            .pool_address("P")
+            .dry_run(true);
+        assert_eq!(
+            serde_json::to_value(&body).unwrap(),
+            serde_json::json!({
+                "name": "a", "wallet_address": SOL_WALLET, "dex": "orca", "strategy": "monitor_only",
+                "config": {}, "pool_address": "P", "dry_run": true
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn create_evm_agent_refuses_before_sending_what_cannot_be_right() {
+        // Nothing listens on this port: a request would be a transport error.
+        let c = Client::new("http://127.0.0.1:9", "ponk_live_k").unwrap();
+        let solana = NewAgent::new("a", SOL_WALLET, "orca", "monitor_only", serde_json::json!({})).pool_address("P");
+        let adopt = NewAgent::evm_full_range("a", SOL_WALLET, "bsc", "pancakeswap_v2", EVM_POOL).position_address("X");
+        let mut no_pool = NewAgent::evm_full_range("a", SOL_WALLET, "bsc", "pancakeswap_v2", EVM_POOL);
+        no_pool.pool_address = None;
+        for (agent, word) in [(solana, "chain must be"), (adopt, "position_address"), (no_pool, "pool_address")] {
+            match c.create_evm_agent(&agent).await {
+                Err(Error::InvalidArgument(m)) => assert!(m.contains(word), "{m}"),
+                other => panic!("expected a refusal naming {word}, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn every_agent_carries_a_chain() {
+        let (base, server) = one_shot(fx!("agent.json"));
+        let agent = Client::new(base, "ponk_live_k").unwrap().get_agent(EVM_AGENT).await.unwrap();
+        assert_eq!(request_line(&server.join().unwrap()), format!("GET /v1/agents/{EVM_AGENT} HTTP/1.1"));
+        assert_eq!((agent.chain.as_deref(), agent.dex.as_deref()), (Some("bsc"), Some("pancakeswap_v3")));
+        let solana: Agent = serde_json::from_str(r#"{"id":"a","chain":"solana","dex":"orca"}"#).unwrap();
+        assert_eq!(solana.chain.as_deref(), Some("solana"));
+    }
+
+    #[tokio::test]
+    async fn the_evm_wallet_view_is_wei_usd_and_the_mandate_status() {
+        let (base, server) = one_shot(fx!("wallet.json"));
+        let w = Client::new(base, "ponk_live_k").unwrap().agent_wallet(EVM_AGENT).await.unwrap();
+        assert_eq!(request_line(&server.join().unwrap()), format!("GET /v1/agents/{EVM_AGENT}/wallet HTTP/1.1"));
+        assert!(w.is_evm());
+        assert_eq!((w.chain.as_deref(), w.native_symbol.as_deref()), (Some("bsc"), Some("BNB")));
+        assert_eq!(w.address.as_deref(), Some("0x52908400098527886E0F7030069857D2E4169EE7"));
+        assert_eq!(w.balance_wei.as_deref(), Some("150000000000000000"));
+        assert_eq!(crate::evm::wei_to_native(w.balance_wei.as_deref().unwrap()).as_deref(), Some("0.15"));
+        assert_eq!((w.balance_usd.as_deref(), w.native_usd.as_deref()), (Some("102.10"), Some("680.65")));
+        assert_eq!(
+            (w.withdrawal_address.as_deref(), w.mandate_status.as_deref()),
+            (Some(EVM_WITHDRAW), Some("active"))
+        );
+        // The Solana fields are absent, not zero.
+        assert_eq!((w.lamports, w.pubkey.as_deref()), (None, None));
+        let solana: AgentWallet = serde_json::from_str(r#"{"pubkey":"7Q7w","lamports":5,"scope":"per_agent"}"#).unwrap();
+        assert!(!solana.is_evm());
+        assert_eq!((solana.lamports, solana.balance_wei), (Some(5), None));
+    }
+
+    #[tokio::test]
+    async fn a_new_evm_wallet_has_no_mandate_yet() {
+        let (base, server) = one_shot(fx!("wallet_new.json"));
+        let made = Client::new(base, "ponk_live_k").unwrap().create_agent_wallet(EVM_AGENT).await.unwrap();
+        assert_eq!(request_line(&server.join().unwrap()), format!("POST /v1/agents/{EVM_AGENT}/wallet HTTP/1.1"));
+        assert_eq!(made.address.as_deref(), Some("0x52908400098527886E0F7030069857D2E4169EE7"));
+        assert_eq!((made.chain.as_deref(), made.native_symbol.as_deref()), (Some("bsc"), Some("BNB")));
+        assert_eq!(made.mandate_status, None);
+        assert_eq!(made.min_open_wei.as_deref(), Some("452200000000000"));
+    }
+
+    #[tokio::test]
+    async fn the_mandate_names_its_chain() {
+        let (base, server) = one_shot(fx!("mandate.json"));
+        let m = Client::new(base, "ponk_live_k").unwrap().agent_mandate(EVM_AGENT).await.unwrap();
+        assert_eq!(request_line(&server.join().unwrap()), format!("GET /v1/agents/{EVM_AGENT}/mandate HTTP/1.1"));
+        assert_eq!((m.chain.as_deref(), m.status.as_deref()), (Some("bsc"), Some("active")));
+        assert_eq!(m.withdrawal_address.as_deref(), Some(EVM_WITHDRAW));
+        assert_eq!(m.max_action_value_usd, None);
+    }
+
+    #[tokio::test]
+    async fn an_evm_position_is_in_ticks_and_a_full_range_one_has_none() {
+        let (base, server) = one_shot(fx!("position.json"));
+        let p = Client::new(base, "ponk_live_k").unwrap().agent_position(EVM_AGENT).await.unwrap();
+        assert_eq!(request_line(&server.join().unwrap()), format!("GET /v1/agents/{EVM_AGENT}/position HTTP/1.1"));
+        assert_eq!(
+            (p.lower_bin_id, p.upper_bin_id, p.active_bin_id, p.bin_step),
+            (Some(-498), Some(478), Some(-10), Some(1))
+        );
+        assert_eq!((p.chain.as_deref(), p.staked, p.is_full_range), (Some("bsc"), Some(true), Some(false)));
+        assert_eq!(p.current_price.as_deref(), Some("0.999006"));
+        let full: AgentPosition = serde_json::from_str(fx!("position_full_range.json")).unwrap();
+        assert_eq!(full.is_full_range, Some(true));
+        assert_eq!((full.lower_bin_id, full.bin_step, full.current_price), (None, None, None));
+        assert_eq!(full.chain.as_deref(), Some("base"));
+    }
+
+    #[tokio::test]
+    async fn evm_performance_is_usd_with_fractions_and_the_farm_block() {
+        let (base, server) = one_shot(fx!("performance.json"));
+        let perf = Client::new(base, "ponk_live_k").unwrap().agent_performance(EVM_AGENT).await.unwrap();
+        assert_eq!(
+            request_line(&server.join().unwrap()),
+            format!("GET /v1/agents/{EVM_AGENT}/performance HTTP/1.1")
+        );
+        // Fractions: 0.0162 is +1.62%.
+        assert_eq!((perf.pnl_pct, perf.drawdown_pct), (Some(0.0162), Some(0.0069)));
+        assert_eq!((perf.pnl_usd.as_deref(), perf.cost_basis_usd.as_deref()), (Some("1.62"), Some("100.00")));
+        let farm = perf.farm_rewards.as_ref().unwrap();
+        assert_eq!((farm.token.as_deref(), farm.pending_amount.as_deref()), (Some("CAKE"), Some("0.412000")));
+        assert_eq!((farm.pending_usd.as_deref(), farm.harvested_usd.as_deref()), (Some("0.74"), Some("1.10")));
+        assert_eq!((farm.staked, farm.apr_pct, farm.apr_basis.as_deref()), (Some(true), Some(8.2), Some("position")));
+        assert_eq!(perf.figures_unavailable, None);
+        assert!(perf.pnl_note.as_deref().unwrap().starts_with("Position value"));
+
+        let unread: AgentPerformance = serde_json::from_str(fx!("performance_unread.json")).unwrap();
+        assert_eq!((unread.current_value_usd, unread.pnl_usd, unread.pnl_pct), (None, None, None));
+        assert_eq!(unread.figures_unavailable.as_deref(), Some("The BNB Smart Chain RPC did not answer."));
+        assert_eq!(unread.farm_rewards.unwrap().apr_basis, None);
+        // A Solana agent has no farm block at all.
+        let solana: AgentPerformance = serde_json::from_str(r#"{"pnl_usd":"1"}"#).unwrap();
+        assert!(solana.farm_rewards.is_none());
+    }
+
+    #[tokio::test]
+    async fn evm_decisions_and_value_history_use_the_same_routes() {
+        let (base, server) = one_shot(r#"{"state":"healthy_no_action","decisions":[]}"#);
+        let d = Client::new(base, "ponk_live_k").unwrap().agent_decisions(EVM_AGENT, Some(6), None).await.unwrap();
+        assert_eq!(
+            request_line(&server.join().unwrap()),
+            format!("GET /v1/agents/{EVM_AGENT}/decisions?hours=6 HTTP/1.1")
+        );
+        assert_eq!(d["state"], "healthy_no_action");
+        let (base, server) = one_shot(fx!("value_history.json"));
+        let h = Client::new(base, "ponk_live_k").unwrap().agent_value_history(EVM_AGENT, Some("24h")).await.unwrap();
+        assert_eq!(
+            request_line(&server.join().unwrap()),
+            format!("GET /v1/agents/{EVM_AGENT}/value-history?range=24h HTTP/1.1")
+        );
+        assert_eq!(h.bucket_secs, Some(900));
+        // A bucket with no reading is null, never filled in.
+        assert!(h.points[1]["value_usd"].is_null());
+        assert_eq!(h.points[2]["value_usd"], 101.2);
+    }
+
+    #[tokio::test]
+    async fn positions_list_solana_and_evm_rows_together() {
+        let (base, server) = one_shot(fx!("positions.json"));
+        let rows = Client::new(base, "ponk_live_k").unwrap().list_positions().await.unwrap();
+        assert_eq!(request_line(&server.join().unwrap()), "GET /v1/positions HTTP/1.1");
+        let (sol, evm) = (&rows[0], &rows[1]);
+        assert_eq!((sol.chain.as_deref(), evm.chain.as_deref()), (Some("solana"), Some("bsc")));
+        // A Solana row's raw is a number, an EVM row's a string: both decode.
+        assert_eq!(sol.fees_claimable_x.as_ref().unwrap().raw, Some(12_345));
+        assert_eq!(evm.fees_claimable_x.as_ref().unwrap().raw, Some(210_000_000_000_000_000));
+        // Past what a JSON number or a u64 can hold.
+        assert_eq!(evm.fees_claimable_y.as_ref().unwrap().raw, Some(u128::MAX));
+        assert_eq!(evm.dex.as_deref(), Some("pancakeswap_v3"));
+        assert_eq!(evm.agent_id.as_deref(), Some(EVM_AGENT));
+        assert_eq!(evm.pnl_source.as_deref(), Some("evm_runtime"));
+        assert_eq!(crate::evm::chain_of(evm.token_x.as_deref().unwrap()), "bsc");
+        assert_eq!((evm.staked, evm.farm_rewards_usd), (Some(true), Some(1.84)));
+        assert_eq!(evm.farm_rewards.as_ref().unwrap().token.as_deref(), Some("CAKE"));
+        assert_eq!((evm.deposited_usd, evm.bin_step, evm.is_full_range), (Some(100.0), Some(1), Some(false)));
+        assert_eq!(evm.fee_apr_pct, None);
+    }
+
+    #[test]
+    fn a_base_unit_amount_that_is_not_a_whole_number_is_a_decode_error() {
+        assert!(serde_json::from_str::<TokenAmount>(r#"{"raw":"1.5","decimals":18}"#).is_err());
+        assert!(serde_json::from_str::<TokenAmount>(r#"{"raw":true,"decimals":18}"#).is_err());
+        let absent: TokenAmount = serde_json::from_str(r#"{"decimals":18}"#).unwrap();
+        assert_eq!(absent.raw, None);
+        let null: TokenAmount = serde_json::from_str(r#"{"raw":null,"decimals":18}"#).unwrap();
+        assert_eq!(null.raw, None);
+    }
+
+    #[tokio::test]
+    async fn pause_resume_and_stake_on_an_evm_agent() {
+        for (pause, word) in [(true, "pause"), (false, "resume")] {
+            let (base, server) = one_shot(fx!("agent.json"));
+            let c = Client::new(base, "ponk_live_k").unwrap();
+            let agent = if pause { c.pause_agent(EVM_AGENT).await } else { c.resume_agent(EVM_AGENT).await }.unwrap();
+            assert_eq!(
+                request_line(&server.join().unwrap()),
+                format!("POST /v1/agents/{EVM_AGENT}/{word} HTTP/1.1")
+            );
+            assert_eq!(agent.chain.as_deref(), Some("bsc"));
+        }
+        let (base, server) = one_shot(fx!("agent.json"));
+        Client::new(base, "ponk_live_k").unwrap().set_stake_rewards(EVM_AGENT, false).await.unwrap();
+        let raw = server.join().unwrap();
+        assert_eq!(request_line(&raw), format!("PATCH /v1/agents/{EVM_AGENT}/config HTTP/1.1"));
+        assert_eq!(body_of(&raw), serde_json::json!({ "evm": { "stake": false } }));
+    }
+
+    #[tokio::test]
+    async fn an_evm_exit_returns_the_real_amounts() {
+        let (base, server) = one_shot(fx!("exit.json"));
+        let out = Client::new(base, "ponk_live_k").unwrap().exit_agent(EVM_AGENT, None).await.unwrap();
+        let raw = server.join().unwrap();
+        assert_eq!(request_line(&raw), format!("POST /v1/agents/{EVM_AGENT}/exit HTTP/1.1"));
+        assert_eq!(body_of(&raw), serde_json::json!({}));
+        assert_eq!((out.chain.as_deref(), out.status.as_deref(), out.lamports), (Some("bsc"), Some("completed"), Some(0)));
+        assert_eq!(out.destination.as_deref(), Some(EVM_WITHDRAW));
+        assert_eq!(out.amount_wei.as_deref(), Some("149000000000000000"));
+        assert_eq!(crate::evm::wei_to_native(out.amount_wei.as_deref().unwrap()).as_deref(), Some("0.149"));
+        assert_eq!(out.tx_hashes.len(), 2);
+        assert_eq!(out.signature.as_ref(), out.tx_hashes.last());
+        let (token, native) = (&out.received[0], &out.received[1]);
+        assert_eq!(token.amount.as_deref(), Some("50120000000000000000"));
+        assert_eq!(token.tx_hash.as_ref(), out.tx_hashes.first());
+        assert!(!crate::evm::parse_evm_id(token.token.as_deref().unwrap()).unwrap().is_native());
+        assert!(crate::evm::parse_evm_id(native.token.as_deref().unwrap()).unwrap().is_native());
+        assert_eq!(native.amount, out.amount_wei);
+        assert!(out.sentence.unwrap().contains("reached your withdrawal address"));
+
+        let running: Withdrawal = serde_json::from_str(fx!("exit_incomplete.json")).unwrap();
+        assert_eq!(running.status.as_deref(), Some("incomplete"));
+        assert_eq!((running.signature, running.amount_wei), (None, None));
+        assert!(running.tx_hashes.is_empty() && running.received.is_empty());
+        assert!(running.sentence.unwrap().contains("keeps running the exit by itself"));
+    }
+
+    #[tokio::test]
+    async fn an_evm_withdraw_uses_the_same_route_and_a_refusal_is_a_sentence() {
+        let (base, server) = one_shot(fx!("exit.json"));
+        let out = Client::new(base, "ponk_live_k").unwrap().withdraw(EVM_AGENT, None).await.unwrap();
+        let raw = server.join().unwrap();
+        assert_eq!(request_line(&raw), format!("POST /v1/agents/{EVM_AGENT}/withdraw HTTP/1.1"));
+        assert_eq!(body_of(&raw), serde_json::json!({}));
+        assert_eq!(out.chain.as_deref(), Some("bsc"));
+
+        let (base, _server) = one_shot_status(
+            422,
+            r#"{"error":{"code":"unprocessable","message":"This agent has an open position. Exit it to take everything out."}}"#,
+        );
+        let err = Client::new(base, "ponk_live_k").unwrap().withdraw(EVM_AGENT, None).await.unwrap_err();
+        assert!(err.api().unwrap().message.contains("Exit it"));
+
+        // A Solana withdrawal reads as it did.
+        let solana: Withdrawal = serde_json::from_str(r#"{"signature":"5vJz","lamports":1500000000,"pnl":null}"#).unwrap();
+        assert_eq!((solana.lamports, solana.chain, solana.amount_wei), (Some(1_500_000_000), None, None));
+        assert!(solana.received.is_empty() && solana.tx_hashes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_evm_plan_states_dollars_and_chains() {
+        let (base, server) = one_shot(fx!("plan.json"));
+        let plan = Client::new(base, "ponk_live_k")
+            .unwrap()
+            .copilot_evm_plan("$100 in bnb and $50 in ethereum")
+            .await
+            .unwrap();
+        let raw = server.join().unwrap();
+        assert_eq!(request_line(&raw), "POST /copilot/evm/plans HTTP/1.1");
+        assert!(has_key(&raw), "{raw}");
+        assert_eq!(body_of(&raw), serde_json::json!({ "text": "$100 in bnb and $50 in ethereum" }));
+        assert_eq!((plan.state.as_deref(), plan.total_usd.as_deref()), (Some("ready"), Some("150.00")));
+        assert_eq!(plan.chains(), vec!["bsc", "ethereum"]);
+        let bsc = &plan.funding_by_chain[0];
+        assert_eq!(
+            (bsc.amount_usd.as_deref(), bsc.amount_native.as_deref(), bsc.native_symbol.as_deref()),
+            (Some("100.00"), Some("0.146918"), Some("BNB"))
+        );
+        let legs = plan.legs();
+        assert_eq!(legs.len(), 1);
+        let leg = legs[0];
+        assert_eq!((leg.dex.as_deref(), leg.pool_address.as_deref()), (Some("pancakeswap_v3"), Some(EVM_POOL)));
+        assert_eq!(
+            (leg.fund_usd.as_deref(), leg.fund_native.as_deref(), leg.fund_native_wei.as_deref()),
+            (Some("100.00"), Some("0.146918"), Some("146918000000000000"))
+        );
+        assert_eq!((leg.deploy_usd.as_deref(), leg.range_pct), (Some("99.69"), Some(5.0)));
+        assert_eq!(
+            leg.config.as_ref().unwrap(),
+            &crate::evm::range_config(0.05, 0.05, "bin_rebalancer", None).unwrap()
+        );
+        // The key's own rates, in the server's sentence.
+        let fees = plan.fees.as_deref().unwrap();
+        assert!(fees.contains("1.5%") && fees.contains("15%"), "{fees}");
+        // A share under the minimum says what works instead.
+        let eth = &plan.funding_by_chain[1];
+        assert!(eth.legs.is_empty());
+        assert!(eth.refusal.as_deref().unwrap().starts_with("$50 is not enough for one Ethereum pool"));
+        assert_eq!(eth.minimum_usd.as_deref(), Some("320"));
+        let alt = eth.alternative.as_ref().unwrap();
+        assert_eq!((alt.kind.as_deref(), alt.chain.as_deref()), (Some("same_pair_on_chain"), Some("base")));
+        assert!(alt.plan_id.is_some());
+        assert_eq!(plan.dropped[0].chain.as_deref(), Some("ethereum"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_evm_plan_is_an_answer_not_an_error() {
+        let (base, _server) = one_shot(
+            r#"{"id":"p","state":"refused","text":"0.5 bnb in bnb pools","refusal":{"code":"coin_amount","message":"Say the amount in dollars."},"funding_by_chain":[],"fees":"f"}"#,
+        );
+        let plan = Client::new(base, "ponk_live_k").unwrap().copilot_evm_plan("0.5 bnb in bnb pools").await.unwrap();
+        assert_eq!(plan.state.as_deref(), Some("refused"));
+        assert_eq!(plan.refusal.unwrap()["code"], "coin_amount");
+        assert!(plan.funding_by_chain.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_evm_plan_is_read_and_started() {
+        let pid = "0190a1b2-aaaa-7000-8000-0000000000aa";
+        let (base, server) = one_shot(fx!("plan.json"));
+        Client::new(base, "ponk_live_k").unwrap().copilot_evm_get_plan(pid).await.unwrap();
+        assert_eq!(request_line(&server.join().unwrap()), format!("GET /copilot/evm/plans/{pid} HTTP/1.1"));
+
+        let (base, server) = one_shot(fx!("plan_started.json"));
+        let started = Client::new(base, "ponk_live_k").unwrap().copilot_evm_start(pid).await.unwrap();
+        let raw = server.join().unwrap();
+        assert_eq!(request_line(&raw), format!("POST /copilot/evm/plans/{pid}/start HTTP/1.1"));
+        assert!(has_key(&raw), "{raw}");
+        assert_eq!(started.state.as_deref(), Some("started"));
+        assert_eq!(started.fleet_id.as_deref(), Some("0190a1b2-cccc-7000-8000-0000000000cc"));
+        let (made, refused) = (&started.agents[0], &started.agents[1]);
+        assert_eq!((made.agent_id.as_deref(), made.created), (Some(EVM_AGENT), Some(true)));
+        assert_eq!((made.fund_native.as_deref(), made.native_symbol.as_deref()), (Some("0.146918"), Some("BNB")));
+        assert_eq!((refused.agent_id.as_deref(), refused.created), (None, Some(false)));
+        assert!(refused.refusal.as_deref().unwrap().contains("token list"));
+        // The server's link is the one this crate builds.
+        assert_eq!(started.sign_urls, vec![crate::evm::fund_link(EVM_AGENT, Some("bsc")).unwrap()]);
+    }
+
+    #[tokio::test]
+    async fn the_evm_fleet_says_what_each_agent_needs() {
+        let (base, server) = one_shot(fx!("fleet.json"));
+        let fleet = Client::new(base, "ponk_live_k").unwrap().evm_fleet().await.unwrap();
+        let raw = server.join().unwrap();
+        assert_eq!(request_line(&raw), "GET /agents/evm/fleet HTTP/1.1");
+        assert!(has_key(&raw), "{raw}");
+        let (ready, new) = (&fleet.agents[0], &fleet.agents[1]);
+        assert_eq!((ready.agent_id.as_deref(), ready.chain.as_deref()), (Some(EVM_AGENT), Some("bsc")));
+        assert_eq!((ready.needs.as_deref(), ready.mandate_status.as_deref()), (Some("nothing"), Some("active")));
+        assert_eq!((new.chain.as_deref(), new.address.as_deref(), new.mandate_status.as_deref()), (Some("base"), None, None));
+        assert_eq!(new.needs.as_deref(), Some("authorize_and_fund"));
+        let agents: Vec<crate::evm::FundLinkAgent> = fleet
+            .agents
+            .iter()
+            .map(|a| crate::evm::FundLinkAgent::new(a.agent_id.clone().unwrap()).chain(a.chain.clone().unwrap()))
+            .collect();
+        assert_eq!(fleet.sign_urls, crate::evm::fund_links(&agents, false));
+        assert_eq!(fleet.fund_page.as_deref(), Some("https://ponk.exchange/agents/fund"));
+    }
+
+    /// Opt in, read only, no key: `PONK_LIVE_TEST=1 cargo test live_evm -- --ignored --nocapture`
+    /// lists pools on BNB Chain and Ethereum through the public route.
+    #[tokio::test]
+    #[ignore = "reads the live public pool boards; set PONK_LIVE_TEST=1"]
+    async fn live_evm_boards_answer() {
+        if std::env::var("PONK_LIVE_TEST").as_deref() != Ok("1") {
+            eprintln!("skipped: set PONK_LIVE_TEST=1 to read the live boards");
+            return;
+        }
+        let c = Client::public(DEFAULT_BASE_URL).unwrap();
+        for chain in ["bsc", "ethereum"] {
+            let board = c.evm_pools(chain, None).await.unwrap();
+            assert_eq!(board.chain.as_deref(), Some(chain));
+            assert!(board.ready(), "{:?}", board.status);
+            assert!(!board.pools.is_empty());
+            let mut venues = std::collections::BTreeMap::new();
+            for p in &board.pools {
+                let id = crate::evm::parse_evm_id(p.address.as_deref().unwrap()).unwrap();
+                assert_eq!(id.chain, chain);
+                let dex = p.dex.as_deref().unwrap();
+                assert!(crate::evm::venue_chains(dex).contains(&chain), "{dex}");
+                *venues.entry(dex.to_string()).or_insert(0u32) += 1;
+            }
+            let fees = |p: &EvmPool| p.fees.as_ref().and_then(|f| f.h24).unwrap_or(0.0);
+            let top = board.pools.iter().max_by(|a, b| fees(a).total_cmp(&fees(b))).unwrap();
+            println!(
+                "{chain}: {} pools {venues:?}; most LP fees in 24h: {} on {}, fee tier {}, TVL ${:.0}, fees 24h ${:.0}, farm {}",
+                board.pools.len(),
+                top.pair(),
+                top.dex.as_deref().unwrap_or("-"),
+                match (top.dynamic_fee, top.fee_pct) {
+                    (Some(true), _) => "dynamic".to_string(),
+                    (_, Some(f)) => format!("{f}%"),
+                    _ => "-".to_string(),
+                },
+                top.tvl.unwrap_or(0.0),
+                fees(top),
+                top.farm.as_ref().map(|f| format!("{:?} live={:?}", f.token, f.live)).unwrap_or_else(|| "none".into()),
+            );
+        }
     }
 }

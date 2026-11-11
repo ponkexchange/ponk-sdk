@@ -3,6 +3,84 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.15.0 (2026-11-10)
+
+Both clients and the `ponk-cli` crate. Ponk agents now run on five EVM chains
+beside Solana: Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain.
+
+- **Chains and venues.** `chain` is on every agent, position, wallet view and
+  mandate: `solana`, `ethereum`, `arbitrum`, `base`, `bsc` or `robinhood`. The
+  EVM venue ids are `uniswap_v2`, `uniswap_v3`, `uniswap_v4` (Ethereum,
+  Arbitrum, Robinhood Chain), `pancakeswap_v2`, `pancakeswap_v3`,
+  `pancakeswap_infinity_cl` (BNB Chain) and `aerodrome_slipstream`,
+  `aerodrome_classic` (Base). The tables are `ponk.evm` in Python and
+  `ponk::evm` in Rust, with `venue_chains`, `is_full_range_venue` and
+  `stake_reward_token`.
+- **CAIP ids.** `pool_id`, `token_id`, `native_token_id`, `v4_pool_id` (the
+  pool manager and the 32 byte pool id, for Uniswap v4 and PancakeSwap
+  Infinity CL), `position_nft_id`, `parse_evm_id` and `chain_of`. A Solana
+  address or an id on a chain ponk does not run on is never read as one.
+- **Pools.** `evm_chains` (`GET /public/evm/chains`), `evm_pools`
+  (`GET /public/evm/{chain}/board?venue=`), `evm_pool`
+  (`GET /public/evm/pools/{id}`) and `evm_token`
+  (`GET /public/evm/tokens/{id}`), each with its `/v1` twin (`public=False` in
+  Python, the `_keyed` methods in Rust). A pool carries its fee tier in
+  percent, `dynamic_fee`, TVL, volume and LP fees per window, `farm`
+  (`token`, `live`, `apr_pct`), the hook, and `flags()`: `unverified_token`,
+  `hook_not_agent_eligible`, `under_1h_old`.
+- **Open cost.** `evm_open_cost` (`GET /v1/evm/{chain}/open-cost`): the
+  measured gas of the first open, the exit reserve and the least to hold, in
+  wei, and the two fee rates a key's agents pay (150 and 1500 basis points).
+  The keyless route states the rates of an agent created on ponk.exchange.
+- **Create.** `create_evm_agent` (`POST /v1/agents` with `chain`): the range
+  as `down_pct` and `up_pct` fractions on a range venue, compound and hold on
+  a full-range venue, `stake` for CAKE or AERO, and `withdrawal_address`.
+  Rust: `NewAgent::evm_range`, `NewAgent::evm_full_range`, `.stake()`,
+  `.withdrawal_address()`, `.chain()`. `create_agent` takes `chain` and
+  `withdrawal_address` too. `ponk.evm.range_config` builds the config the
+  server's own planner sends.
+- **Read an EVM agent with the methods you already use.** `agent_wallet`
+  answers the EVM view (`address`, `native_symbol`, `balance_wei`,
+  `reserve_wei`, `min_open_wei`, `withdrawable_wei`, `balance_usd`,
+  `native_usd`, `withdrawal_address`, `mandate_status`), `agent_position` is
+  in ticks with `bin_step`, `chain` and `staked`, `agent_performance` adds
+  `farm_rewards` (`token`, `pending_amount`, `pending_usd`, `harvested_usd`,
+  `staked`, `apr_pct`, `apr_basis`), `pnl_note` and `figures_unavailable`,
+  and `agent_decisions`, `agent_value_history`, `agent_mandate` and
+  `list_positions` cover EVM agents. `pnl_pct` and `drawdown_pct` on the
+  performance view are fractions on every chain.
+- **Control.** `pause_agent`, `resume_agent` and `update_config` work on an
+  EVM agent; `set_stake_rewards` sends `{"evm": {"stake": bool}}`. `withdraw`
+  and `exit_agent` return what the call really sent: `tx_hashes`,
+  `amount_wei`, `received` (`token`, `amount`, `tx_hash`), `status` and
+  `sentence`.
+- **Copilot.** `copilot_evm_plan`, `copilot_evm_get_plan` and
+  `copilot_evm_start` (`/copilot/evm/plans`): one sentence in dollars across
+  one or more chains, with `total_usd`, `funding_by_chain`, the legs, what
+  was left out and why, and after a start the agents, `sign_urls` and
+  `fleet_id`. `evm_fleet` (`GET /agents/evm/fleet`) lists every EVM agent and
+  what it needs.
+- **The fund-and-sign link.** `fund_link` and `fund_links` build
+  `https://ponk.exchange/agents/fund?a=<id>:<amount>`, 40 agents to a link,
+  by the rule the page parses. An EVM agent is listed with 0. The clients
+  expose the mandate's status and this link; signing stays in your own
+  wallets on ponk.exchange.
+- **CLI**: `chains`, `evm-pools`, `evm-pool`, `open-cost`, `create-evm-agent`,
+  `wallet`, `fund-link`, `evm-fleet`, `plan`, `start-plan` and `exit`.
+  `agents` and `agent` show the chain, `agent` shows farm rewards, and
+  `withdraw` prints an EVM withdrawal in the server's own sentence.
+- **Fixed, Rust**: `list_positions` failed to decode for an account holding
+  an EVM position, because that row's `fees_claimable_x.raw` is a decimal
+  string. `TokenAmount.raw` now reads a number or a string.
+- **Python**: `Agent` gains `activation_fee_bps`, `waiting` and
+  `pool_warning`, which the Rust client already had, and
+  `ACTIVATION_FEE_API_BPS` (150) and `ACTIVATION_FEE_API_HOLDER_BPS` (75).
+- **Rust, breaking for struct literals**: `NewAgent` gains `chain` and
+  `withdrawal_address`, and `Error` gains `InvalidArgument`. Build a
+  `NewAgent` with `NewAgent::new` and match `Error` with a wildcard arm.
+
+Solana behaviour is unchanged: every earlier test passes as it was.
+
 ## 0.14.0 (2026-11-05)
 
 Both clients and the `ponk-cli` crate. The Python client skips 0.13.0 (that

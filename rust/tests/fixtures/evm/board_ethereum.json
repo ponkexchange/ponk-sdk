@@ -1,0 +1,241 @@
+{
+  "asOf": 1794371828549,
+  "chain": "ethereum",
+  "ok": {
+    "chainRpc": true,
+    "market": true,
+    "stockRegistry": null,
+    "tokenList": true
+  },
+  "pools": [
+    {
+      "address": "eip155:1:0x000000000004444c5dc75cb358380d2e3de08a90:0xe63e32b2ae40601662f760d6bf5d771057324fbd97784fe1d3717069f7b75d45",
+      "binStep": 1,
+      "chain": "ethereum",
+      "createdAt": 1768357511000,
+      "dataInsufficient": [],
+      "dex": "uniswap_v4",
+      "dynamicFee": false,
+      "farm": null,
+      "feePct": 0.0005,
+      "fees": {
+        "1h": 2.526703835376363,
+        "24h": 137.23897187717589,
+        "30m": 2.5246374050410054,
+        "4h": null
+      },
+      "hooks": {
+        "address": "0x0000000000000000000000000000000000000000",
+        "agentEligible": true,
+        "points": [],
+        "policy": {
+          "status": "hookless"
+        },
+        "touchesLpFunds": false
+      },
+      "key": "uniswap_v4:eip155:1:0x000000000004444c5dc75cb358380d2e3de08a90:0xe63e32b2ae40601662f760d6bf5d771057324fbd97784fe1d3717069f7b75d45",
+      "launchpad": null,
+      "liquidity": "74538654004590623823649",
+      "price": 1.000172694110977,
+      "sqrtPriceX96": "79235003337479483492260181917713133",
+      "tick": 276325,
+      "tvl": 100023352.2853,
+      "tvlSource": "coingecko",
+      "volume": {
+        "1h": 505341.272416545,
+        "24h": 27447821.823257,
+        "30m": 504927.985936187,
+        "4h": null
+      },
+      "volumeSource": "coingecko",
+      "x": {
+        "address": "0x6c3ea9036406852006290770bedfcaba0e23a0e8",
+        "buyVolume1h": null,
+        "chain": "ethereum",
+        "change1h": -0.527,
+        "change24h": -0.323,
+        "createdAt": null,
+        "decimals": 6,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": "https://assets.coingecko.com/coins/images/31212/large/PYUSD_Logo_%282%29.png?1691458314",
+        "mint": "eip155:1:0x6c3ea9036406852006290770bedfcaba0e23a0e8",
+        "mintAuthorityDisabled": null,
+        "name": "PayPal USD",
+        "pendingMultiplier": null,
+        "priceSource": "coingecko",
+        "priceUsd": 0.995589859772574,
+        "priceVia": null,
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "PYUSD",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "uniswap_default_list",
+          "status": "verified"
+        },
+        "verified": true
+      },
+      "y": {
+        "address": "0xdc035d45d973e3ec169d2276ddab16f1e407384f",
+        "buyVolume1h": null,
+        "chain": "ethereum",
+        "change1h": -0.622,
+        "change24h": -0.219,
+        "createdAt": null,
+        "decimals": 18,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": "https://assets.coingecko.com/coins/images/39926/large/usds.webp?1726666683",
+        "mint": "eip155:1:0xdc035d45d973e3ec169d2276ddab16f1e407384f",
+        "mintAuthorityDisabled": null,
+        "name": "USDS Stablecoin",
+        "pendingMultiplier": null,
+        "priceSource": "coingecko",
+        "priceUsd": 0.998539533297028,
+        "priceVia": null,
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "USDS",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "uniswap_default_list",
+          "status": "verified"
+        },
+        "verified": true
+      }
+    },
+    {
+      "address": "eip155:1:0x000000000004444c5dc75cb358380d2e3de08a90:0x98316e8405502774a5d0a0761276b5d26505a8195c1905169864008d5e7a3eea",
+      "binStep": 4,
+      "chain": "ethereum",
+      "createdAt": 1791934535000,
+      "dataInsufficient": [
+        "fees: the hook sets this pool's fee on each swap, so no single fee rate describes its volume"
+      ],
+      "dex": "uniswap_v4",
+      "dynamicFee": true,
+      "farm": null,
+      "feePct": null,
+      "fees": {
+        "1h": null,
+        "24h": null,
+        "30m": null,
+        "4h": null
+      },
+      "hooks": {
+        "address": "0x000022ec4ebd6b12294396e852e4c3876b253cc0",
+        "agentEligible": false,
+        "points": [
+          "before_initialize",
+          "after_initialize",
+          "before_add_liquidity",
+          "after_add_liquidity",
+          "before_swap",
+          "after_swap"
+        ],
+        "policy": {
+          "status": "unreviewed"
+        },
+        "touchesLpFunds": true
+      },
+      "key": "uniswap_v4:eip155:1:0x000000000004444c5dc75cb358380d2e3de08a90:0x98316e8405502774a5d0a0761276b5d26505a8195c1905169864008d5e7a3eea",
+      "launchpad": null,
+      "liquidity": "771963995846390150",
+      "price": 2065.627837989398,
+      "sqrtPriceX96": "3600854910504766307050151",
+      "tick": -199989,
+      "tvl": 9310376.0086,
+      "tvlSource": "coingecko",
+      "volume": {
+        "1h": 247499.730862483,
+        "24h": 8360849.14593963,
+        "30m": 141362.90387221,
+        "4h": null
+      },
+      "volumeSource": "coingecko",
+      "x": {
+        "address": "0x0000000000000000000000000000000000000000",
+        "buyVolume1h": null,
+        "chain": "ethereum",
+        "change1h": 0.191,
+        "change24h": -2.648,
+        "createdAt": null,
+        "decimals": 18,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": null,
+        "mint": "eip155:1:0x0000000000000000000000000000000000000000",
+        "mintAuthorityDisabled": null,
+        "name": "Ether",
+        "pendingMultiplier": null,
+        "priceSource": "chainlink",
+        "priceUsd": 2060.42675492,
+        "priceVia": null,
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "ETH",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "native",
+          "status": "verified"
+        },
+        "verified": true
+      },
+      "y": {
+        "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "buyVolume1h": null,
+        "chain": "ethereum",
+        "change1h": 0.235,
+        "change24h": -0.42,
+        "createdAt": null,
+        "decimals": 6,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+        "mint": "eip155:1:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "mintAuthorityDisabled": null,
+        "name": "USD Coin",
+        "pendingMultiplier": null,
+        "priceSource": "coingecko",
+        "priceUsd": 0.998832783630087,
+        "priceVia": null,
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "USDC",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "uniswap_default_list",
+          "status": "verified"
+        },
+        "verified": true
+      }
+    }
+  ],
+  "servedAt": 1794371829849,
+  "status": {
+    "blockTimestamp": 1794371819,
+    "consecutiveFailures": 0,
+    "dropped": {
+      "notUniswap": 0,
+      "unreadable": 0,
+      "v4KeyUnresolved": 0
+    },
+    "lastError": null,
+    "marketSource": "coingecko",
+    "marketSources": [
+      "coingecko",
+      "defillama",
+      "dexscreener"
+    ],
+    "stale": false
+  }
+}

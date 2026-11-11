@@ -1,0 +1,246 @@
+{
+  "aerodrome": [
+    {
+      "curve": "volatile",
+      "gauge": "0xd424ba8ca9d4e278753de76651a0095451e65cd1",
+      "gaugeLive": true,
+      "generation": "current",
+      "key": "aerodrome_classic:eip155:8453:0xf634058dc94e6bf8e828e27621320c423bc8b18e",
+      "stakedShare": 0.9910046577033781,
+      "unstakedFeePct": null
+    },
+    {
+      "curve": "concentrated",
+      "gauge": "0x46a9dca72d78366571be583aa69c1dc16e6889fb",
+      "gaugeLive": true,
+      "generation": "current",
+      "key": "aerodrome_slipstream:eip155:8453:0x4a7af46bc8abc00048c6c7920a1488daf568366c",
+      "stakedShare": 0.9921162275953211,
+      "unstakedFeePct": 5.0
+    }
+  ],
+  "asOf": 1794371829853,
+  "chain": "base",
+  "ok": {
+    "chainRpc": true,
+    "market": true,
+    "stockRegistry": null,
+    "tokenList": true
+  },
+  "pools": [
+    {
+      "address": "eip155:8453:0x4a7af46bc8abc00048c6c7920a1488daf568366c",
+      "binStep": 50,
+      "chain": "base",
+      "createdAt": null,
+      "dataInsufficient": [],
+      "dex": "aerodrome_slipstream",
+      "dynamicFee": false,
+      "farm": {
+        "aprPct": 103.51753766970559,
+        "live": true,
+        "token": "AERO"
+      },
+      "feePct": 0.067,
+      "fees": {
+        "1h": null,
+        "24h": 43597.3532014,
+        "30m": null,
+        "4h": null
+      },
+      "hooks": null,
+      "key": "aerodrome_slipstream:eip155:8453:0x4a7af46bc8abc00048c6c7920a1488daf568366c",
+      "launchpad": null,
+      "liquidity": "34908471739705929388",
+      "price": 2066.6430066353414,
+      "sqrtPriceX96": "3601739635700427718131712",
+      "tick": -199984,
+      "tvl": 11942855.85811945,
+      "tvlSource": "onchain",
+      "volume": {
+        "1h": 1571296.42,
+        "24h": 65070676.42,
+        "30m": null,
+        "4h": null
+      },
+      "volumeSource": "dexscreener",
+      "x": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "buyVolume1h": null,
+        "chain": "base",
+        "change1h": null,
+        "change24h": null,
+        "createdAt": null,
+        "decimals": 18,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": null,
+        "mint": "eip155:8453:0x4200000000000000000000000000000000000006",
+        "mintAuthorityDisabled": null,
+        "name": "Wrapped Ether",
+        "pendingMultiplier": null,
+        "priceSource": "chainlink",
+        "priceUsd": 2065.10846281,
+        "priceVia": null,
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "WETH",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "aerodrome_deployment",
+          "status": "verified"
+        },
+        "verified": true
+      },
+      "y": {
+        "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "buyVolume1h": null,
+        "chain": "base",
+        "change1h": null,
+        "change24h": null,
+        "createdAt": null,
+        "decimals": 6,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": null,
+        "mint": "eip155:8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "mintAuthorityDisabled": null,
+        "name": "USD Coin",
+        "pendingMultiplier": null,
+        "priceSource": "chainlink",
+        "priceUsd": 0.99974633,
+        "priceVia": null,
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "USDC",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "aerodrome_deployment",
+          "status": "verified"
+        },
+        "verified": true
+      }
+    },
+    {
+      "address": "eip155:8453:0xf634058dc94e6bf8e828e27621320c423bc8b18e",
+      "binStep": null,
+      "chain": "base",
+      "createdAt": null,
+      "dataInsufficient": [
+        "Volume is null: this pool is not indexed by DexScreener, and Ponk does not estimate volume."
+      ],
+      "dex": "aerodrome_classic",
+      "dynamicFee": false,
+      "farm": {
+        "aprPct": 30.221972959858906,
+        "live": true,
+        "token": "AERO"
+      },
+      "feePct": null,
+      "fees": {
+        "1h": null,
+        "24h": null,
+        "30m": null,
+        "4h": null
+      },
+      "hooks": null,
+      "key": "aerodrome_classic:eip155:8453:0xf634058dc94e6bf8e828e27621320c423bc8b18e",
+      "launchpad": null,
+      "liquidity": "19516763568057564757",
+      "price": 0.5438010975700832,
+      "sqrtPriceX96": null,
+      "tick": null,
+      "tvl": 28777377.153207526,
+      "tvlSource": "onchain",
+      "volume": {
+        "1h": null,
+        "24h": null,
+        "30m": null,
+        "4h": null
+      },
+      "volumeSource": null,
+      "x": {
+        "address": "0x3f5bf3edac59d650d8fdf9657a71f2f904a3a4ee",
+        "buyVolume1h": null,
+        "chain": "base",
+        "change1h": null,
+        "change24h": null,
+        "createdAt": null,
+        "decimals": 18,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": null,
+        "mint": "eip155:8453:0x3f5bf3edac59d650d8fdf9657a71f2f904a3a4ee",
+        "mintAuthorityDisabled": null,
+        "name": "Aero",
+        "pendingMultiplier": null,
+        "priceSource": "onchain_pool",
+        "priceUsd": 0.5436631515456626,
+        "priceVia": "eip155:8453:0xf634058dc94e6bf8e828e27621320c423bc8b18e",
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "AERO",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "aerodrome_deployment",
+          "status": "verified"
+        },
+        "verified": true
+      },
+      "y": {
+        "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "buyVolume1h": null,
+        "chain": "base",
+        "change1h": null,
+        "change24h": null,
+        "createdAt": null,
+        "decimals": 6,
+        "freezeAuthorityDisabled": null,
+        "holders": null,
+        "logoUri": null,
+        "mint": "eip155:8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "mintAuthorityDisabled": null,
+        "name": "USD Coin",
+        "pendingMultiplier": null,
+        "priceSource": "chainlink",
+        "priceUsd": 0.99974633,
+        "priceVia": null,
+        "sellVolume1h": null,
+        "stock": false,
+        "symbol": "USDC",
+        "token2022": null,
+        "topHoldersPct": null,
+        "traders1h": null,
+        "verification": {
+          "source": "aerodrome_deployment",
+          "status": "verified"
+        },
+        "verified": true
+      }
+    }
+  ],
+  "servedAt": 1794371831491,
+  "status": {
+    "blockTimestamp": null,
+    "consecutiveFailures": 0,
+    "dropped": {
+      "notUniswap": 0,
+      "unreadable": 0,
+      "v4KeyUnresolved": 0
+    },
+    "lastError": null,
+    "marketSource": "dexscreener",
+    "marketSources": [
+      "chainlink",
+      "onchain_pool",
+      "dexscreener"
+    ],
+    "stale": false
+  }
+}

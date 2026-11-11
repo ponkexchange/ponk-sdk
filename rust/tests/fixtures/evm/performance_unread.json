@@ -1,0 +1,21 @@
+{
+  "current_value_usd": null,
+  "cost_basis_usd": null,
+  "pnl_usd": null,
+  "pnl_pct": null,
+  "drawdown_pct": null,
+  "has_position": false,
+  "wallet_source": "managed",
+  "status": "active",
+  "chain": "bsc",
+  "farm_rewards": {
+    "token": "CAKE",
+    "pending_amount": null,
+    "pending_usd": null,
+    "harvested_usd": null,
+    "staked": false,
+    "apr_pct": null,
+    "apr_basis": null
+  },
+  "figures_unavailable": "The BNB Smart Chain RPC did not answer."
+}

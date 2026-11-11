@@ -1,0 +1,36 @@
+{
+  "agents": [
+    {
+      "agent_id": "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b",
+      "name": "bnb usdt",
+      "chain": "bsc",
+      "dex": "pancakeswap_v3",
+      "pool_address": "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
+      "position_address": "eip155:56:0x46a15b0b27311cedf172ab29e4f4766fbe7f4364:812345",
+      "status": "active",
+      "strategy": "bin_rebalancer",
+      "address": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "mandate_status": "active",
+      "mandate_expires_at": "2026-12-10T18:05:00Z",
+      "needs": "nothing"
+    },
+    {
+      "agent_id": "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2c",
+      "name": "base weth usdc",
+      "chain": "base",
+      "dex": "aerodrome_slipstream",
+      "pool_address": "eip155:8453:0x4a7af46bc8abc00048c6c7920a1488daf568366c",
+      "position_address": null,
+      "status": "active",
+      "strategy": "bin_rebalancer",
+      "address": null,
+      "mandate_status": null,
+      "mandate_expires_at": null,
+      "needs": "authorize_and_fund"
+    }
+  ],
+  "sign_urls": [
+    "https://ponk.exchange/agents/fund?a=0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b:0,0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2c:0"
+  ],
+  "fund_page": "https://ponk.exchange/agents/fund"
+}

@@ -1,0 +1,35 @@
+{
+  "id": "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b",
+  "name": "bnb usdt",
+  "wallet_address": "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe",
+  "dex": "pancakeswap_v3",
+  "pool_address": "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
+  "position_address": null,
+  "status": "active",
+  "strategy": "bin_rebalancer",
+  "dry_run": false,
+  "config": {
+    "kind": "bin_rebalancer",
+    "target_bin_width": 977,
+    "auto_compound": true,
+    "knobs": {
+      "range_pct": {
+        "down_pct": 0.05,
+        "up_pct": 0.05
+      }
+    },
+    "evm": {
+      "stake": true,
+      "withdrawal_hint": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+    }
+  },
+  "created_at": "2026-11-10T18:02:11.482910Z",
+  "updated_at": "2026-11-10T18:02:11.482910Z",
+  "mode": "auto",
+  "wallet_source": "managed",
+  "chain": "bsc",
+  "origin": "api",
+  "managed_fee_bps": 1500,
+  "activation_fee_bps": 150,
+  "waiting": null
+}
