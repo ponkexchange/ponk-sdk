@@ -113,7 +113,7 @@ Create an agent, watch it think, then let it trade:
 agent = ponk.create_agent(
     name="sol-usdc runner",
     wallet_address=me.wallet_address,   # must be the key's own wallet
-    dex="meteora_dlmm",                 # meteora_dlmm | meteora_damm_v2 | orca | ponk_clouds | raydium
+    dex="meteora_dlmm",                 # meteora_dlmm | meteora_damm_v2 | orca | raydium
     pool_address="POOL_ADDRESS",
     strategy="bin_rebalancer",
     config={"kind": "bin_rebalancer", "bin_range_width": 20, "rebalance_threshold_bins": 5},
@@ -661,9 +661,8 @@ one past window beside holding, not a forecast.
 * **Self-custody loop.** Every prepare returns a `Prepared` (an UNSIGNED
   build for your own wallet) and every mark a `MarkedTx`: the agent
   rebalance (prepare, prepare-split, prepare-open, mark), the fee claim
-  (prepare, mark, confirm), the position builders, `lp_withdraw_prepare`
-  (Ponk Clouds included, withdraw only), wSOL reclaim, stranded positions and
-  cleanup, `positions_sync`, the Clouds referral claim.
+  (prepare, mark, confirm), the position builders, `lp_withdraw_prepare`, wSOL reclaim, stranded positions and
+  cleanup, `positions_sync`.
 * **Account.** Calls, Web Push, card looks, referral codes, the Creator
   application, leaderboard privacy and per-agent visibility, `clear_logs`,
   `weekly_recap`, `my_ponkillionaires`, `telegram_status`,

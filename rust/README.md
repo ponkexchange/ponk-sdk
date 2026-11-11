@@ -90,7 +90,7 @@ let agent = ponk
         &NewAgent::new(
             "sol-usdc runner",
             me.wallet_address.clone().unwrap(),  // must be the key's own wallet
-            "meteora_dlmm",                      // meteora_dlmm | meteora_damm_v2 | orca | ponk_clouds | raydium
+            "meteora_dlmm",                      // meteora_dlmm | meteora_damm_v2 | orca | raydium
             "bin_rebalancer",
             serde_json::json!({
                 "kind": "bin_rebalancer",
@@ -329,7 +329,7 @@ key can move your funds home. It cannot move them anywhere else.
 | `agent_rebalance_prepare` / `_prepare_split` / `_prepare_open` / `agent_rebalance_mark` | `POST /v1/agents/{id}/rebalance/*`, unsigned | `trade` |
 | `agent_fees_prepare` / `agent_fees_mark` / `agent_fees_confirm` | `POST /v1/agents/{id}/collect-fees/*` | `trade` |
 | `position_open_prepare` / `position_mark_tx` / `position_rebalance_split` / `position_rebalance_open` / `position_rebalance_tick` / `position_compound_prepare` / `position_claim_prepare` | `POST /v1/positions/...`, unsigned | `trade` |
-| `lp_withdraw_prepare(dex, pool, position, bps)` | `POST /v1/lp/{dex}/withdraw/prepare` (incl. `ponk_clouds`) | `trade` |
+| `lp_withdraw_prepare(dex, pool, position, bps)` | `POST /v1/lp/{dex}/withdraw/prepare` | `trade` |
 | `reclaim_wsol_prepare()` / `stranded_positions()` / `cleanup_position_prepare(pos)` | `/v1/wallet/...` | `trade` / `read` |
 | `positions_sync(&filter)` / `share_position_telegram(&card)` | `POST /v1/positions/sync`, `/share-telegram` | `trade` |
 | `clouds_referrals()` / `clouds_referral_claim_prepare(pool)` | `/v1/clouds/referrals` | `read` / `trade` |

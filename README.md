@@ -523,9 +523,6 @@ for rec in ponk.list_recommendations(status="pending"):
                               new_position_address=o.new_position_address, close_signature=close_sig)
 ```
 
-`lp_withdraw_prepare("ponk_clouds", ...)` withdraws a Ponk Clouds position;
-Clouds takes no new liquidity while it is closed.
-
 ## Rank every preset in one call
 
 ```python
