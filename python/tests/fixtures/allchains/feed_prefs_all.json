@@ -1,0 +1,11 @@
+{
+  "chains": [
+    "solana",
+    "ethereum",
+    "arbitrum",
+    "base",
+    "bsc",
+    "robinhood"
+  ],
+  "all": true
+}

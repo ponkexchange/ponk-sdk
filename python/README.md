@@ -13,6 +13,10 @@ endpoint. It never computes a number the server did not send.
 pip install ponk
 ```
 
+0.16.0 puts every chain on the boards and trackers (see
+[Chains on the boards and trackers](#chains-on-the-boards-and-trackers)),
+adds liquidity shapes to EVM agents (see [Shapes](#shapes-on-evm-agents)) and
+states the exit fee.
 0.15.0 adds the five EVM chains (see [Agents on EVM chains](#agents-on-evm-chains)).
 0.7.0 brings everything the site does to a key: Jupiter limit, trailing,
 TP/SL and DCA orders (a sign link, or self-sign with your own signer
@@ -201,16 +205,51 @@ print("then sign:", fund_link(agent.id, chain="bsc"))
 
 `examples/evm.py` is that flow, creating nothing unless `PONK_CREATE=1`.
 
+### Shapes on EVM agents
+
+An agent on a range venue takes a liquidity shape: `spot` (one even range,
+the default), `curve` (heaviest at the price), `bid_ask` (heaviest at the
+edges) or `spot_bid_ask` (half of each). On Uniswap v3 on Arbitrum, Ethereum
+and Robinhood Chain, Uniswap v4 on Arbitrum and Ethereum, PancakeSwap v3 and
+Infinity CL on BNB Chain and Aerodrome Slipstream on Base
+(`evm.SHAPE_VENUES`) a shape other than Spot opens as several ranges managed
+as one position; `shape_ranges` is `"auto"` (chosen from live gas so opening
+and later closing stays within 3% of the deposit) or 1 to 7. On any other
+range venue the agent keeps the shape and opens one range. A one-sided range
+is one side at 0.
+
+```python
+# What a Curve position of $1,000 opens as on Arbitrum right now.
+cost = ponk.evm_open_cost("arbitrum", "uniswap_v3", pool=POOL, shape="curve", amount_usd=1000)
+print(cost.shape["ranges"], cost.shape["entry_cost"], cost.shape["note"])
+
+agent = ponk.create_evm_agent(
+    name="weth usdc curve", wallet_address=ME, chain="arbitrum",
+    dex="uniswap_v3", pool_address=POOL,
+    down_pct=0.05, up_pct=0,                       # one sided, below the price
+    shape="curve", shape_ranges="auto", dry_run=False,
+)
+
+plan = ponk.copilot_evm_plan("$1000 in an arbitrum pool", shape="bid_ask", one_sided="below")
+print(plan.legs[0].shape.sentence)
+```
+
+`evm.with_shape(config, shape, shape_ranges=...)` writes the same keys into a
+config of your own (`knobs.liquidity_shape`, or the top-level
+`liquidity_shape` on `adaptive_range_recovery`, and `evm.shape_ranges`).
+Per-side shapes are the config keys `shape_below`, `shape_above` and
+`ratio_below_pct`.
+
 | Method | Route | What it does |
 |---|---|---|
 | `evm_chains()` | `GET /public/evm/chains` | Every chain, its gas coin and its venues. |
 | `evm_pools(chain, venue=None)` | `GET /public/evm/{chain}/board` | The pool board: fee tier, `dynamic_fee`, TVL, volume and LP fees per window, `farm`, `flags()`. |
 | `evm_pool(pool_id)` | `GET /public/evm/pools/{id}` | One pool by its CAIP id. |
 | `evm_token(token_id)` | `GET /public/evm/tokens/{id}` | One token; the zero address is the gas coin with its price. |
-| `evm_open_cost(chain, dex, pool=, stake=)` | `GET /v1/evm/{chain}/open-cost` | Gas of the first open, the exit reserve, the least to hold, and the fee rates. |
-| `create_evm_agent(...)` | `POST /v1/agents` | An agent on an EVM chain: `down_pct`, `up_pct`, `stake`, `withdrawal_address`. |
+| `evm_open_cost(chain, dex, pool=, stake=, shape=, ...)` | `GET /v1/evm/{chain}/open-cost` | Gas of the first open, the exit reserve, the least to hold, the fee rates, and with `shape` the ranges it opens as. |
+| `create_evm_agent(...)` | `POST /v1/agents` | An agent on an EVM chain: `down_pct`, `up_pct`, `stake`, `withdrawal_address`, `shape`, `shape_ranges`. |
 | `set_stake_rewards(id, stake)` | `PATCH /v1/agents/{id}/config` | Stake for CAKE or AERO from the next open. |
-| `copilot_evm_plan(text)` | `POST /copilot/evm/plans` | Plan one sentence in dollars: `"$200 in the top 5 bnb pools"`. |
+| `copilot_evm_plan(text, shape=, one_sided=)` | `POST /copilot/evm/plans` | Plan one sentence in dollars: `"$200 in the top 5 bnb pools"`. |
 | `copilot_evm_get_plan(id)` | `GET /copilot/evm/plans/{id}` | The plan again. |
 | `copilot_evm_start(id)` | `POST /copilot/evm/plans/{id}/start` | One agent per pool, plus `sign_urls` and `fleet_id`. Moves no money. |
 | `evm_fleet()` | `GET /agents/evm/fleet` | Every EVM agent and what it still needs from you. |
@@ -240,9 +279,36 @@ that page's link, 40 agents to a link; this client reads the mandate's status
 and never signs. Revoking a mandate and the exit card are on ponk.exchange too.
 
 An agent created with a key pays 1.5% of its first open, once, and 15% of the
-fees it earns (0.75% and 13.5% for a wallet holding 1,000,000 $PONK).
-`agent.activation_fee_bps`, `agent.managed_fee_bps` and `evm_open_cost` state
-the rates for you.
+fees it earns (0.75% and 13.5% for a wallet holding 1,000,000 $PONK), and 1%
+of what it sends you once it has opened a position (0.5% for a holder).
+`agent.activation_fee_bps`, `agent.managed_fee_bps`, `agent.exit_fee_bps` and
+`evm_open_cost` state the rates for you; `withdraw` and `exit_agent` list what
+the exit fee took in `exit_fees`.
+
+## Chains on the boards and trackers
+
+The agents leaderboard, Calls, the X Tracker and the Wallet Tracker cover
+Solana, BNB Chain, Base, Ethereum, Arbitrum and Robinhood Chain. `chains` on
+`leaderboard`, `calls_feed`, `top_calls`, `callers_board`, `x_feed`,
+`x_trending`, `x_callers`, `wallets_feed` and `wallet_activity` is a list of
+chain ids or `"all"`; left out, a public read covers every chain and a
+signed-in read your saved filter. Every answer carries `chains`, the ids it
+covers. A token is a Solana mint or an EVM token id
+(`evm.token_id("bsc", "0x...")`), a wallet a Solana or an EVM address.
+
+```python
+board = ponk.leaderboard("7d", chains=["bsc"])          # ranks from 1 on BNB Chain
+for row in board.ranked:
+    print(row.rank, row.chain, row.dex, row.pnl_usd)
+
+cake = evm.token_id("bsc", "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82")
+t = ponk.x_token(cake)                                   # chain, price_source
+for call in ponk.calls_feed(mint=cake).calls:
+    print(call.chain, call.price_source, call.multiple_now)
+
+ponk.set_feed_prefs("all")                               # the saved filter, trade key
+print(ponk.feed_prefs().chains)
+```
 
 ## What a key cannot do
 
@@ -324,23 +390,25 @@ if m is not None:
 | `pool(dex, address)` | `GET /pools/{dex}/{address}` | nothing |
 | `range_cost(dex, address, bins)` | `GET /pools/{dex}/{address}/range-cost?bins=N` | nothing |
 | `ponk_perks(wallet_address)` | `GET /public/ponk/perks/{address}` | nothing |
-| `leaderboard(window=None)` | `GET /public/agents-leaderboard?window=24h\|7d\|30d\|all` | nothing |
+| `leaderboard(window=None, chains=None)` | `GET /public/agents-leaderboard?window=24h\|7d\|30d\|all&chains=` | nothing |
 | `public_agent(slug)` | `GET /public/agents/{slug}` | nothing |
 | `public_agent_value_history(slug, range=None)` | `GET /public/agents/{slug}/value-history` | nothing |
 | `public_points_leaderboard(limit, offset)` | `GET /public/points/leaderboard` | nothing |
 | `resolve_referral(code)` | `GET /public/referral/{code}` | nothing |
 | `agents_activity()` | `GET /public/agents-activity` | nothing |
 | `ponkillionaires_week()` | `GET /public/ponkillionaires/week` | nothing |
-| `x_feed(before=, since=, limit=, category=, ca_only=, min_followers=, account=, q=)` | `GET /public/x/feed` | nothing |
-| `x_trending(window=None, limit=None)` | `GET /public/x/trending?window=1h\|24h` | nothing |
-| `x_callers(days=None)` | `GET /public/x/callers` | nothing |
-| `x_token(mint)` | `GET /public/x/token/{mint}` | nothing |
+| `x_feed(before=, since=, limit=, category=, ca_only=, min_followers=, account=, q=, first_calls=, chains=)` | `GET /public/x/feed` | nothing |
+| `x_trending(window=None, limit=None, chains=None)` | `GET /public/x/trending?window=1h\|24h` | nothing |
+| `x_callers(days=None, chains=None)` | `GET /public/x/callers` | nothing |
+| `x_token(mint)` (a Solana mint or an EVM token id) | `GET /public/x/token/{mint}` | nothing |
 | `x_accounts()` | `GET /public/x/accounts` | nothing |
 | `x_status()` | `GET /public/x/status` | nothing |
-| `wallets_feed(before=, limit=, kind=, min_usd=, token=, wallet=)` | `GET /public/wallets/feed` | nothing |
+| `wallets_feed(before=, limit=, kind=, min_usd=, token=, wallet=, chains=)` | `GET /public/wallets/feed` | nothing |
 | `wallets_defaults()` | `GET /public/wallets/defaults` | nothing |
 | `wallets_status()` | `GET /public/wallets/status` | nothing |
-| `wallet_activity(address, before=, limit=, kind=, min_usd=, token=)` | `GET /public/wallets/{address}/activity` | nothing |
+| `wallet_activity(address, before=, limit=, kind=, min_usd=, token=, chains=)` | `GET /public/wallets/{address}/activity` | nothing |
+| `feed_prefs()` | `GET /v1/feed-prefs` | `read` |
+| `set_feed_prefs(chains)` | `PATCH /v1/feed-prefs` | `trade` |
 | `whoami()` | `GET /v1/me` | `read` |
 | `list_agents()` | `GET /v1/agents` | `read` |
 | `get_agent(id)` | `GET /v1/agents/{id}` | `read` |
@@ -492,8 +560,14 @@ Autonomous agents charge a performance fee on realized yield, and a one-time
 activation fee of 1% of the capital of an agent's first open (0.5% for a wallet
 holding 1,000,000 $PONK), paid inside the transaction that opens it: a failed
 open pays nothing, and recenters, re-opens, compounds and top-ups never pay it
-again. A referrer earns 0.25% of that capital out of the fee. There is no
-charge for a key, for a call, for depositing or for withdrawing.
+again. A referrer earns 0.25% of that capital out of the fee. A withdrawal or
+an exit from an agent that has opened a position pays an exit fee of 1% of
+what leaves (0.5% for a wallet holding 1,000,000 $PONK), taken in kind in the
+same run, on every chain, for agents created in the app and through the API
+alike; an agent that never opened a position pays none
+(`ponk.EXIT_FEE_BPS`, `ponk.EXIT_FEE_HOLDER_BPS`, `agent.exit_fee_bps`,
+`perks.exit_fee`). There is no charge for a key, for a call or for
+depositing.
 
 **An agent created through this API pays the API rate, not the app rate.** The
 rate is fixed when the agent is created and follows that agent for its whole

@@ -52,6 +52,23 @@ fn the_leaderboard_decodes_with_usd_as_strings() {
     assert_eq!(r.copy.strategy.as_deref(), Some("bin_rebalancer"));
 }
 
+/// apps/api/src/routes/agent_public.rs `LeaderboardView` under
+/// `?chains=bsc`: one BNB Chain row, ranked from 1, the totals of that row,
+/// and `chains` echoing the filter (0.16.0).
+#[test]
+fn the_leaderboard_decodes_a_bsc_row_under_a_chain_filter() {
+    let b: Leaderboard = serde_json::from_str(&fixture("leaderboard_bsc.json")).unwrap();
+    assert_eq!(b.chains, ["bsc"]);
+    let r = &b.ranked[0];
+    assert_eq!((r.rank, r.chain.as_deref(), r.dex.as_deref()), (Some(1), Some("bsc"), Some("pancakeswap_v3")));
+    // On an EVM row the pool and both tokens are CAIP ids.
+    for id in [&r.pool_address, &r.token_x_mint, &r.token_y_mint] {
+        assert_eq!(ponk::evm::parse_evm_id(id.as_deref().unwrap()).unwrap().chain, "bsc");
+    }
+    assert_eq!(b.totals.unwrap()["pnl_usd"], "6.20");
+    assert_eq!(r.pnl_usd.as_deref(), Some("6.20"));
+}
+
 /// apps/api/src/routes/agent_public.rs `PublicAgentView`.
 #[test]
 fn a_public_agent_decodes_across_venues() {

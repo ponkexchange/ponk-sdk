@@ -88,6 +88,12 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 from ._version import __version__
 from .errors import PonkError, PonkTransportError, error_from_response
 from . import evm as _evm
+from .models import (  # 0.16.0
+    CallersBoard,
+    CallsFeed,
+    FeedPrefs,
+    WeeklyRecap,
+)
 from .models import (  # 0.15.0
     EvmBoard,
     EvmChains,
@@ -455,16 +461,28 @@ class PonkClient:
             self._request("GET", "/public/ponk/perks/{0}".format(_seg(wallet_address)))
         )
 
-    def leaderboard(self, window: Optional[str] = None) -> Leaderboard:
-        """`GET /public/agents-leaderboard?window=`. Top Ponkillionaires.
+    def leaderboard(
+        self, window: Optional[str] = None, *, chains: Optional[Sequence[str]] = None
+    ) -> Leaderboard:
+        """`GET /public/agents-leaderboard?window=&chains=`. Top Ponkillionaires.
 
         Every agent its owner chose to share, ranked against holding. `window`
         is `24h`, `7d`, `30d` or `all` (server default when omitted). No key
         needed; rate limited per IP. Each row carries `copy`, so a row can be
         copied with `copy_agent` without a second read.
+
+        `chains` is a list of chain ids (`solana`, `ethereum`, `arbitrum`,
+        `base`, `bsc`, `robinhood`) or `"all"`; `None` is every chain. Under a
+        filter the rows on other chains are dropped, `rank` is numbered again
+        from 1 and `totals` are the totals of the rows kept. The answer's
+        `chains` says which chains it covers.
         """
         return Leaderboard.from_dict(
-            self._request("GET", "/public/agents-leaderboard", params={"window": window})
+            self._request(
+                "GET",
+                "/public/agents-leaderboard",
+                params={"window": window, "chains": _chains_param(chains)},
+            )
         )
 
     def public_agent(self, slug: str) -> PublicAgent:
@@ -719,6 +737,7 @@ class PonkClient:
         account: Optional[str] = None,
         q: Optional[str] = None,
         first_calls: bool = False,
+        chains: Optional[Sequence[str]] = None,
     ) -> XFeed:
         """`GET /public/x/feed`. The curated X accounts' posts and events, newest first.
 
@@ -728,6 +747,10 @@ class PonkClient:
         of directory categories (`x_accounts().categories`). `ca_only` keeps
         posts that name a token. `account` is one handle, `q` a text search.
         `first_calls` keeps only posts that were the first call of a token.
+
+        `chains` (a list of chain ids, or `"all"`; `None` is every chain)
+        keeps a post that names a token on one of them; a post that names no
+        token is always kept. Each token a post names carries its `chain`.
         """
         return XFeed.from_dict(
             self._request(
@@ -743,28 +766,45 @@ class PonkClient:
                     "account": account,
                     "q": q,
                     "first": "1" if first_calls else None,
+                    "chains": _chains_param(chains),
                 },
             )
         )
 
-    def x_trending(self, window: Optional[str] = None, limit: Optional[int] = None) -> XTrending:
-        """`GET /public/x/trending?window=&limit=`. Tokens trending on X.
+    def x_trending(
+        self,
+        window: Optional[str] = None,
+        limit: Optional[int] = None,
+        *,
+        chains: Optional[Sequence[str]] = None,
+    ) -> XTrending:
+        """`GET /public/x/trending?window=&limit=&chains=`. Tokens trending on X.
 
         `window` is `1h` (default) or `24h`; `limit` is 1 to 50 (default 25).
         Each token carries its first caller and the multiple since that call.
+        `chains` (a list of chain ids, or `"all"`) ranks over mentions on
+        those chains only; `None` is every chain.
         """
         return XTrending.from_dict(
-            self._request("GET", "/public/x/trending", params={"window": window, "limit": limit})
+            self._request(
+                "GET",
+                "/public/x/trending",
+                params={"window": window, "limit": limit, "chains": _chains_param(chains)},
+            )
         )
 
-    def x_callers(self, days: Optional[int] = None) -> XCallers:
-        """`GET /public/x/callers?days=`. The caller leaderboard, up to 50 accounts.
+    def x_callers(
+        self, days: Optional[int] = None, *, chains: Optional[Sequence[str]] = None
+    ) -> XCallers:
+        """`GET /public/x/callers?days=&chains=`. The caller leaderboard, up to 50 accounts.
 
         `days` is 1 to 90 (default 30). Ranked by median 24h multiple, then by
-        calls.
+        calls. Under `chains` a caller's record is their calls on those chains.
         """
         return XCallers.from_dict(
-            self._request("GET", "/public/x/callers", params={"days": days})
+            self._request(
+                "GET", "/public/x/callers", params={"days": days, "chains": _chains_param(chains)}
+            )
         )
 
     def calls_feed(
@@ -774,19 +814,54 @@ class PonkClient:
         wallet: Optional[str] = None,
         before: Optional[str] = None,
         limit: Optional[int] = None,
-    ) -> Any:
-        """`GET /public/calls`. The Ponk Calls feed, newest first. `source` is
-        `ponk` (default), `x` or `all`; `before` an RFC 3339 cursor. Public."""
-        return self._request(
-            "GET",
-            "/public/calls",
-            params={"source": source, "mint": mint, "wallet": wallet, "before": before, "limit": limit},
+        *,
+        chains: Optional[Sequence[str]] = None,
+    ) -> CallsFeed:
+        """`GET /public/calls`. The Ponk Calls feed, newest first. Public.
+
+        `source` is `ponk` (default), `x` or `all`; `before` an RFC 3339
+        cursor (the previous page's `next_before`). `mint` keeps one token: a
+        Solana mint or an EVM token id (`ponk.evm.token_id`,
+        `eip155:<chain id>:0x...`). `wallet` keeps one caller. `chains` (a
+        list of chain ids, or `"all"`; `None` is every chain) keeps calls on
+        tokens on those chains. Each call carries its `chain`.
+
+        Returns `CallsFeed` (0.16.0; earlier versions returned the decoded
+        body). `raw_json` keeps the whole body.
+        """
+        return CallsFeed.from_dict(
+            self._request(
+                "GET",
+                "/public/calls",
+                params={
+                    "source": source,
+                    "mint": mint,
+                    "wallet": wallet,
+                    "before": before,
+                    "limit": limit,
+                    "chains": _chains_param(chains),
+                },
+            )
         )
 
-    def callers_board(self, days: Optional[int] = None, source: Optional[str] = None) -> Any:
+    def callers_board(
+        self,
+        days: Optional[int] = None,
+        source: Optional[str] = None,
+        *,
+        chains: Optional[Sequence[str]] = None,
+    ) -> CallersBoard:
         """`GET /public/calls/callers`. The callers board, ranked by median 24h
-        multiple, then calls. Public."""
-        return self._request("GET", "/public/calls/callers", params={"days": days, "source": source})
+        multiple, then calls. Public. Under `chains` a caller's record is their
+        calls on those chains. Returns `CallersBoard` (0.16.0; earlier
+        versions returned the decoded body)."""
+        return CallersBoard.from_dict(
+            self._request(
+                "GET",
+                "/public/calls/callers",
+                params={"days": days, "source": source, "chains": _chains_param(chains)},
+            )
+        )
 
     def caller(self, who: str) -> Any:
         """`GET /public/calls/caller/{who}`. One caller's profile and calls. Public."""
@@ -807,19 +882,38 @@ class PonkClient:
         )
 
     def top_calls(
-        self, days: Optional[int] = None, limit: Optional[int] = None, source: Optional[str] = None
+        self,
+        days: Optional[int] = None,
+        limit: Optional[int] = None,
+        source: Optional[str] = None,
+        *,
+        chains: Optional[Sequence[str]] = None,
     ) -> TopCalls:
         """`GET /public/calls/top`. The best calls of the last `days` (default 7,
         up to 90), ranked by their multiple since the call. `source` is `ponk`
-        (default), `x` or `all`."""
+        (default), `x` or `all`. `chains` (a list of chain ids, or `"all"`)
+        keeps calls on tokens on those chains."""
         return TopCalls.from_dict(
-            self._request("GET", "/public/calls/top", params={"days": days, "limit": limit, "source": source})
+            self._request(
+                "GET",
+                "/public/calls/top",
+                params={
+                    "days": days,
+                    "limit": limit,
+                    "source": source,
+                    "chains": _chains_param(chains),
+                },
+            )
         )
 
     def x_token(self, mint: str) -> XToken:
         """`GET /public/x/token/{mint}`. Every tracked mention of one token.
 
-        Raises `PonkBadRequestError` for a string that is not a Solana address.
+        `mint` is a Solana mint or an EVM token id
+        (`ponk.evm.token_id("bsc", "0x...")`); the colons of an EVM id are
+        percent-encoded in the path. The answer carries the token's `chain`
+        and, on an EVM token, `price_source`. Raises `PonkBadRequestError`
+        for a string that is not a token id.
         """
         return XToken.from_dict(
             self._request("GET", "/public/x/token/{0}".format(_seg(mint)))
@@ -844,13 +938,17 @@ class PonkClient:
         min_usd: Optional[float] = None,
         token: Optional[str] = None,
         wallet: Optional[str] = None,
+        chains: Optional[Sequence[str]] = None,
     ) -> WalletFeed:
         """`GET /public/wallets/feed`. The curated wallets' swaps and LP actions, merged.
 
         `before` is the previous page's `next_before`. `kind` is a
         comma-separated filter: `buy`, `sell`, `swap`, `lp` (every liquidity
         kind) or any single kind. `min_usd` drops smaller rows, `token` keeps
-        rows touching one mint, `wallet` keeps one wallet.
+        rows touching one token (a Solana mint or an EVM token id), `wallet`
+        keeps one wallet (a Solana address or an EVM `0x` address). `chains`
+        (a list of chain ids, or `"all"`; `None` is every chain) keeps events
+        on those chains. Each event carries its `chain` and `explorer_url`.
         """
         return WalletFeed.from_dict(
             self._request(
@@ -863,13 +961,15 @@ class PonkClient:
                     "minUsd": min_usd,
                     "token": token,
                     "wallet": wallet,
+                    "chains": _chains_param(chains),
                 },
             )
         )
 
     def wallet_pnl(self, address: str) -> WalletPnl:
         """`GET /public/wallets/{address}/pnl`. Trading P&L per token for any
-        wallet, from its swaps. No key needed."""
+        Solana wallet, from its swaps. No key needed. An EVM address answers
+        422 (`PonkUnprocessableError`): its moves are on `wallet_activity`."""
         return WalletPnl.from_dict(
             self._request("GET", "/public/wallets/{0}/pnl".format(_seg(address)))
         )
@@ -896,13 +996,17 @@ class PonkClient:
         kind: Optional[str] = None,
         min_usd: Optional[float] = None,
         token: Optional[str] = None,
+        chains: Optional[Sequence[str]] = None,
     ) -> WalletActivity:
         """`GET /public/wallets/{address}/activity`. Any wallet's recent swaps and LP actions.
 
-        A wallet the tracker already stores is served from there
-        (`mode == "tracked"`, pageable with `before`). Any other wallet is read
-        from chain for this request (`mode == "live"`, one page). Rate limited
-        per IP. Filters as in `wallets_feed`.
+        `address` is a Solana address or an EVM `0x` address (one wallet on
+        all five EVM chains). A wallet the tracker already stores is served
+        from there (`mode == "tracked"`, pageable with `before`). Any other
+        Solana wallet is read from chain for this request (`mode == "live"`,
+        one page). An EVM wallet is read once it is tracked: untracked it
+        answers `mode == "untracked"` with no items. Rate limited per IP.
+        Filters, `chains` included, as in `wallets_feed`.
         """
         return WalletActivity.from_dict(
             self._request(
@@ -914,6 +1018,7 @@ class PonkClient:
                     "kind": kind,
                     "minUsd": min_usd,
                     "token": token,
+                    "chains": _chains_param(chains),
                 },
             )
         )
@@ -1887,6 +1992,13 @@ class PonkClient:
         pool: Optional[str] = None,
         stake: Optional[bool] = None,
         public: Optional[bool] = None,
+        shape: Optional[str] = None,
+        ranges: Any = None,
+        amount_usd: Optional[float] = None,
+        range_pct: Optional[float] = None,
+        side: Optional[str] = None,
+        width_ticks: Optional[int] = None,
+        agent: Optional[str] = None,
     ) -> EvmOpenCost:
         """`GET /v1/evm/{chain}/open-cost?dex=&pool=&stake=`. What the first open costs.
 
@@ -1901,6 +2013,22 @@ class PonkClient:
         `stake` defaults to true on the server where the venue has a farm,
         because a staked open costs more gas. A venue that does not run on
         `chain` raises `PonkUnprocessableError`.
+
+        `exit_fee_bps` is the exit fee: 100 (1% of what an agent that has
+        opened a position sends you, taken in kind), 50 for a wallet holding
+        1,000,000 PONK, 0 while the fee is switched off.
+
+        A SHAPE QUOTE: `shape` (one of `ponk.evm.SHAPES`), with `ranges`
+        (`"auto"` or 1 to 7), `amount_usd` (the deposit), `range_pct`
+        (PERCENT either side of the price, 1 to 50, default 5), `side`
+        (`below` or `above` for a one-sided band), `width_ticks` (an existing
+        position's width) or `agent` (one of your agents: its live position's
+        width and value), adds `shape` to the answer: the count of ranges the
+        agent would open now (`ranges`, `ranges_asked`), whether this venue
+        holds a shape as several ranges (`several_ranges`), the gas of
+        opening and later closing each count (`entry_cost`) against the 3%
+        limit, and a `note`. Read where shapes are switched on; otherwise the
+        answer carries no `shape`.
         """
         if public is None:
             public = not self.api_key
@@ -1912,6 +2040,13 @@ class PonkClient:
                     "dex": dex,
                     "pool": pool,
                     "stake": None if stake is None else ("true" if stake else "false"),
+                    "shape": shape,
+                    "ranges": None if ranges is None else str(ranges),
+                    "amount_usd": amount_usd,
+                    "range_pct": range_pct,
+                    "side": side,
+                    "width_ticks": width_ticks,
+                    "agent": agent,
                 },
             )
         )
@@ -1931,6 +2066,8 @@ class PonkClient:
         config: Optional[Mapping[str, Any]] = None,
         stake: Optional[bool] = None,
         withdrawal_address: Optional[str] = None,
+        shape: Optional[str] = None,
+        shape_ranges: Any = None,
     ) -> Agent:
         """`POST /v1/agents`. Create an agent on an EVM chain.
 
@@ -1953,6 +2090,26 @@ class PonkClient:
         * Pass `config` to send your own strategy config instead, exactly as
           for a Solana tick venue (a range is `range_pct: {down_pct, up_pct}`).
           Degen Mode (`entry_agent`) is not offered on an EVM venue.
+
+        A ONE-SIDED range is one side at 0: `up_pct=0` puts the whole band
+        below the price, `down_pct=0` above it.
+
+        `shape` is the liquidity shape on a range venue: `spot` (one even
+        range, the default), `curve` (heaviest at the price), `bid_ask`
+        (heaviest at the edges) or `spot_bid_ask` (half of each); it is
+        written to the config as `liquidity_shape` (`ponk.evm.with_shape`).
+        On Uniswap v3 on Arbitrum, Ethereum and Robinhood Chain, Uniswap v4 on
+        Arbitrum and Ethereum, PancakeSwap v3 and Infinity CL on BNB Chain and
+        Aerodrome Slipstream on Base (`ponk.evm.SHAPE_VENUES`) a shape other
+        than Spot opens as several ranges managed as one position:
+        `shape_ranges` is `"auto"` (the default with a shape: the count is
+        chosen from live gas at the open so that opening and later closing
+        stays within 3% of the deposit) or 1 to 7. On any other range venue
+        the agent keeps the shape and opens one range. A shaped PancakeSwap
+        v3 or Slipstream position may be held unstaked where staked shapes
+        are not on; the agent's answer says which. `evm_open_cost` with
+        `shape` and `amount_usd` quotes the count and its gas before you
+        create. A full-range venue takes no shape: `ValueError` here.
 
         `stake=True` stakes the position for farm rewards: CAKE on
         `pancakeswap_v3`, AERO on Aerodrome. On Aerodrome a staked position
@@ -1986,6 +2143,19 @@ class PonkClient:
                 "chain must be one of {0}, got {1!r}. For a Solana agent use "
                 "create_agent.".format(", ".join(_evm.EVM_CHAINS), chain)
             )
+        shaped = shape is not None or shape_ranges is not None
+        if shaped and _evm.is_full_range_venue(dex):
+            raise ValueError(
+                "{0} is a full-range venue: a position there is a share of the whole pool "
+                "and takes no shape".format(dex)
+            )
+        if shape_ranges is not None and not _evm.is_shape_venue(dex, chain):
+            raise ValueError(
+                "{0} on {1} opens one range, so shape_ranges does not apply there. "
+                "Shapes open as several ranges on Uniswap v3 on Arbitrum, Ethereum and "
+                "Robinhood Chain, Uniswap v4 on Arbitrum and Ethereum, PancakeSwap v3 and "
+                "Infinity CL on BNB Chain, and Aerodrome Slipstream on Base.".format(dex, chain)
+            )
         if config is not None:
             if down_pct is not None or up_pct is not None:
                 raise ValueError("pass a range as down_pct and up_pct, or your own config, not both")
@@ -2018,6 +2188,8 @@ class PonkClient:
                 )
             strategy = strategy or "bin_rebalancer"
             built = _evm.range_config(down_pct, up_pct, strategy=strategy, stake=stake)
+        if shaped:
+            built = _evm.with_shape(built, shape, shape_ranges=shape_ranges, strategy=strategy)
         return self.create_agent(
             name=name,
             wallet_address=wallet_address,
@@ -2040,7 +2212,13 @@ class PonkClient:
         """
         return self.update_config(agent_id, _evm.stake_config(stake))
 
-    def copilot_evm_plan(self, text: str) -> EvmPlan:
+    def copilot_evm_plan(
+        self,
+        text: str,
+        *,
+        shape: Optional[str] = None,
+        one_sided: Optional[str] = None,
+    ) -> EvmPlan:
         """`POST /copilot/evm/plans`. Plan one sentence that names an EVM chain.
 
             plan = ponk.copilot_evm_plan("$200 in the top 5 bnb pools")
@@ -2056,13 +2234,30 @@ class PonkClient:
         amount goes in front of each chain (`$60 in bnb and $40 in solana`).
         Amounts are DOLLARS ONLY: SOL, ETH or BNB amounts are refused.
 
+        A shape is part of the sentence (`"$200 in an eth pool, curve
+        shape"`, `"..., one sided below"`), or pass `shape` (`spot`, `curve`
+        or `bid_ask`, `ponk.evm.PLAN_SHAPES`) and `one_sided` (`below` or
+        `above`) and they are appended in the grammar's own words. Curve and
+        Bid-Ask open as several ranges managed as one position on the venues
+        in `ponk.evm.SHAPE_VENUES`; with no venue named the plan ranks that
+        chain's pools of that venue. Each leg then carries `shape`
+        (`EvmLegShape`): its kind, the ranges at current gas, the gas of
+        opening and later closing them against the 3% limit, and a sentence.
+        On any other venue the leg opens one range and says where the shape
+        opens as several.
+
         Answers at once and creates nothing. A sentence it cannot plan comes
         back with `state` `refused` and `refusal` (`code`, `message`), not as
         an exception. Plans last 15 minutes. Needs `session_token` or an API
         key; `fees` on the answer is the fee sentence for that caller.
         """
         return EvmPlan.from_dict(
-            self._request("POST", "/copilot/evm/plans", body={"text": text}, session_only=True)
+            self._request(
+                "POST",
+                "/copilot/evm/plans",
+                body={"text": _evm_plan_sentence(text, shape, one_sided)},
+                session_only=True,
+            )
         )
 
     def copilot_evm_get_plan(self, plan_id: str) -> EvmPlan:
@@ -3429,14 +3624,26 @@ class PonkClient:
     # -- account: calls, push, cards, referral, privacy, logs (0.7.0) --------
 
     def call_preview(self, mint: str) -> CallPreview:
-        """`GET /v1/calls/preview?mint=`. What a call on this token would attach."""
+        """`GET /v1/calls/preview?mint=`. What a call on this token would attach.
+
+        `mint` is a Solana mint, an EVM token id (`eip155:<chain id>:0x...`)
+        or an EVM pool id; a pool resolves to its token (the side that is not
+        the gas coin or a stable) and the answer's `mint` is that token's id.
+        The answer carries `chain` and, on an EVM token, `price_source`.
+        """
         return CallPreview.from_dict(self._request("GET", "/v1/calls/preview", params={"mint": mint}))
 
     def post_call(self, mint: str, text: str) -> Call:
         """`POST /v1/calls`. Post a Ponk Call on any token. The server reads your
         position from chain: holding it earns the call the Holder mark, and no
         position is needed to call. One call per token every 6 hours. Needs a
-        `trade` key."""
+        `trade` key.
+
+        `mint` takes the same three forms as `call_preview`: a Solana mint,
+        an EVM token id or an EVM pool id (the pool's token is called). A call
+        on an EVM token is posted by hand (`auto` is false), and its Holder
+        mark is your own EVM agents whose pool holds the token. A gas coin or
+        a dollar stable is refused (`PonkBadRequestError`)."""
         return Call.from_dict(self._request("POST", "/v1/calls", body={"mint": mint, "text": text}))
 
     def delete_call(self, call_id: str) -> Any:
@@ -3566,9 +3773,39 @@ class PonkClient:
         deleted. Needs a `trade` key."""
         return LogsCleared.from_dict(self._request("DELETE", "/v1/logs"))
 
-    def weekly_recap(self) -> Dict[str, Any]:
-        """`GET /v1/recap/weekly`. The weekly recap card's figures."""
-        return self._request("GET", "/v1/recap/weekly")
+    def weekly_recap(self) -> WeeklyRecap:
+        """`GET /v1/recap/weekly`. The weekly recap card's figures: the week's
+        agents, summed P&L and fees, the best agent (with its `chain`) and
+        your rank in the week's race across every chain. Returns
+        `WeeklyRecap` (0.16.0; earlier versions returned the decoded body)."""
+        return WeeklyRecap.from_dict(self._request("GET", "/v1/recap/weekly"))
+
+    def feed_prefs(self) -> FeedPrefs:
+        """`GET /v1/feed-prefs`. The account's saved chain filter.
+
+        One choice per account, used by every signed-in board and tracker read
+        that names no `chains`. `chains` lists the chain ids it covers and
+        `all` is true when that is every chain. A `read` key is enough.
+        """
+        return FeedPrefs.from_dict(self._request("GET", "/v1/feed-prefs"))
+
+    def set_feed_prefs(self, chains: Union[str, Sequence[str], None]) -> FeedPrefs:
+        """`PATCH /v1/feed-prefs`. Save the account's chain filter.
+
+        `chains` is a list of chain ids (`["solana", "bsc"]`) or `"all"`;
+        `None` or an empty list is every chain. `bnb` is sent as `bsc`; an id
+        outside `ponk.evm.CHAINS` raises `ValueError` before a request. Needs
+        a `trade` key.
+        """
+        if chains is None or (not isinstance(chains, str) and len(chains) == 0):
+            body_chains: Any = "all"
+        elif isinstance(chains, str) and chains.strip().lower() == "all":
+            body_chains = "all"
+        else:
+            body_chains = _chain_ids(chains)
+        return FeedPrefs.from_dict(
+            self._request("PATCH", "/v1/feed-prefs", body={"chains": body_chains})
+        )
 
     def my_ponkillionaires(self) -> Dict[str, Any]:
         """`GET /v1/ponkillionaires`. Your standing in this week's race."""
@@ -3751,6 +3988,66 @@ def _preset_body(name: str, overrides: Mapping[str, Any], dex: Optional[str]) ->
 
 def _evm_prefix(public: bool) -> str:
     return "/public/evm" if public else "/v1/evm"
+
+
+_PLAN_SHAPE_WORD = {"spot": "spot", "curve": "curve", "bid_ask": "bid-ask"}
+
+
+def _evm_plan_sentence(text: str, shape: Optional[str], one_sided: Optional[str]) -> str:
+    """The plan sentence with a shape and a side appended in the grammar's
+    own words: ", curve shape", ", one sided below"."""
+    out = text.rstrip().rstrip(".")
+    if shape is not None:
+        word = _PLAN_SHAPE_WORD.get(shape)
+        if word is None:
+            raise ValueError(
+                "shape is one of {0}, got {1!r}".format(", ".join(_evm.PLAN_SHAPES), shape)
+            )
+        out += ", {0} shape".format(word)
+    if one_sided is not None:
+        if one_sided not in _evm.ONE_SIDED:
+            raise ValueError("one_sided is below or above, got {0!r}".format(one_sided))
+        out += ", one sided {0}".format(one_sided)
+    return out if (shape is not None or one_sided is not None) else text
+
+
+def _chain_ids(chains: Union[str, Sequence[str]]) -> List[str]:
+    """Chain ids as the API names them. `bnb` is `bsc`. Raises `ValueError`
+    for an id outside `ponk.evm.CHAINS`, before a request is sent."""
+    items = [chains] if isinstance(chains, str) else list(chains)
+    out: List[str] = []
+    for item in items:
+        if not isinstance(item, str):
+            raise ValueError("a chain id is a string, got {0!r}".format(item))
+        for part in item.split(","):
+            word = part.strip().lower()
+            if not word:
+                continue
+            if word == "bnb":
+                word = "bsc"
+            if word not in _evm.CHAINS:
+                raise ValueError(
+                    "unknown chain {0!r}: chains are {1}, or \"all\"".format(
+                        part.strip(), ", ".join(_evm.CHAINS)
+                    )
+                )
+            if word not in out:
+                out.append(word)
+    return out
+
+
+def _chains_param(chains: Union[str, Sequence[str], None]) -> Optional[str]:
+    """The `chains` query value: a comma list of chain ids, or `all`. `None`
+    sends nothing, so a public read covers every chain and a signed-in read
+    the account's saved filter (`feed_prefs`)."""
+    if chains is None:
+        return None
+    if isinstance(chains, str) and chains.strip().lower() == "all":
+        return "all"
+    ids = _chain_ids(chains)
+    if not ids:
+        return None
+    return ",".join(ids)
 
 
 def _seg(value: str) -> str:

@@ -125,10 +125,14 @@ mod models;
 pub mod webhooks;
 
 pub use client::{
-    Client, ClientBuilder, SocialStream, WalletFeedQuery, XFeedQuery, DEFAULT_BASE_URL,
-    DEFAULT_FUND_TIMEOUT, DEFAULT_TIMEOUT, JUPITER_SESSION_HEADER,
+    CallsFeedQuery, Client, ClientBuilder, OpenCostQuery, SocialStream, WalletFeedQuery,
+    XFeedQuery, DEFAULT_BASE_URL, DEFAULT_FUND_TIMEOUT, DEFAULT_TIMEOUT, JUPITER_SESSION_HEADER,
 };
 pub use error::{ApiError, Error, ErrorKind};
+pub use models::{
+    CallersBoard, CallsFeed, EvmLegShape, FeedChains, FeedPrefs, RecapBestAgent, WalletEvmSource,
+    WeeklyRecap, XPostToken,
+};
 pub use models::{
     EvmBoard, EvmBoardStatus, EvmChain, EvmChains, EvmFarm, EvmFleet, EvmFleetAgent, EvmHook,
     EvmOpenCost, EvmPlan, EvmPlanAgent, EvmPlanAlternative, EvmPlanChain, EvmPlanDropped,

@@ -1,0 +1,77 @@
+{
+  "days": 7,
+  "calls": [
+    {
+      "source": "x",
+      "id": "x:bnbcaller:1856000000000000001:eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+      "account": {
+        "handle": "bnbcaller",
+        "screenName": "BnbCaller",
+        "name": "BNB Caller",
+        "avatarUrl": null,
+        "followers": 48210,
+        "category": "callers"
+      },
+      "postId": "1856000000000000001",
+      "url": "https://x.com/BnbCaller/status/1856000000000000001",
+      "text": "CAKE 0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82 send it",
+      "chain": "bsc",
+      "mint": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+      "symbol": "CAKE",
+      "at": "2026-11-12T07:30:00Z",
+      "priceUsd": 2.38,
+      "mcapUsd": null,
+      "priceNowUsd": 2.53,
+      "mcapNowUsd": null,
+      "multipleNow": 1.063,
+      "multiple1h": 1.02,
+      "multiple24h": null,
+      "peakMultiple": 1.063
+    },
+    {
+      "source": "ponk",
+      "id": "0190b2c3-d4e5-7f60-8a7b-8c9d0e1f2a3c",
+      "caller": {
+        "wallet": "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe",
+        "handle": "ponkdev",
+        "name": null,
+        "label": "@ponkdev",
+        "profileKey": "ponkdev",
+        "avatarVersion": null
+      },
+      "chain": "solana",
+      "priceSource": null,
+      "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+      "symbol": "BONK",
+      "text": "bonk into the weekend",
+      "at": "2026-11-12T08:00:00Z",
+      "priceUsd": 2.31e-05,
+      "mcapUsd": 1910000000.0,
+      "priceNowUsd": 2.44e-05,
+      "mcapNowUsd": 2017000000.0,
+      "multipleNow": 1.0563,
+      "multiple1h": 1.021,
+      "multiple24h": null,
+      "peakMultiple": 1.0563,
+      "peakAt": null,
+      "auto": false,
+      "status": "open",
+      "realizedPnlUsd": null,
+      "closedAt": null,
+      "attached": {
+        "heldRaw": "41000000000",
+        "heldDecimals": 5,
+        "heldUsd": 9.47,
+        "entry": null,
+        "lpPositions": 0,
+        "lpValueUsd": null,
+        "lpCostBasisUsd": null
+      }
+    }
+  ],
+  "chains": [
+    "solana",
+    "bsc"
+  ],
+  "computedAt": "2026-11-12T09:00:00Z"
+}

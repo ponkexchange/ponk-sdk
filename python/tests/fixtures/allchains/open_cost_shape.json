@@ -1,0 +1,55 @@
+{
+  "chain": "arbitrum",
+  "dex": "uniswap_v3",
+  "pool": "eip155:42161:0xc6962004f452be9203591991d15f6b388e09e8d0",
+  "native_symbol": "ETH",
+  "gas_wei": "82315437918268",
+  "gas_usd": "0.0560",
+  "reserve_wei": "52200000000000",
+  "min_open_wei": "452200000000000",
+  "native_usd": "3200.00",
+  "activation_fee_bps": 150,
+  "performance_fee_bps": 1500,
+  "exit_yield_fee_bps": 0,
+  "exit_swap_fee_bps": 20,
+  "exit_fee_bps": 100,
+  "shape": {
+    "chosen": 5,
+    "wanted": 5,
+    "ceiling": 7,
+    "reason": null,
+    "entry_cost_limit_pct": 3.0,
+    "usd_per_million_gas": 0.04,
+    "entry_cost": [
+      {
+        "ranges": 1,
+        "gas_units": 980000,
+        "usd": 0.04,
+        "pct": 0.0
+      },
+      {
+        "ranges": 3,
+        "gas_units": 2620000,
+        "usd": 0.1,
+        "pct": 0.01
+      },
+      {
+        "ranges": 5,
+        "gas_units": 4260000,
+        "usd": 0.17,
+        "pct": 0.02
+      }
+    ],
+    "kind": "curve",
+    "label": "Curve",
+    "several_ranges": true,
+    "ranges": 5,
+    "ranges_asked": 5,
+    "range_pct": 5.0,
+    "side": null,
+    "width_ticks": null,
+    "amount_usd": "1000.00",
+    "band_checked": true,
+    "note": "The count is chosen again from live gas when the agent opens."
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "id": "0190b2c3-d4e5-7f60-8a7b-8c9d0e1f2a3b",
+  "caller": {
+    "wallet": "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe",
+    "handle": "ponkdev",
+    "name": null,
+    "label": "@ponkdev",
+    "profileKey": "ponkdev",
+    "avatarVersion": null
+  },
+  "chain": "bsc",
+  "priceSource": "onchain_pool",
+  "mint": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+  "symbol": "CAKE",
+  "text": "cake reload",
+  "at": "2026-11-12T08:00:00Z",
+  "priceUsd": 2.41,
+  "mcapUsd": null,
+  "priceNowUsd": 2.53,
+  "mcapNowUsd": null,
+  "multipleNow": 1.0498,
+  "multiple1h": 1.012,
+  "multiple24h": null,
+  "peakMultiple": 1.0498,
+  "peakAt": null,
+  "auto": false,
+  "status": "open",
+  "realizedPnlUsd": null,
+  "closedAt": null,
+  "attached": {
+    "heldRaw": null,
+    "heldDecimals": null,
+    "heldUsd": null,
+    "entry": null,
+    "lpPositions": 1,
+    "lpValueUsd": 261.4,
+    "lpCostBasisUsd": 258.0
+  }
+}

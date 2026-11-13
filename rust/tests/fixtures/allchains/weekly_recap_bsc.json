@@ -1,0 +1,21 @@
+{
+  "week_start": "2026-11-09T00:00:00Z",
+  "week_end": "2026-11-16T00:00:00Z",
+  "complete": false,
+  "agents": 2,
+  "pnl_usd": 18.61,
+  "fees_usd": 52.65,
+  "best_agent": {
+    "id": "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b",
+    "name": "bnb usdt",
+    "chain": "bsc",
+    "dex": "pancakeswap_v3",
+    "pool_address": "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
+    "strategy": "bin_rebalancer",
+    "pnl_usd": 6.2
+  },
+  "rank": 7,
+  "ranked": 64,
+  "rank_reason": null,
+  "computed_at": "2026-11-12T09:00:00Z"
+}

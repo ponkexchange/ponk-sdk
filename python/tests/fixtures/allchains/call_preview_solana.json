@@ -1,0 +1,22 @@
+{
+  "chain": "solana",
+  "priceSource": null,
+  "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+  "symbol": "BONK",
+  "priceUsd": 2.44e-05,
+  "wallet": "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe",
+  "attached": {
+    "heldRaw": "41000000000",
+    "heldDecimals": 5,
+    "heldUsd": 9.47,
+    "entry": null,
+    "lpPositions": 0,
+    "lpValueUsd": null,
+    "lpCostBasisUsd": null
+  },
+  "hasPosition": true,
+  "positionUsd": 10.0,
+  "minPositionUsd": 10.0,
+  "clearsFloor": true,
+  "nextAllowedAt": null
+}

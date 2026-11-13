@@ -1,0 +1,22 @@
+{
+  "chain": "bsc",
+  "priceSource": "onchain_pool",
+  "mint": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+  "symbol": "CAKE",
+  "priceUsd": 2.53,
+  "wallet": "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe",
+  "attached": {
+    "heldRaw": null,
+    "heldDecimals": null,
+    "heldUsd": null,
+    "entry": null,
+    "lpPositions": 1,
+    "lpValueUsd": 261.4,
+    "lpCostBasisUsd": 258.0
+  },
+  "hasPosition": true,
+  "positionUsd": 261.4,
+  "minPositionUsd": 10.0,
+  "clearsFloor": true,
+  "nextAllowedAt": null
+}

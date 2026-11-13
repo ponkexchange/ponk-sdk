@@ -1,0 +1,117 @@
+{
+  "items": [
+    {
+      "key": "bsc:0x8f3a4b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90",
+      "chain": "bsc",
+      "explorerUrl": "https://bscscan.com/tx/0x8f3a4b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90",
+      "signature": "0x8f3a4b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90",
+      "kind": "lp_open",
+      "venue": "pancakeswap_v3",
+      "pool": "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
+      "position": "eip155:56:0x46a15b0b27311cedf172ab29e4f4766fbe7f4364:812044",
+      "tokenMint": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+      "legs": [
+        {
+          "mint": "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "symbol": "BNB",
+          "amount": "400000000000000000",
+          "decimals": 18,
+          "dir": "out",
+          "usd": 272.26
+        },
+        {
+          "mint": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+          "symbol": "USDT",
+          "amount": "270000000000000000000",
+          "decimals": 18,
+          "dir": "out",
+          "usd": 270.0
+        }
+      ],
+      "usd": 542.26,
+      "blockTime": "2026-11-12T08:10:00Z",
+      "seenAt": "2026-11-12T08:10:03Z",
+      "isBackfill": false,
+      "wallet": {
+        "address": "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+        "label": "bnb lp",
+        "emoji": null,
+        "color": null,
+        "source": "mine",
+        "agentSlug": null
+      }
+    },
+    {
+      "key": "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW",
+      "chain": "solana",
+      "explorerUrl": "https://solscan.io/tx/5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW",
+      "signature": "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW",
+      "kind": "buy",
+      "venue": "jupiter",
+      "pool": null,
+      "position": null,
+      "tokenMint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+      "legs": [
+        {
+          "mint": "So11111111111111111111111111111111111111112",
+          "symbol": "SOL",
+          "amount": "250000000",
+          "decimals": 9,
+          "dir": "out",
+          "usd": 37.5
+        },
+        {
+          "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+          "symbol": "BONK",
+          "amount": "1530000000000",
+          "decimals": 5,
+          "dir": "in",
+          "usd": 37.33
+        }
+      ],
+      "usd": 37.5,
+      "blockTime": "2026-11-12T08:05:00Z",
+      "seenAt": "2026-11-12T08:05:02Z",
+      "isBackfill": false,
+      "wallet": {
+        "address": "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe",
+        "label": "main",
+        "emoji": null,
+        "color": null,
+        "source": "mine",
+        "agentSlug": null
+      }
+    }
+  ],
+  "nextBefore": "2026-11-12T08:05:00Z",
+  "source": {
+    "state": "live",
+    "walletsFresh": 41,
+    "walletsTracked": 44,
+    "lastOkAt": "2026-11-12T08:59:30Z",
+    "evm": [
+      {
+        "chain": "bsc",
+        "state": "live",
+        "walletsTracked": 3,
+        "walletsRead": 3,
+        "lastOkAt": "2026-11-12T08:58:00Z",
+        "cadence": "webhook",
+        "pollMinutes": 5
+      },
+      {
+        "chain": "base",
+        "state": "starting",
+        "walletsTracked": 1,
+        "walletsRead": 0,
+        "lastOkAt": null,
+        "cadence": "poll",
+        "pollMinutes": 5
+      }
+    ]
+  },
+  "chains": [
+    "solana",
+    "bsc"
+  ]
+}

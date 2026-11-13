@@ -24,6 +24,14 @@ from decimal import Decimal
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Type, TypeVar
 
 __all__ = [
+    "CallersBoard",
+    "CallsFeed",
+    "EvmLegShape",
+    "FeedPrefs",
+    "RecapBestAgent",
+    "WalletEvmSource",
+    "WeeklyRecap",
+    "XPostToken",
     "EvmBoard",
     "EvmBoardStatus",
     "EvmChain",
@@ -629,9 +637,14 @@ class PonkPerks(Model):
     #: The one-time activation fee on an agent's first open: 1%, or 0.5% for
     #: a wallet holding 1,000,000 $PONK.
     activation_fee: Optional[FeeRates] = None
+    #: The exit fee on what an agent that has opened a position sends its
+    #: owner, of the amount withdrawn: 1%, or 0.5% for a holder. An agent that
+    #: never opened a position pays none.
+    exit_fee: Optional[FeeRates] = None
 
     _ALIASES: ClassVar[Mapping[str, str]] = {
         "activation_fee": "activationFee",
+        "exit_fee": "exitFee",
         "threshold_ui": "thresholdUi",
         "balance_ui": "balanceUi",
         "shortfall_ui": "shortfallUi",
@@ -645,6 +658,7 @@ class PonkPerks(Model):
         "api_agent_fee": FeeRates,
         "non_custodial_agent_fee": FeeRates,
         "activation_fee": FeeRates,
+        "exit_fee": FeeRates,
     }
 
 
@@ -677,7 +691,12 @@ class Agent(Model):
     `managed_fee_bps` is the performance fee this agent's managed skim
     actually charges, before any $PONK holder discount, and
     `activation_fee_bps` the one-time fee on its first open: 1500 and 150 for
-    an agent a key created.
+    an agent a key created. `exit_fee_bps` is the exit fee on what the agent
+    sends you once it has opened a position, in basis points of the amount
+    withdrawn, before the $PONK holder rate: 100 (1%; 50 for a wallet holding
+    1,000,000 PONK), on agents created in the app and through the API alike.
+    It is 0 for a non-managed agent, and an agent that never opened a
+    position pays nothing whatever this says.
 
     `chain` is always present: `solana`, `ethereum`, `arbitrum`, `base`,
     `bsc` or `robinhood`. On an EVM agent `dex` is an EVM venue id,
@@ -704,6 +723,7 @@ class Agent(Model):
     origin: Optional[str] = None
     managed_fee_bps: Optional[int] = None
     activation_fee_bps: Optional[int] = None
+    exit_fee_bps: Optional[int] = None
     chain: Optional[str] = None
     waiting: Optional[Any] = None
     pool_warning: Optional[str] = None
@@ -1254,6 +1274,13 @@ class Withdrawal(Model):
     while something has not landed and the agent keeps retrying it by itself:
     calling again is safe and never pays twice) and `sentence`, what happened
     in plain words. `lamports` is 0.
+
+    THE EXIT FEE. A withdrawal or an exit from an agent that has opened a
+    position pays 1% of what leaves (0.5% for a wallet holding 1,000,000
+    PONK), taken in kind and sent to the treasury in the same run. On an EVM
+    agent `exit_fees` lists what the fee took, one entry per asset in base
+    units (what you did NOT receive; empty when none was taken), and
+    `exit_fee_bps` the rate the call ran under, `None` when it took none.
     """
 
     signature: Optional[str] = None
@@ -1269,11 +1296,14 @@ class Withdrawal(Model):
     chain: Optional[str] = None
     status: Optional[str] = None
     sentence: Optional[str] = None
+    exit_fees: List[EvmReceived] = field(default_factory=list)
+    exit_fee_bps: Optional[int] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {
         "pnl": ExitSnapshot,
         "exit_swaps": (ExitSwapLeg,),
         "received": (EvmReceived,),
+        "exit_fees": (EvmReceived,),
     }
 
 
@@ -1320,10 +1350,15 @@ class LeaderboardRow(Model):
     figures arrive as decimal strings and are `None` when the link hides USD
     or the figure cannot be priced; never read `None` as zero. Every other
     field the server sends is in `raw_json`.
+
+    `chain` is `solana` or the EVM chain the agent runs on. On an EVM row
+    `dex` is an EVM venue id and `pool_address`, `token_x_mint` and
+    `token_y_mint` are CAIP ids (`ponk.evm.parse_evm_id`).
     """
 
     rank: Optional[int] = None
     slug: Optional[str] = None
+    chain: Optional[str] = None
     dex: Optional[str] = None
     strategy: Optional[str] = None
     pool_address: Optional[str] = None
@@ -1361,11 +1396,15 @@ class Leaderboard(Model):
 
     `window` is `24h`, `7d`, `30d` or `all`. `totals` is the board header
     (shared, ranked, LPers, crews, verified, summed P&L and fees) as sent.
+    `chains` is the chain ids the answer covers: every chain unless the
+    request named some, and then `rank` is numbered from 1 over the rows kept
+    and `totals` are their totals.
     """
 
     ranked: List[LeaderboardRow] = field(default_factory=list)
     unranked: List[LeaderboardRow] = field(default_factory=list)
     window: Optional[str] = None
+    chains: List[str] = field(default_factory=list)
     min_days: Optional[int] = None
     min_hodl_usd: Optional[float] = None
     min_win_samples: Optional[int] = None
@@ -1816,8 +1855,42 @@ class XAccount(Model):
 
 @dataclass
 class XTokenRef(Model):
+    """A token an event's post named. `chain` is `solana`, the EVM chain the
+    token is on (then `mint` is its CAIP id), or `evm` for a bare address the
+    post did not place on one chain."""
+
     mint: Optional[str] = None
     symbol: Optional[str] = None
+    chain: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class XPostToken(Model):
+    """A token a post names, with how it has done since that post.
+
+    `chain` is `solana`, the EVM chain the token is on (then `mint` is its
+    CAIP id, `eip155:<chain id>:0x...`), or `evm` for a bare `0x` address
+    that is a token on several chains in a post that does not say which:
+    then `mint` is the bare address, `chains` lists the candidate chains, and
+    the price, first call and multiple are `None`. `chains` is empty
+    otherwise. The call figures are the reads taken when the post was seen
+    (`None` when it was seen too late), the others the read now; `multiple`
+    is price now over the call price.
+    """
+
+    mint: Optional[str] = None
+    symbol: Optional[str] = None
+    chain: Optional[str] = None
+    chains: List[str] = field(default_factory=list)
+    call_price_usd: Optional[float] = None
+    call_mcap_usd: Optional[float] = None
+    price_usd: Optional[float] = None
+    mcap_usd: Optional[float] = None
+    liquidity_usd: Optional[float] = None
+    multiple: Optional[float] = None
+    first_call: Optional[bool] = None
 
     _CAMEL: ClassVar[bool] = True
 
@@ -1843,8 +1916,9 @@ class XMetrics(Model):
 
 @dataclass
 class XPost(Model):
-    """A post on the feed. `tokens` are the Solana mints it names. `media`,
-    `quote` and `card` are passed through as decoded JSON."""
+    """A post on the feed. `tokens` are the tokens it names, each with its
+    chain (`XPostToken`). `media`, `quote` and `card` are passed through as
+    decoded JSON."""
 
     id: Optional[str] = None
     kind: Optional[str] = None
@@ -1860,7 +1934,7 @@ class XPost(Model):
     quote: Optional[Any] = None
     card: Optional[Any] = None
     metrics: Optional[XMetrics] = None
-    tokens: List[XTokenRef] = field(default_factory=list)
+    tokens: List[XPostToken] = field(default_factory=list)
     cashtags: List[str] = field(default_factory=list)
     deleted_at: Optional[str] = None
 
@@ -1868,7 +1942,7 @@ class XPost(Model):
     _NESTED: ClassVar[Mapping[str, Any]] = {
         "author": XAuthor,
         "metrics": XMetrics,
-        "tokens": (XTokenRef,),
+        "tokens": (XPostToken,),
     }
 
 
@@ -1940,11 +2014,13 @@ class XSource(Model):
 @dataclass
 class XFeed(Model):
     """A page of the X feed, newest first. Pass `next_before` back as `before`
-    for the next page; it is `None` at the end."""
+    for the next page; it is `None` at the end. `chains` is the chain ids the
+    page covers."""
 
     items: List[XFeedItem] = field(default_factory=list)
     next_before: Optional[str] = None
     source: Optional[XSource] = None
+    chains: List[str] = field(default_factory=list)
 
     _CAMEL: ClassVar[bool] = True
     _NESTED: ClassVar[Mapping[str, Any]] = {"items": (XFeedItem,), "source": XSource}
@@ -1970,9 +2046,13 @@ class XFirstCall(Model):
 @dataclass
 class XTrendingToken(Model):
     """A token trending on X. `multiple` is price now over the first call's
-    price, `None` without both."""
+    price, `None` without both. `chain` is `solana`, the EVM chain the token
+    is on, or `evm` with `chains` (the candidates) for an address the posts
+    did not place on one chain."""
 
     mint: Optional[str] = None
+    chain: Optional[str] = None
+    chains: List[str] = field(default_factory=list)
     symbol: Optional[str] = None
     name: Optional[str] = None
     accounts_1h: Optional[int] = None
@@ -1990,8 +2070,12 @@ class XTrendingToken(Model):
 
 @dataclass
 class XTrending(Model):
+    """Tokens trending on X. `chains` is the chain ids the ranking is
+    computed over."""
+
     window: Optional[str] = None
     tokens: List[XTrendingToken] = field(default_factory=list)
+    chains: List[str] = field(default_factory=list)
     computed_at: Optional[str] = None
 
     _CAMEL: ClassVar[bool] = True
@@ -2020,8 +2104,12 @@ class XCaller(Model):
 
 @dataclass
 class XCallers(Model):
+    """The X caller board. `chains` is the chain ids it is computed over: a
+    caller's record under one chain is their calls on it."""
+
     days: Optional[int] = None
     callers: List[XCaller] = field(default_factory=list)
+    chains: List[str] = field(default_factory=list)
     computed_at: Optional[str] = None
 
     _CAMEL: ClassVar[bool] = True
@@ -2046,9 +2134,16 @@ class XTokenMention(Model):
 
 @dataclass
 class XToken(Model):
-    """Every tracked mention of one token, its first call and its multiple since."""
+    """Every tracked mention of one token, its first call and its multiple since.
+
+    `chain` is `solana` or the EVM chain the token is on. `price_source` says
+    where an EVM token's price came from (`chainlink`, `onchain_pool`,
+    `coingecko`, `defillama` or `dexscreener`); `None` on Solana.
+    """
 
     mint: Optional[str] = None
+    chain: Optional[str] = None
+    price_source: Optional[str] = None
     symbol: Optional[str] = None
     accounts_1h: Optional[int] = None
     accounts_24h: Optional[int] = None
@@ -2127,9 +2222,19 @@ class WalletLeg(Model):
 
 @dataclass
 class WalletEvent(Model):
-    """A swap or liquidity action by a tracked wallet, with its signature."""
+    """A swap or liquidity action by a tracked wallet, with its signature.
+
+    `chain` is `solana` or the EVM chain the transaction is on, and
+    `explorer_url` the transaction on Solscan or that chain's explorer. On an
+    EVM event `signature` is the transaction hash, `pool`, `position`,
+    `token_mint` and each leg's `mint` are CAIP ids, and `venue` is an EVM
+    dex id (`uniswap_v3`, `pancakeswap_infinity_cl`, `aerodrome_slipstream`,
+    ...) or `other`.
+    """
 
     key: Optional[str] = None
+    chain: Optional[str] = None
+    explorer_url: Optional[str] = None
     signature: Optional[str] = None
     kind: Optional[str] = None
     venue: Optional[str] = None
@@ -2148,24 +2253,55 @@ class WalletEvent(Model):
 
 
 @dataclass
-class WalletSource(Model):
-    """The chain reader's state: `live`, `slowed` or `starting`."""
+class WalletEvmSource(Model):
+    """The wallet reader's state on one EVM chain.
 
+    `state` is `live`, `slowed` or `starting`. `wallets_tracked` is the
+    wallets carried on the chain and `wallets_read` those read at least once.
+    `cadence` is `webhook` when the provider pushes the chain's activity
+    (events in seconds) or `poll` when the tracker reads on a timer, every
+    `poll_minutes` for a wallet with alerts on.
+    """
+
+    chain: Optional[str] = None
     state: Optional[str] = None
-    wallets_fresh: Optional[int] = None
     wallets_tracked: Optional[int] = None
+    wallets_read: Optional[int] = None
     last_ok_at: Optional[str] = None
+    cadence: Optional[str] = None
+    poll_minutes: Optional[int] = None
 
     _CAMEL: ClassVar[bool] = True
 
 
 @dataclass
+class WalletSource(Model):
+    """The chain reader's state: `live`, `slowed` or `starting`.
+
+    `evm` is one entry per EVM chain the tracker reads, BNB Chain first. It
+    is empty while EVM wallets are switched off, so offer a chain only when
+    it is listed.
+    """
+
+    state: Optional[str] = None
+    wallets_fresh: Optional[int] = None
+    wallets_tracked: Optional[int] = None
+    last_ok_at: Optional[str] = None
+    evm: List[WalletEvmSource] = field(default_factory=list)
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"evm": (WalletEvmSource,)}
+
+
+@dataclass
 class WalletFeed(Model):
-    """A page of wallet activity, newest first. `next_before` is the cursor."""
+    """A page of wallet activity, newest first. `next_before` is the cursor.
+    `chains` is the chain ids the page covers."""
 
     items: List[WalletEvent] = field(default_factory=list)
     next_before: Optional[str] = None
     source: Optional[WalletSource] = None
+    chains: List[str] = field(default_factory=list)
 
     _CAMEL: ClassVar[bool] = True
     _NESTED: ClassVar[Mapping[str, Any]] = {"items": (WalletEvent,), "source": WalletSource}
@@ -2197,8 +2333,9 @@ class CuratedWallets(Model):
 @dataclass
 class WalletActivity(Model):
     """Any wallet's recent swaps and LP actions. `mode` is `tracked` (served
-    from what the tracker stored) or `live` (read from chain for this request,
-    with no paging)."""
+    from what the tracker stored), `live` (a Solana wallet read from chain
+    for this request, with no paging) or `untracked` (an EVM wallet nobody
+    tracks yet: no items)."""
 
     address: Optional[str] = None
     mode: Optional[str] = None
@@ -3330,20 +3467,59 @@ class StrandedPositions(Model):
 
 @dataclass
 class CallPreview(Model):
+    """What a call on a token would attach.
+
+    `chain` is `solana` or the EVM chain the token is on (then `mint` is its
+    CAIP id, also when the request named a pool). `price_source` says where
+    an EVM token's price came from; `None` on Solana. `clears_floor` is false
+    when the position is priced and under `min_position_usd`: posting would
+    be refused. `next_allowed_at` is when the next call is allowed, `None`
+    when one is allowed now.
+    """
+
+    chain: Optional[str] = None
+    price_source: Optional[str] = None
     mint: Optional[str] = None
     symbol: Optional[str] = None
     price_usd: Optional[float] = None
     wallet: Optional[str] = None
     attached: Optional[Any] = None
     has_position: Optional[bool] = None
+    position_usd: Optional[float] = None
+    min_position_usd: Optional[float] = None
+    clears_floor: Optional[bool] = None
+    next_allowed_at: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
 
 
 @dataclass
 class Call(Model):
-    """A posted call. `attached` is the position the server read from chain."""
+    """A call. `attached` is the position the server read from chain.
+
+    In the Calls feed `source` is `ponk` (posted on Ponk, with `caller`) or
+    `x` (a tracked X account's first mention, with `account`, `post_id` and
+    `url`). `chain` is `solana` or the EVM chain the token is on. On an EVM
+    call `mint` is a CAIP token id, `mcap_usd` and `mcap_now_usd` are `None`
+    (the EVM boards state no market cap) and `price_source` says where the
+    price came from: `chainlink`, `onchain_pool`, `coingecko`, `defillama`
+    or `dexscreener` (`None` on Solana). `auto` is true for a call created
+    from a confirmed buy through Ponk's swap, which runs on Solana, so a call
+    on an EVM token is always posted by hand. `status` is `open` while any
+    position remains and `closed` once fully exited.
+
+    The figures arrive camelCase from the API and are read as such from
+    0.16.0 on (earlier versions left them `None`).
+    """
 
     id: Optional[str] = None
+    source: Optional[str] = None
     caller: Optional[Any] = None
+    account: Optional[Any] = None
+    post_id: Optional[str] = None
+    url: Optional[str] = None
+    chain: Optional[str] = None
+    price_source: Optional[str] = None
     mint: Optional[str] = None
     symbol: Optional[str] = None
     text: Optional[str] = None
@@ -3353,9 +3529,50 @@ class Call(Model):
     price_now_usd: Optional[float] = None
     mcap_now_usd: Optional[float] = None
     multiple_now: Optional[float] = None
+    multiple_1h: Optional[float] = None
+    multiple_24h: Optional[float] = None
     peak_multiple: Optional[float] = None
     peak_at: Optional[str] = None
+    auto: Optional[bool] = None
+    status: Optional[str] = None
+    realized_pnl_usd: Optional[float] = None
+    closed_at: Optional[str] = None
     attached: Optional[Any] = None
+
+    _CAMEL: ClassVar[bool] = True
+
+
+@dataclass
+class CallsFeed(Model):
+    """`GET /public/calls`: a page of the Calls feed, newest first.
+
+    Pass `next_before` back as `before` for the next page; it is `None` at
+    the end. `chains` is the chain ids the page covers.
+    """
+
+    calls: List[Call] = field(default_factory=list)
+    next_before: Optional[str] = None
+    chains: List[str] = field(default_factory=list)
+
+    _CAMEL: ClassVar[bool] = True
+    _NESTED: ClassVar[Mapping[str, Any]] = {"calls": (Call,)}
+
+
+@dataclass
+class CallersBoard(Model):
+    """`GET /public/calls/callers`: the callers board over `days`.
+
+    `callers` are passed through as decoded JSON. `chains` is the chain ids
+    the board is computed over: a caller's record under one chain is their
+    calls on it.
+    """
+
+    days: Optional[int] = None
+    callers: List[Any] = field(default_factory=list)
+    chains: List[str] = field(default_factory=list)
+    computed_at: Optional[str] = None
+
+    _CAMEL: ClassVar[bool] = True
 
 
 @dataclass
@@ -3836,12 +4053,14 @@ class XAccountCard(Model):
 @dataclass
 class TopCalls(Model):
     """The best calls of the last `days`, Ponk and X, ranked by their
-    multiple since the call, computed from real prices."""
+    multiple since the call, computed from real prices. `chains` is the
+    chain ids the answer covers."""
 
     _CAMEL: ClassVar[bool] = True
 
     days: Optional[int] = None
     calls: Optional[List[Any]] = None
+    chains: List[str] = field(default_factory=list)
     computed_at: Optional[str] = None
 
 
@@ -4142,7 +4361,19 @@ class EvmOpenCost(Model):
     The fee rates are in basis points and are the ones an agent THIS CALLER
     creates pays: with an API key 150 (1.5% of the first open, once) and 1500
     (15% of fees earned); the keyless public route states the rates of an
-    agent created on ponk.exchange, 100 and 800. `exit_fee_bps` is 0.
+    agent created on ponk.exchange, 100 and 800. `exit_fee_bps` is the exit
+    fee on what an agent that has opened a position sends its owner: 100
+    (1% of the amount withdrawn, taken in kind), 50 for a wallet holding
+    1,000,000 PONK when it withdraws, 0 while the fee is switched off.
+    `exit_yield_fee_bps` is the rate an exit takes on unclaimed yield (the
+    performance rate when that switch is on, else 0) and `exit_swap_fee_bps`
+    the swap fee on an exit's swaps.
+
+    `shape` is set when the quote asked for one (`evm_open_cost(shape=...)`):
+    `kind`, `label`, `several_ranges`, `ranges` (the count the agent would
+    open now), `ranges_asked`, `ceiling`, `entry_cost` (per count: `ranges`,
+    `usd`, `pct`), `entry_cost_limit_pct`, `range_pct`, `side`,
+    `width_ticks`, `amount_usd` and `note`, as decoded JSON.
     """
 
     chain: Optional[str] = None
@@ -4157,6 +4388,37 @@ class EvmOpenCost(Model):
     activation_fee_bps: Optional[int] = None
     performance_fee_bps: Optional[int] = None
     exit_fee_bps: Optional[int] = None
+    exit_yield_fee_bps: Optional[int] = None
+    exit_swap_fee_bps: Optional[int] = None
+    shape: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class EvmLegShape(Model):
+    """The liquidity shape of one plan leg, set only when the sentence named a
+    shape or a one-sided range.
+
+    `kind` is `spot`, `curve` or `bid_ask` and `label` its name.
+    `several_ranges` is true where the venue holds the shape as several
+    ranges managed as one position; `ranges` is the count at the gas read
+    just now (the agent chooses again from live gas when it opens) and
+    `ranges_asked` what the shape asks for on this chain. `one_sided` is
+    `below` or `above` for a band on one side of the price. `entry_cost_usd`
+    (a decimal string) and `entry_cost_pct` are the gas of opening and later
+    closing those ranges, `None` when gas could not be read, against
+    `entry_cost_limit_pct`. `sentence` says it in one line.
+    """
+
+    kind: Optional[str] = None
+    label: Optional[str] = None
+    ranges: Optional[int] = None
+    ranges_asked: Optional[int] = None
+    several_ranges: Optional[bool] = None
+    one_sided: Optional[str] = None
+    entry_cost_usd: Optional[str] = None
+    entry_cost_pct: Optional[float] = None
+    entry_cost_limit_pct: Optional[float] = None
+    sentence: Optional[str] = None
 
 
 @dataclass
@@ -4172,6 +4434,7 @@ class EvmPlanLeg(Model):
     `fee_apr_pct` plus `farm_apr_pct` where the agent stakes. It is income per
     dollar of pool liquidity, not a forecast. `fee_yield_24h_pct` is percent
     per DAY. `config` is the strategy config the agent is created with.
+    `shape` is set only when the sentence named a shape or a one-sided range.
     """
 
     chain: Optional[str] = None
@@ -4195,6 +4458,9 @@ class EvmPlanLeg(Model):
     open_gas_usd: Optional[str] = None
     open_gas_native: Optional[str] = None
     wallet_floor_usd: Optional[str] = None
+    shape: Optional[EvmLegShape] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"shape": EvmLegShape}
 
 
 @dataclass
@@ -4369,3 +4635,62 @@ class EvmFleet(Model):
     fund_page: Optional[str] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"agents": (EvmFleetAgent,)}
+
+
+# --------------------------------------------------------------------------
+# All chains on the boards and trackers (0.16.0)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class RecapBestAgent(Model):
+    """The week's best agent of the account. `chain` is `solana` or the EVM
+    chain it runs on; on an EVM agent `pool_address` is a CAIP id."""
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    chain: Optional[str] = None
+    dex: Optional[str] = None
+    pool_address: Optional[str] = None
+    strategy: Optional[str] = None
+    pnl_usd: Optional[float] = None
+
+
+@dataclass
+class WeeklyRecap(Model):
+    """`GET /v1/recap/weekly`: the weekly recap card's figures.
+
+    `complete` is true once the week has ended and its figures are final.
+    `agents` is the agents with marks in the week; `pnl_usd` their summed
+    week P&L (`None` with no agents) and `fees_usd` their summed fees
+    (`None` when any agent's fees are unknown, because a partial sum would
+    read as the whole). `rank` is your place among every ranked owner across
+    every chain (`None` when not ranked, and `rank_reason` says why) out of
+    `ranked`.
+    """
+
+    week_start: Optional[str] = None
+    week_end: Optional[str] = None
+    complete: Optional[bool] = None
+    agents: Optional[int] = None
+    pnl_usd: Optional[float] = None
+    fees_usd: Optional[float] = None
+    best_agent: Optional[RecapBestAgent] = None
+    rank: Optional[int] = None
+    ranked: Optional[int] = None
+    rank_reason: Optional[str] = None
+    computed_at: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"best_agent": RecapBestAgent}
+
+
+@dataclass
+class FeedPrefs(Model):
+    """`GET` and `PATCH /v1/feed-prefs`: the account's saved chain filter.
+
+    `chains` is the chain ids every signed-in board and tracker read that
+    names no `chains` covers; `all` is true when that is every chain.
+    """
+
+    chains: List[str] = field(default_factory=list)
+    all: Optional[bool] = None

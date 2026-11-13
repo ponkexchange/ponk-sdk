@@ -1,0 +1,153 @@
+{
+  "items": [
+    {
+      "type": "post",
+      "key": "post:1856000000000000001",
+      "account": {
+        "handle": "bnbcaller",
+        "screenName": "BnbCaller",
+        "name": "BNB Caller",
+        "avatarUrl": null,
+        "followers": 48210,
+        "category": "callers"
+      },
+      "post": {
+        "id": "1856000000000000001",
+        "kind": "post",
+        "url": "https://x.com/BnbCaller/status/1856000000000000001",
+        "text": "CAKE 0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82 send it, and BONK",
+        "createdAt": "2026-11-12T07:30:00Z",
+        "seenAt": "2026-11-12T07:30:04Z",
+        "latencySecs": 4,
+        "isBackfill": false,
+        "replyTo": null,
+        "author": {
+          "screenName": "BnbCaller",
+          "name": "BNB Caller",
+          "avatarUrl": null
+        },
+        "media": [],
+        "quote": null,
+        "card": null,
+        "metrics": {
+          "views": 12000,
+          "likes": 310,
+          "replies": 22,
+          "reposts": 41
+        },
+        "tokens": [
+          {
+            "mint": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+            "chain": "bsc",
+            "chains": [],
+            "symbol": "CAKE",
+            "callPriceUsd": 2.38,
+            "callMcapUsd": null,
+            "priceUsd": 2.53,
+            "mcapUsd": null,
+            "liquidityUsd": 18400000.0,
+            "multiple": 1.063,
+            "firstCall": true
+          },
+          {
+            "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+            "chain": "solana",
+            "chains": [],
+            "symbol": "BONK",
+            "callPriceUsd": 2.31e-05,
+            "callMcapUsd": 1910000000.0,
+            "priceUsd": 2.44e-05,
+            "mcapUsd": 2017000000.0,
+            "liquidityUsd": 6200000.0,
+            "multiple": 1.0563,
+            "firstCall": false
+          },
+          {
+            "mint": "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+            "chain": "evm",
+            "chains": [
+              "ethereum",
+              "bsc"
+            ],
+            "symbol": null,
+            "callPriceUsd": null,
+            "callMcapUsd": null,
+            "priceUsd": null,
+            "mcapUsd": null,
+            "liquidityUsd": null,
+            "multiple": null,
+            "firstCall": false
+          }
+        ],
+        "cashtags": [
+          "CAKE",
+          "BONK"
+        ],
+        "deletedAt": null
+      }
+    },
+    {
+      "type": "event",
+      "key": "event:88",
+      "account": {
+        "handle": "bnbcaller",
+        "screenName": "BnbCaller",
+        "name": "BNB Caller",
+        "avatarUrl": null,
+        "followers": 48210,
+        "category": "callers"
+      },
+      "event": {
+        "id": 88,
+        "kind": "post_deleted",
+        "before": null,
+        "after": null,
+        "detail": null,
+        "at": "2026-11-12T06:00:00Z",
+        "post": {
+          "id": "1855990000000000000",
+          "url": "https://x.com/BnbCaller/status/1855990000000000000",
+          "text": "CAKE",
+          "createdAt": "2026-11-12T05:00:00Z",
+          "tokens": [
+            {
+              "mint": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+              "symbol": "CAKE",
+              "chain": "bsc"
+            },
+            {
+              "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+              "symbol": "BONK",
+              "chain": "solana"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "nextBefore": "2026-11-12T06:00:00Z",
+  "source": {
+    "name": "fxtwitter",
+    "url": "https://fxtwitter.com",
+    "state": "live",
+    "lastOkAt": "2026-11-12T08:59:50Z",
+    "lastErrorAt": null,
+    "lastError": null,
+    "requests1h": 1180,
+    "rateLimited1h": 0,
+    "medianLatencySecs": 6,
+    "accountsFresh": 212,
+    "accountsActive": 230,
+    "hotSecs": 20,
+    "normalSecs": 60,
+    "coldSecs": 300
+  },
+  "chains": [
+    "solana",
+    "ethereum",
+    "arbitrum",
+    "base",
+    "bsc",
+    "robinhood"
+  ]
+}

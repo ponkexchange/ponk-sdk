@@ -15,7 +15,7 @@ a local clone:
 
 ```toml
 [dependencies]
-ponk = "0.15"
+ponk = "0.16"
 # or: ponk = { git = "https://github.com/ponkexchange/ponk-sdk" }
 # or, from a local clone:
 # ponk = { path = "../ponk-sdk/rust" }
@@ -169,9 +169,11 @@ Ok(())
 | `evm_pool(pool_id)` | `GET /public/evm/pools/{id}` | One pool by its CAIP id. |
 | `evm_token(token_id)` | `GET /public/evm/tokens/{id}` | One token; the zero address is the gas coin with its price. |
 | `evm_open_cost(chain, dex, pool, stake)` | `GET /v1/evm/{chain}/open-cost` | Gas of the first open, the exit reserve, the least to hold, and the fee rates a key's agents pay. `evm_open_cost_public` is the keyless quote. |
-| `create_evm_agent(&NewAgent)` | `POST /v1/agents` | An agent on an EVM chain, from `NewAgent::evm_range` or `NewAgent::evm_full_range`. |
+| `evm_open_cost_with(chain, &OpenCostQuery)` | `GET /v1/evm/{chain}/open-cost` | The same with a shape quote (`shape`, `ranges`, `amount_usd`, `range_pct`, `side`, `width_ticks`, `agent`): how many ranges the agent would open now and their gas. `evm_open_cost_public_with` is the keyless quote. |
+| `create_evm_agent(&NewAgent)` | `POST /v1/agents` | An agent on an EVM chain, from `NewAgent::evm_range` or `NewAgent::evm_full_range`, with `.shape(...)` and `.shape_ranges(...)`. |
 | `set_stake_rewards(id, stake)` | `PATCH /v1/agents/{id}/config` | Stake for CAKE or AERO from the next open. |
 | `copilot_evm_plan(text)` | `POST /copilot/evm/plans` | Plan one sentence in dollars: `"$200 in the top 5 bnb pools"`. |
+| `copilot_evm_plan_shaped(text, shape, one_sided)` | `POST /copilot/evm/plans` | The same with a shape (`spot`, `curve`, `bid_ask`) and a side (`below`, `above`) in the grammar's words; each leg carries `shape`. |
 | `copilot_evm_get_plan(id)` | `GET /copilot/evm/plans/{id}` | The plan again. |
 | `copilot_evm_start(id)` | `POST /copilot/evm/plans/{id}/start` | One agent per pool, plus `sign_urls` and `fleet_id`. Moves no money. |
 | `evm_fleet` | `GET /agents/evm/fleet` | Every EVM agent and what it still needs from you. |
@@ -200,10 +202,66 @@ ponk.exchange. `evm::fund_link` and `evm::fund_links` build that page's link,
 40 agents to a link; this crate reads the mandate's status and never signs.
 Revoking a mandate and the exit card are on ponk.exchange too.
 
+**Shapes.** An agent on a range venue takes a liquidity shape
+(`evm::SHAPES`: `spot`, `curve`, `bid_ask`, `spot_bid_ask`). On Uniswap v3
+on Arbitrum, Ethereum and Robinhood Chain, Uniswap v4 on Arbitrum and
+Ethereum, PancakeSwap v3 and Infinity CL on BNB Chain and Aerodrome
+Slipstream on Base (`evm::SHAPE_VENUES`) a shape other than Spot opens as
+several ranges managed as one position; `ShapeRanges::Auto` chooses the count
+from live gas so opening and later closing stays within 3% of the deposit,
+`ShapeRanges::Fixed(n)` asks for 1 to 7. Elsewhere the agent keeps the shape
+and opens one range. A one-sided range is one side at 0.
+
+```rust
+let new = NewAgent::evm_range("weth usdc", me, "arbitrum", "uniswap_v3", pool, 0.05, 0.0)?
+    .shape("curve")?
+    .shape_ranges(evm::ShapeRanges::Auto)?;
+let q = OpenCostQuery { shape: Some("curve".into()), amount_usd: Some(1000.0), ..OpenCostQuery::new("uniswap_v3") };
+let cost = ponk.evm_open_cost_with("arbitrum", &q).await?;
+```
+
 An agent created with a key pays 1.5% of its first open, once, and 15% of the
-fees it earns (0.75% and 13.5% for a wallet holding 1,000,000 $PONK).
-`Agent::activation_fee_bps`, `Agent::managed_fee_bps` and `evm_open_cost`
-state the rates for you.
+fees it earns (0.75% and 13.5% for a wallet holding 1,000,000 $PONK), and 1%
+of what it sends you once it has opened a position (0.5% for a holder).
+`Agent::activation_fee_bps`, `Agent::managed_fee_bps`, `Agent::exit_fee_bps`
+and `evm_open_cost` state the rates for you; `withdraw` and `exit_agent` list
+what the exit fee took in `exit_fees`.
+
+## Chains on the boards and trackers
+
+The agents leaderboard, Calls, the X Tracker and the Wallet Tracker cover
+Solana, BNB Chain, Base, Ethereum, Arbitrum and Robinhood Chain. The 0.15.0
+signatures are kept; the `_on` twins take `chains` (chain ids, or `["all"]`;
+`None` is every chain, or the saved filter on a signed-in read), and the query
+structs carry `chains`. Every answer has `chains`, the ids it covers. A token
+is a Solana mint or an EVM token id, a wallet a Solana or an EVM address.
+
+```rust
+let board = ponk.leaderboard_on(Some("7d"), Some(&["bsc"])).await?;   // ranks from 1
+let cake = ponk::evm::token_id("bsc", "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82")?;
+let token = ponk.x_token(&cake).await?;                               // chain, price_source
+let calls = ponk
+    .calls_feed_with(&CallsFeedQuery { mint: Some(cake), ..Default::default() })
+    .await?;
+ponk.set_feed_prefs(&FeedChains::All).await?;                         // trade key
+```
+
+| Method | Route |
+|---|---|
+| `leaderboard_on(window, chains)` | `GET /public/agents-leaderboard` |
+| `calls_feed_with(&CallsFeedQuery)` | `GET /public/calls` |
+| `top_calls_on(days, limit, source, chains)` | `GET /public/calls/top` |
+| `callers_board_on(days, source, chains)` | `GET /public/calls/callers` |
+| `x_feed(&XFeedQuery)` (`chains`, `first_calls`) | `GET /public/x/feed` |
+| `x_trending_on(window, limit, chains)` | `GET /public/x/trending` |
+| `x_callers_on(days, chains)` | `GET /public/x/callers` |
+| `wallets_feed` / `wallet_activity` (`WalletFeedQuery.chains`) | `GET /public/wallets/feed`, `/{address}/activity` |
+| `weekly_recap_typed()` | `GET /v1/recap/weekly` |
+| `feed_prefs()` / `set_feed_prefs(&FeedChains)` | `GET` / `PATCH /v1/feed-prefs` |
+
+`XPost.tokens` is `Vec<XPostToken>` from 0.16.0 (it was `Vec<XTokenRef>`):
+each token carries `chain`, and `chains` when the address is a token on
+several chains.
 
 ## What a key cannot do
 
@@ -504,9 +562,14 @@ let ponk = ponk::Client::builder(ponk::DEFAULT_BASE_URL)
 
 ## Fees
 
-Autonomous agents charge a performance fee on realized yield only. Principal is
-never touched and no fee is taken on an unrealized gain. There is no charge for
-a key, for a call, for creating an agent, for depositing or for withdrawing.
+Autonomous agents charge a performance fee on realized yield; no fee is taken
+on an unrealized gain. An agent's first open pays a one-time activation fee,
+and a withdrawal or an exit from an agent that has opened a position pays an
+exit fee of 1% of what leaves (0.5% for a wallet holding 1,000,000 $PONK),
+taken in kind on every chain; an agent that never opened a position pays
+none. `Agent::exit_fee_bps`, `PonkPerks::exit_fee` and, on an EVM withdrawal
+or exit, `Withdrawal::exit_fees` state it. There is no charge for a key, for
+a call or for depositing.
 
 **An agent created through this API pays the API rate, not the app rate.** The
 rate is fixed when the agent is created and follows that agent for its whole

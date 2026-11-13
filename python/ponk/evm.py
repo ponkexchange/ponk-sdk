@@ -40,6 +40,10 @@ __all__ = [
     "FULL_RANGE_VENUES",
     "STAKE_VENUES",
     "RANGE_STRATEGIES",
+    "SHAPES",
+    "PLAN_SHAPES",
+    "ONE_SIDED",
+    "SHAPE_VENUES",
     "SITE",
     "IDS_PER_FUND_LINK",
     "EvmId",
@@ -49,6 +53,8 @@ __all__ = [
     "venue_chains",
     "is_full_range_venue",
     "stake_reward_token",
+    "is_shape_venue",
+    "with_shape",
     "pool_id",
     "v4_pool_id",
     "token_id",
@@ -123,6 +129,30 @@ RANGE_STRATEGIES: Tuple[str, ...] = (
     "custom",
 )
 
+#: The liquidity shapes an EVM agent takes (`knobs.liquidity_shape`, or the
+#: top-level `liquidity_shape` on `adaptive_range_recovery`): `spot` is one
+#: even range (the default), `curve` is heaviest at the price, `bid_ask`
+#: heaviest at the edges and `spot_bid_ask` half Spot and half Bid-Ask.
+SHAPES: Tuple[str, ...] = ("spot", "curve", "bid_ask", "spot_bid_ask")
+
+#: The shapes the EVM copilot's sentence grammar names.
+PLAN_SHAPES: Tuple[str, ...] = ("spot", "curve", "bid_ask")
+
+#: The two sides a one-sided range sits on: `below` the price (the band that
+#: buys the base token as the price falls) or `above` it.
+ONE_SIDED: Tuple[str, ...] = ("below", "above")
+
+#: Where a shape other than Spot opens as several ranges managed as one
+#: position, venue to chains. On every other range venue a shape is kept on
+#: the agent and the position opens as one range.
+SHAPE_VENUES: Dict[str, Tuple[str, ...]] = {
+    "uniswap_v3": ("arbitrum", "ethereum", "robinhood"),
+    "uniswap_v4": ("arbitrum", "ethereum"),
+    "pancakeswap_v3": ("bsc",),
+    "pancakeswap_infinity_cl": ("bsc",),
+    "aerodrome_slipstream": ("base",),
+}
+
 SITE = "https://ponk.exchange"
 
 #: Agents per fund-and-sign link, the API's own grouping.
@@ -163,6 +193,12 @@ def is_full_range_venue(dex: str) -> bool:
 def stake_reward_token(dex: str) -> Optional[str]:
     """`CAKE` or `AERO` where an agent can stake its position, else `None`."""
     return STAKE_VENUES.get(dex)
+
+
+def is_shape_venue(dex: str, chain: str) -> bool:
+    """True when a shape other than Spot opens as several ranges on this venue
+    and chain (`SHAPE_VENUES`)."""
+    return chain in SHAPE_VENUES.get(dex, ())
 
 
 def _addr(value: str, what: str) -> str:
@@ -292,12 +328,17 @@ def range_config(
     strategy: str = "bin_rebalancer",
     auto_compound: bool = True,
     stake: Optional[bool] = None,
+    shape: Optional[str] = None,
+    shape_ranges: Any = None,
 ) -> Dict[str, Any]:
     """The config of a range agent on a concentrated EVM venue.
 
     `down_pct` and `up_pct` are how far the range reaches below and above the
-    price, as POSITIVE FRACTIONS: 0.05 is 5%. The keys are the ones the API
-    reads, `range_pct: {down_pct, up_pct}`; `down` and `up` are refused.
+    price, as FRACTIONS: 0.05 is 5%. The keys are the ones the API reads,
+    `range_pct: {down_pct, up_pct}`; `down` and `up` are refused. A ONE-SIDED
+    range is one side at 0: `up_pct=0` puts the whole band below the price
+    (it buys the base token as the price falls), `down_pct=0` puts it above.
+    Both at 0 is refused.
 
     Built for the bin rebalancer family (`bin_rebalancer`, the default, and
     `conservative_bin_rebalancer`, which takes `min_out_of_range_secs` too:
@@ -308,22 +349,88 @@ def range_config(
     on `adaptive_range_recovery` the range is a top-level `range_pct`.
 
     `stake=True` stakes the position for CAKE or AERO (`config.evm.stake`),
-    on the venues in `STAKE_VENUES` only.
+    on the venues in `STAKE_VENUES` only. `shape` and `shape_ranges` are
+    `with_shape`'s.
     """
     for name, value in (("down_pct", down_pct), ("up_pct", up_pct)):
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 < value < 1:
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= value < 1:
             raise ValueError(
-                "{0} is a positive fraction below 1 (0.05 is 5%), got {1!r}".format(name, value)
+                "{0} is a fraction from 0 to below 1 (0.05 is 5%), got {1!r}".format(name, value)
             )
+    if down_pct == 0 and up_pct == 0:
+        raise ValueError(
+            "down_pct and up_pct are both 0: give the range a width (one side at 0 is a "
+            "one-sided range)"
+        )
+    width = (_ticks(down_pct) if down_pct > 0 else 0) + (_ticks(up_pct) if up_pct > 0 else 0)
     config: Dict[str, Any] = {
         "kind": strategy,
-        "target_bin_width": _ticks(down_pct) + _ticks(up_pct) + 1,
+        "target_bin_width": width + 1,
         "auto_compound": auto_compound,
         "knobs": {"range_pct": {"down_pct": down_pct, "up_pct": up_pct}},
     }
     if stake is not None:
         config["evm"] = {"stake": bool(stake)}
+    if shape is not None or shape_ranges is not None:
+        config = with_shape(config, shape, shape_ranges=shape_ranges)
     return config
+
+
+def _shape_ranges(value: Any) -> Any:
+    if isinstance(value, str) and value.strip().lower() == "auto":
+        return "auto"
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 7:
+        return value
+    raise ValueError('shape_ranges is "auto" or a whole number from 1 to 7, got {0!r}'.format(value))
+
+
+def with_shape(
+    config: Mapping[str, Any],
+    shape: Optional[str] = None,
+    *,
+    shape_ranges: Any = None,
+    strategy: Optional[str] = None,
+) -> Dict[str, Any]:
+    """A copy of `config` with its liquidity shape set, as the API reads it.
+
+    `shape` is one of `SHAPES`: `spot` (one even range, the default),
+    `curve` (heaviest at the price), `bid_ask` (heaviest at the edges) or
+    `spot_bid_ask` (half of each). It goes where the strategy keeps it:
+    top level `liquidity_shape` on `adaptive_range_recovery`,
+    `knobs.liquidity_shape` on every other strategy. The strategy is
+    `strategy` when given, else the config's `kind`.
+
+    On a venue in `SHAPE_VENUES` (Uniswap v3 on Arbitrum, Ethereum and
+    Robinhood Chain, Uniswap v4 on Arbitrum and Ethereum, PancakeSwap v3 and
+    Infinity CL on BNB Chain, Aerodrome Slipstream on Base) a shape other
+    than Spot opens as several ranges managed as one position. The count is
+    `shape_ranges`: `"auto"` (the default with a shape: chosen from live gas
+    at the open, so that opening and later closing stays within 3% of the
+    deposit) or 1 to 7, sent as `config.evm.shape_ranges`. The server lays
+    the ranges out; a client never sends them. On every other range venue the
+    agent keeps the shape and opens one range, and a `shape_ranges` there is
+    refused. A full-range venue (`FULL_RANGE_VENUES`) takes no shape.
+
+    Different shapes on the two sides of the price are the config keys
+    `shape_below`, `shape_above` (each `spot`, `curve` or `bid_ask`) and
+    `ratio_below_pct` (1 to 99, the share of the deposit placed below): set
+    them in your own config beside `knobs`.
+    """
+    out: Dict[str, Any] = dict(config)
+    if shape is not None:
+        if shape not in SHAPES:
+            raise ValueError("shape is one of {0}, got {1!r}".format(", ".join(SHAPES), shape))
+        if (strategy or out.get("kind")) == "adaptive_range_recovery":
+            out["liquidity_shape"] = shape
+        else:
+            knobs = dict(out.get("knobs") or {})
+            knobs["liquidity_shape"] = shape
+            out["knobs"] = knobs
+    if shape_ranges is not None:
+        block = dict(out.get("evm") or {})
+        block["shape_ranges"] = _shape_ranges(shape_ranges)
+        out["evm"] = block
+    return out
 
 
 def full_range_config(*, auto_compound: bool = True, stake: Optional[bool] = None) -> Dict[str, Any]:

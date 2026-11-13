@@ -1,0 +1,21 @@
+{
+  "week_start": "2026-11-09T00:00:00Z",
+  "week_end": "2026-11-16T00:00:00Z",
+  "complete": false,
+  "agents": 2,
+  "pnl_usd": 18.61,
+  "fees_usd": 52.65,
+  "best_agent": {
+    "id": "018f0000-0000-7000-8000-000000000000",
+    "name": "sol-usdc runner",
+    "chain": "solana",
+    "dex": "meteora_dlmm",
+    "pool_address": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+    "strategy": "bin_rebalancer",
+    "pnl_usd": 12.41
+  },
+  "rank": 7,
+  "ranked": 64,
+  "rank_reason": null,
+  "computed_at": "2026-11-12T09:00:00Z"
+}

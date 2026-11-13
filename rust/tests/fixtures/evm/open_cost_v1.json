@@ -10,5 +10,7 @@
   "native_usd": "680.65",
   "activation_fee_bps": 150,
   "performance_fee_bps": 1500,
-  "exit_fee_bps": 0
+  "exit_yield_fee_bps": 0,
+  "exit_swap_fee_bps": 20,
+  "exit_fee_bps": 100
 }

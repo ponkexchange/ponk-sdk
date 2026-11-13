@@ -1,0 +1,39 @@
+{
+  "id": "0190b2c3-d4e5-7f60-8a7b-8c9d0e1f2a3c",
+  "caller": {
+    "wallet": "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe",
+    "handle": "ponkdev",
+    "name": null,
+    "label": "@ponkdev",
+    "profileKey": "ponkdev",
+    "avatarVersion": null
+  },
+  "chain": "solana",
+  "priceSource": null,
+  "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+  "symbol": "BONK",
+  "text": "bonk into the weekend",
+  "at": "2026-11-12T08:00:00Z",
+  "priceUsd": 2.31e-05,
+  "mcapUsd": 1910000000.0,
+  "priceNowUsd": 2.44e-05,
+  "mcapNowUsd": 2017000000.0,
+  "multipleNow": 1.0563,
+  "multiple1h": 1.021,
+  "multiple24h": null,
+  "peakMultiple": 1.0563,
+  "peakAt": null,
+  "auto": false,
+  "status": "open",
+  "realizedPnlUsd": null,
+  "closedAt": null,
+  "attached": {
+    "heldRaw": "41000000000",
+    "heldDecimals": 5,
+    "heldUsd": 9.47,
+    "entry": null,
+    "lpPositions": 0,
+    "lpValueUsd": null,
+    "lpCostBasisUsd": null
+  }
+}

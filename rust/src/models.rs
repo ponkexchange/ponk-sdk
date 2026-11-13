@@ -144,6 +144,12 @@ pub struct PonkPerks {
     pub managed_agent_fee: Option<FeeRates>,
     pub api_agent_fee: Option<FeeRates>,
     pub non_custodial_agent_fee: Option<FeeRates>,
+    /// The one-time fee on an agent's first open: 1%, 0.5% for a holder.
+    pub activation_fee: Option<FeeRates>,
+    /// The exit fee on what an agent that has opened a position sends its
+    /// owner, of the amount withdrawn: 1%, 0.5% for a holder. An agent that
+    /// never opened a position pays none.
+    pub exit_fee: Option<FeeRates>,
 }
 
 /// What a key is and what it may do.
@@ -200,6 +206,13 @@ pub struct Agent {
     /// points of that open's capital. Zero for a non-managed agent. 150 (and
     /// `managed_fee_bps` 1500) for an agent a key created.
     pub activation_fee_bps: Option<u16>,
+    /// The exit fee on what the agent sends its owner once it has opened a
+    /// position, in basis points of the amount withdrawn, before the $PONK
+    /// holder rate: 100 (1%; 50 for a wallet holding 1,000,000 PONK), on
+    /// agents created in the app and through the API alike. Zero for a
+    /// non-managed agent. An agent that never opened a position pays nothing
+    /// whatever this says.
+    pub exit_fee_bps: Option<u16>,
     /// What the agent is WAITING on (funds, or an authorization), when an
     /// action was refused for a reason only an external event can change.
     /// `kind`, `reason`, `since` and the funding target, as the runtime
@@ -674,6 +687,15 @@ pub struct Withdrawal {
     pub status: Option<String>,
     /// What happened, in plain words.
     pub sentence: Option<String>,
+    /// THE EXIT FEE. A withdrawal or an exit from an agent that has opened a
+    /// position pays 1% of what leaves (0.5% for a wallet holding 1,000,000
+    /// PONK), taken in kind and sent to the treasury in the same run. On an
+    /// EVM agent these are the legs it took, one per asset, base units: what
+    /// the owner did NOT receive. Empty when no exit fee was taken.
+    pub exit_fees: Vec<EvmReceived>,
+    /// The exit fee rate the call ran under, basis points of what left;
+    /// `None` when it took none.
+    pub exit_fee_bps: Option<u16>,
 }
 
 /// One transfer that landed at the withdrawal address.
@@ -854,7 +876,8 @@ impl NewAgent {
     /// `wallet_address` is still your Solana login wallet: it is the account
     /// the key belongs to. `pool_address` is the pool's CAIP id on `chain`
     /// ([`EvmPool::address`]). `down_pct` and `up_pct` are how far the range
-    /// reaches below and above the price, as POSITIVE FRACTIONS: 0.05 is 5%.
+    /// reaches below and above the price, as FRACTIONS: 0.05 is 5%. One side
+    /// at 0 is a one-sided range. [`NewAgent::shape`] sets a liquidity shape.
     /// The strategy is `bin_rebalancer` with the config
     /// [`crate::evm::range_config`] builds; set `strategy` and `config`
     /// yourself for another one. The agent opens its own position.
@@ -921,6 +944,31 @@ impl NewAgent {
     pub fn withdrawal_address(mut self, address: impl Into<String>) -> Self {
         self.withdrawal_address = Some(address.into());
         self
+    }
+
+    /// The liquidity shape, on a range venue: `spot` (one even range, the
+    /// default), `curve` (heaviest at the price), `bid_ask` (heaviest at the
+    /// edges) or `spot_bid_ask` (half of each), written to the config as
+    /// `liquidity_shape` ([`crate::evm::with_shape`]). On a venue in
+    /// [`crate::evm::SHAPE_VENUES`] a shape other than Spot opens as several
+    /// ranges managed as one position, `"auto"` of them unless
+    /// [`NewAgent::shape_ranges`] says otherwise; on any other range venue
+    /// the agent keeps the shape and opens one range. A full-range venue
+    /// takes no shape: [`crate::Client::create_evm_agent`] refuses it before
+    /// sending.
+    pub fn shape(mut self, shape: &str) -> Result<Self, crate::evm::EvmError> {
+        let strategy = self.strategy.clone();
+        self.config = crate::evm::with_shape(std::mem::take(&mut self.config), Some(shape), None, Some(&strategy))?;
+        Ok(self)
+    }
+
+    /// How many ranges the shape opens as (`config.evm.shape_ranges`):
+    /// [`crate::evm::ShapeRanges::Auto`] (chosen from live gas at the open so
+    /// that opening and later closing stays within 3% of the deposit) or 1 to
+    /// 7. Only on a venue in [`crate::evm::SHAPE_VENUES`].
+    pub fn shape_ranges(mut self, ranges: crate::evm::ShapeRanges) -> Result<Self, crate::evm::EvmError> {
+        self.config = crate::evm::with_shape(std::mem::take(&mut self.config), None, Some(ranges), None)?;
+        Ok(self)
     }
 
     /// The five fields every agent needs.
@@ -1241,7 +1289,22 @@ pub struct EvmOpenCost {
     /// Basis points of the fees the agent earns: 1500 with an API key, 800
     /// on the public route.
     pub performance_fee_bps: Option<u16>,
+    /// The exit fee on what an agent that has opened a position sends its
+    /// owner: 100 (1% of the amount withdrawn, taken in kind), 50 for a
+    /// wallet holding 1,000,000 PONK when it withdraws, 0 while the fee is
+    /// switched off.
     pub exit_fee_bps: Option<u16>,
+    /// The rate an exit takes on unclaimed yield: the performance rate when
+    /// that switch is on, else 0.
+    pub exit_yield_fee_bps: Option<u16>,
+    /// The swap fee on an exit's swaps, basis points.
+    pub exit_swap_fee_bps: Option<u16>,
+    /// Set when the quote asked for a shape ([`crate::OpenCostQuery`]):
+    /// `kind`, `label`, `several_ranges`, `ranges` (the count the agent would
+    /// open now), `ranges_asked`, `ceiling`, `entry_cost` (per count:
+    /// `ranges`, `gas_units`, `usd`, `pct`), `entry_cost_limit_pct`,
+    /// `range_pct`, `side`, `width_ticks`, `amount_usd` and `note`.
+    pub shape: Option<serde_json::Value>,
 }
 
 /// One pool of an EVM plan: one agent once the plan is started.
@@ -1280,6 +1343,36 @@ pub struct EvmPlanLeg {
     pub open_gas_native: Option<String>,
     /// Kept in the agent wallet for gas, USD. Part of `fund_usd`.
     pub wallet_floor_usd: Option<String>,
+    /// Set only when the sentence named a shape or a one-sided range.
+    pub shape: Option<EvmLegShape>,
+}
+
+/// The liquidity shape of one plan leg.
+///
+/// `several_ranges` is true where the venue holds the shape as several
+/// ranges managed as one position; `ranges` is the count at the gas read
+/// just now (the agent chooses again from live gas when it opens) and
+/// `ranges_asked` what the shape asks for on this chain.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EvmLegShape {
+    /// `spot`, `curve` or `bid_ask`.
+    pub kind: Option<String>,
+    pub label: Option<String>,
+    pub ranges: Option<u8>,
+    pub ranges_asked: Option<u8>,
+    pub several_ranges: Option<bool>,
+    /// `below` or `above` for a band on one side of the price.
+    pub one_sided: Option<String>,
+    /// Gas of opening and later closing `ranges` ranges, USD as a decimal
+    /// string. `None` when gas could not be read.
+    pub entry_cost_usd: Option<String>,
+    /// The same as a percent of what the leg deploys.
+    pub entry_cost_pct: Option<f64>,
+    /// The share of the deposit that entry cost may take, percent.
+    pub entry_cost_limit_pct: Option<f64>,
+    /// The shape, the ranges and the cost, in one line.
+    pub sentence: Option<String>,
 }
 
 /// A pool the planner looked at and left out, with the sentence that says why.
@@ -1433,6 +1526,78 @@ pub struct EvmFleet {
     pub agents: Vec<EvmFleetAgent>,
     pub sign_urls: Vec<String>,
     pub fund_page: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// All chains on the boards and trackers (0.16.0)
+// ---------------------------------------------------------------------------
+
+/// The week's best agent of the account.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct RecapBestAgent {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    /// `solana`, or the EVM chain the agent runs on (then `pool_address` is a
+    /// CAIP id).
+    pub chain: Option<String>,
+    pub dex: Option<String>,
+    pub pool_address: Option<String>,
+    pub strategy: Option<String>,
+    pub pnl_usd: Option<f64>,
+}
+
+/// `GET /v1/recap/weekly`: the weekly recap card's figures.
+///
+/// `pnl_usd` is `None` with no agents and `fees_usd` when any agent's fees
+/// are unknown (a partial sum would read as the whole). `rank` is the place
+/// among every ranked owner across every chain, `None` when not ranked, and
+/// `rank_reason` says why.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct WeeklyRecap {
+    pub week_start: Option<String>,
+    pub week_end: Option<String>,
+    /// The week has ended: its figures are final.
+    pub complete: Option<bool>,
+    /// Agents with marks in the week.
+    pub agents: Option<i64>,
+    pub pnl_usd: Option<f64>,
+    pub fees_usd: Option<f64>,
+    pub best_agent: Option<RecapBestAgent>,
+    pub rank: Option<i64>,
+    /// Owners ranked this week.
+    pub ranked: Option<i64>,
+    pub rank_reason: Option<String>,
+    pub computed_at: Option<String>,
+}
+
+/// `GET` and `PATCH /v1/feed-prefs`: the account's saved chain filter, used
+/// by every signed-in board and tracker read that names no chains.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FeedPrefs {
+    /// The chain ids it covers.
+    pub chains: Vec<String>,
+    /// True when that is every chain.
+    pub all: Option<bool>,
+}
+
+/// The chain filter [`crate::Client::set_feed_prefs`] saves: every chain, or
+/// only these chain ids. Serialized as `"all"` or the list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FeedChains {
+    All,
+    Only(Vec<String>),
+}
+
+impl Serialize for FeedChains {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            FeedChains::All => serializer.serialize_str("all"),
+            FeedChains::Only(ids) => ids.serialize(serializer),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1617,6 +1782,10 @@ impl AgentCopy {
 pub struct LeaderboardRow {
     pub rank: Option<i64>,
     pub slug: Option<String>,
+    /// `solana`, or the EVM chain the agent runs on. On an EVM row `dex` is
+    /// an EVM venue id and `pool_address`, `token_x_mint` and `token_y_mint`
+    /// are CAIP ids ([`crate::evm::parse_evm_id`]).
+    pub chain: Option<String>,
     pub dex: Option<String>,
     pub strategy: Option<String>,
     pub pool_address: Option<String>,
@@ -1657,6 +1826,10 @@ pub struct Leaderboard {
     pub min_days: Option<i64>,
     pub min_hodl_usd: Option<f64>,
     pub min_win_samples: Option<i64>,
+    /// The chain ids this answer covers: every chain unless the request
+    /// named some. Under a filter `rank` is numbered from 1 over the rows
+    /// kept and `totals` are their totals.
+    pub chains: Vec<String>,
     /// The board header (shared, ranked, LPers, crews, verified, summed
     /// figures), as sent.
     pub totals: Option<serde_json::Value>,
@@ -2036,11 +2209,41 @@ pub struct XAccount {
     pub category: Option<String>,
 }
 
+/// A token an event's post named.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct XTokenRef {
     pub mint: Option<String>,
     pub symbol: Option<String>,
+    /// `solana`, the EVM chain the token is on (then `mint` is its CAIP id),
+    /// or `evm` for a bare address the post did not place on one chain.
+    pub chain: Option<String>,
+}
+
+/// A token a post names, with how it has done since that post.
+///
+/// `chain` is `solana`, the EVM chain the token is on (then `mint` is its
+/// CAIP id), or `evm` for a bare `0x` address that is a token on several
+/// chains in a post that does not say which: then `mint` is the bare
+/// address, `chains` lists the candidates, and the price, first call and
+/// multiple are `None`. The call figures are the reads taken when the post
+/// was seen; `multiple` is price now over the call price.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct XPostToken {
+    pub mint: Option<String>,
+    pub symbol: Option<String>,
+    pub chain: Option<String>,
+    /// The candidate chains of an ambiguous address. Empty otherwise.
+    pub chains: Vec<String>,
+    pub call_price_usd: Option<f64>,
+    pub call_mcap_usd: Option<f64>,
+    pub price_usd: Option<f64>,
+    pub mcap_usd: Option<f64>,
+    pub liquidity_usd: Option<f64>,
+    pub multiple: Option<f64>,
+    /// This post is the earliest mention of the token by any tracked account.
+    pub first_call: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -2060,7 +2263,8 @@ pub struct XMetrics {
     pub reposts: Option<i64>,
 }
 
-/// A post on the feed. `tokens` are the Solana mints it names.
+/// A post on the feed. `tokens` are the tokens it names, each with its
+/// chain ([`XPostToken`]; 0.15.0 typed them as [`XTokenRef`]).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct XPost {
@@ -2078,7 +2282,7 @@ pub struct XPost {
     pub quote: Option<serde_json::Value>,
     pub card: Option<serde_json::Value>,
     pub metrics: Option<XMetrics>,
-    pub tokens: Vec<XTokenRef>,
+    pub tokens: Vec<XPostToken>,
     pub cashtags: Vec<String>,
     pub deleted_at: Option<String>,
 }
@@ -2146,6 +2350,8 @@ pub struct XFeed {
     pub items: Vec<XFeedItem>,
     pub next_before: Option<String>,
     pub source: Option<XSource>,
+    /// The chain ids this page covers.
+    pub chains: Vec<String>,
 }
 
 /// The first tracked account to post a token, with the price when seen.
@@ -2167,6 +2373,10 @@ pub struct XFirstCall {
 #[serde(default, rename_all = "camelCase")]
 pub struct XTrendingToken {
     pub mint: Option<String>,
+    /// `solana`, the EVM chain the token is on, or `evm` with `chains` (the
+    /// candidates) for an address the posts did not place on one chain.
+    pub chain: Option<String>,
+    pub chains: Vec<String>,
     pub symbol: Option<String>,
     pub name: Option<String>,
     pub accounts_1h: Option<i64>,
@@ -2184,6 +2394,8 @@ pub struct XTrendingToken {
 pub struct XTrending {
     pub window: Option<String>,
     pub tokens: Vec<XTrendingToken>,
+    /// The chain ids the ranking is computed over.
+    pub chains: Vec<String>,
     pub computed_at: Option<String>,
 }
 
@@ -2208,6 +2420,9 @@ pub struct XCaller {
 pub struct XCallers {
     pub days: Option<i64>,
     pub callers: Vec<XCaller>,
+    /// The chain ids the board is computed over: a caller's record under one
+    /// chain is their calls on it.
+    pub chains: Vec<String>,
     pub computed_at: Option<String>,
 }
 
@@ -2230,6 +2445,11 @@ pub struct XTokenMention {
 #[serde(default, rename_all = "camelCase")]
 pub struct XToken {
     pub mint: Option<String>,
+    /// `solana`, or the EVM chain the token is on.
+    pub chain: Option<String>,
+    /// Where an EVM token's price came from: `chainlink`, `onchain_pool`,
+    /// `coingecko`, `defillama` or `dexscreener`. `None` on Solana.
+    pub price_source: Option<String>,
     pub symbol: Option<String>,
     pub accounts_1h: Option<i64>,
     pub accounts_24h: Option<i64>,
@@ -2293,10 +2513,18 @@ pub struct WalletLeg {
 }
 
 /// A swap or liquidity action by a tracked wallet, with its signature.
+///
+/// On an EVM event `signature` is the transaction hash, `pool`, `position`,
+/// `token_mint` and each leg's `mint` are CAIP ids, and `venue` is an EVM dex
+/// id or `other`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WalletEvent {
     pub key: Option<String>,
+    /// `solana`, or the EVM chain the transaction is on.
+    pub chain: Option<String>,
+    /// The transaction on Solscan or the chain's explorer.
+    pub explorer_url: Option<String>,
     pub signature: Option<String>,
     pub kind: Option<String>,
     pub venue: Option<String>,
@@ -2311,6 +2539,24 @@ pub struct WalletEvent {
     pub wallet: Option<TrackedWalletRef>,
 }
 
+/// The wallet reader's state on one EVM chain.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WalletEvmSource {
+    pub chain: Option<String>,
+    /// `live`, `slowed` or `starting`.
+    pub state: Option<String>,
+    /// Wallets carried on this chain, and those read at least once.
+    pub wallets_tracked: Option<i64>,
+    pub wallets_read: Option<i64>,
+    pub last_ok_at: Option<String>,
+    /// `webhook` when the provider pushes this chain's activity (events in
+    /// seconds), `poll` when the tracker reads on a timer.
+    pub cadence: Option<String>,
+    /// Minutes between timed reads of a wallet with alerts on.
+    pub poll_minutes: Option<i64>,
+}
+
 /// The chain reader's state: `live`, `slowed` or `starting`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -2319,6 +2565,9 @@ pub struct WalletSource {
     pub wallets_fresh: Option<i64>,
     pub wallets_tracked: Option<i64>,
     pub last_ok_at: Option<String>,
+    /// One entry per EVM chain the tracker reads, BNB Chain first. Empty
+    /// while EVM wallets are switched off: offer a chain only when listed.
+    pub evm: Vec<WalletEvmSource>,
 }
 
 /// A page of wallet activity, newest first. `next_before` is the cursor.
@@ -2328,6 +2577,8 @@ pub struct WalletFeed {
     pub items: Vec<WalletEvent>,
     pub next_before: Option<String>,
     pub source: Option<WalletSource>,
+    /// The chain ids this page covers.
+    pub chains: Vec<String>,
 }
 
 /// A wallet on the curated list and where it comes from (`kind`).
@@ -2350,7 +2601,8 @@ pub struct CuratedWallets {
 }
 
 /// Any wallet's recent swaps and LP actions. `mode` is `tracked` (from what
-/// the tracker stored) or `live` (read from chain for this request).
+/// the tracker stored), `live` (a Solana wallet read from chain for this
+/// request) or `untracked` (an EVM wallet nobody tracks yet: no items).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WalletActivity {
@@ -3397,23 +3649,60 @@ pub struct StrandedPositions {
 // Calls, push, cards, privacy, logs, Telegram, ranking (0.7.0)
 // ---------------------------------------------------------------------------
 
+/// What a call on a token would attach.
+///
+/// The API answers camelCase, read as such from 0.16.0 on (0.15.0 left the
+/// multi-word fields `None`).
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct CallPreview {
+    /// `solana`, or the EVM chain the token is on (then `mint` is its CAIP
+    /// id, also when the request named a pool).
+    pub chain: Option<String>,
+    /// Where an EVM token's price came from. `None` on Solana.
+    pub price_source: Option<String>,
     pub mint: Option<String>,
     pub symbol: Option<String>,
     pub price_usd: Option<f64>,
     pub wallet: Option<String>,
     pub attached: Option<serde_json::Value>,
     pub has_position: Option<bool>,
+    pub position_usd: Option<f64>,
+    pub min_position_usd: Option<f64>,
+    /// False when the position is priced and under `min_position_usd`:
+    /// posting would be refused.
+    pub clears_floor: Option<bool>,
+    /// When the next call is allowed; `None` when one is allowed now.
+    pub next_allowed_at: Option<String>,
 }
 
-/// A posted call; `attached` is the position the server read from chain.
+/// A call; `attached` is the position the server read from chain.
+///
+/// In the Calls feed `source` is `ponk` (posted on Ponk, with `caller`) or
+/// `x` (a tracked X account's first mention, with `account`, `post_id` and
+/// `url`). On an EVM call `mint` is a CAIP token id, `mcap_usd` and
+/// `mcap_now_usd` are `None` (the EVM boards state no market cap) and
+/// `price_source` says where the price came from. `auto` is true for a call
+/// created from a confirmed buy through Ponk's swap, which runs on Solana, so
+/// a call on an EVM token is always posted by hand. `status` is `open` or
+/// `closed`.
+///
+/// The API answers camelCase, read as such from 0.16.0 on (0.15.0 left the
+/// multi-word fields `None`).
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Call {
     pub id: Option<String>,
+    pub source: Option<String>,
     pub caller: Option<serde_json::Value>,
+    pub account: Option<serde_json::Value>,
+    pub post_id: Option<String>,
+    pub url: Option<String>,
+    /// `solana`, or the EVM chain the token is on.
+    pub chain: Option<String>,
+    /// `chainlink`, `onchain_pool`, `coingecko`, `defillama` or
+    /// `dexscreener` on an EVM token; `None` on Solana.
+    pub price_source: Option<String>,
     pub mint: Option<String>,
     pub symbol: Option<String>,
     pub text: Option<String>,
@@ -3423,9 +3712,38 @@ pub struct Call {
     pub price_now_usd: Option<f64>,
     pub mcap_now_usd: Option<f64>,
     pub multiple_now: Option<f64>,
+    pub multiple_1h: Option<f64>,
+    pub multiple_24h: Option<f64>,
     pub peak_multiple: Option<f64>,
     pub peak_at: Option<String>,
+    pub auto: Option<bool>,
+    pub status: Option<String>,
+    pub realized_pnl_usd: Option<f64>,
+    pub closed_at: Option<String>,
     pub attached: Option<serde_json::Value>,
+}
+
+/// `GET /public/calls`: a page of the Calls feed, newest first. Pass
+/// `next_before` back as `before`; it is `None` at the end.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CallsFeed {
+    pub calls: Vec<Call>,
+    pub next_before: Option<String>,
+    /// The chain ids this page covers.
+    pub chains: Vec<String>,
+}
+
+/// `GET /public/calls/callers`: the callers board. `callers` are kept as
+/// JSON; under a chain filter a caller's record is their calls on it.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CallersBoard {
+    pub days: Option<i64>,
+    pub callers: Vec<serde_json::Value>,
+    /// The chain ids the board is computed over.
+    pub chains: Vec<String>,
+    pub computed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -4100,6 +4418,8 @@ pub struct XAccountCard {
 pub struct TopCalls {
     pub days: Option<i64>,
     pub calls: Option<Vec<serde_json::Value>>,
+    /// The chain ids this answer covers.
+    pub chains: Vec<String>,
     pub computed_at: Option<String>,
 }
 

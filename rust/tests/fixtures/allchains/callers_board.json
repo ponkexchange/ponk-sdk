@@ -1,0 +1,39 @@
+{
+  "days": 30,
+  "callers": [
+    {
+      "source": "ponk",
+      "caller": {
+        "wallet": "GYdJfRSHhDAVVEz8optL8aGSQKd5daSZ9Ao3sVLZRkEe",
+        "handle": "ponkdev",
+        "name": null,
+        "label": "@ponkdev",
+        "profileKey": "ponkdev",
+        "avatarVersion": null
+      },
+      "calls": 4,
+      "pricedCalls": 4,
+      "median1h": 1.01,
+      "median24h": 1.08,
+      "best": 1.62,
+      "hitRate": 0.75,
+      "scored24h": 4,
+      "medianPeak": 1.21,
+      "x2Rate": 0.0,
+      "peaked": 4,
+      "ranked": true,
+      "bestCall": {
+        "id": "0190b2c3-d4e5-7f60-8a7b-8c9d0e1f2a3b",
+        "mint": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+        "symbol": "CAKE",
+        "multiple": 1.62,
+        "live": true
+      },
+      "lastCallAt": "2026-11-12T08:00:00Z"
+    }
+  ],
+  "chains": [
+    "bsc"
+  ],
+  "computedAt": "2026-11-12T09:00:00Z"
+}

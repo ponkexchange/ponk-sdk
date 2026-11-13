@@ -71,6 +71,53 @@ pub const RANGE_STRATEGIES: [&str; 5] = [
     "custom",
 ];
 
+/// The liquidity shapes an EVM agent takes (`knobs.liquidity_shape`, or the
+/// top-level `liquidity_shape` on `adaptive_range_recovery`): `spot` is one
+/// even range (the default), `curve` is heaviest at the price, `bid_ask`
+/// heaviest at the edges and `spot_bid_ask` half Spot and half Bid-Ask.
+pub const SHAPES: [&str; 4] = ["spot", "curve", "bid_ask", "spot_bid_ask"];
+
+/// The shapes the EVM copilot's sentence grammar names.
+pub const PLAN_SHAPES: [&str; 3] = ["spot", "curve", "bid_ask"];
+
+/// The two sides a one-sided range sits on.
+pub const ONE_SIDED: [&str; 2] = ["below", "above"];
+
+/// Where a shape other than Spot opens as several ranges managed as one
+/// position, venue to chains. On every other range venue a shape is kept on
+/// the agent and the position opens as one range.
+pub const SHAPE_VENUES: [(&str, &[&str]); 5] = [
+    ("uniswap_v3", &["arbitrum", "ethereum", "robinhood"]),
+    ("uniswap_v4", &["arbitrum", "ethereum"]),
+    ("pancakeswap_v3", &["bsc"]),
+    ("pancakeswap_infinity_cl", &["bsc"]),
+    ("aerodrome_slipstream", &["base"]),
+];
+
+/// How many ranges a shape opens as on a venue in [`SHAPE_VENUES`]
+/// (`config.evm.shape_ranges`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeRanges {
+    /// Chosen from live gas at the open, so that opening and later closing
+    /// stays within 3% of the deposit. The default with a shape.
+    Auto,
+    /// A fixed count, 1 to 7.
+    Fixed(u8),
+}
+
+impl ShapeRanges {
+    /// The value the API reads: `"auto"` or the count.
+    pub fn to_json(self) -> Result<serde_json::Value, EvmError> {
+        match self {
+            ShapeRanges::Auto => Ok(serde_json::json!("auto")),
+            ShapeRanges::Fixed(n) if (1..=7).contains(&n) => Ok(serde_json::json!(n)),
+            ShapeRanges::Fixed(n) => Err(EvmError(format!(
+                "shape_ranges is \"auto\" or a whole number from 1 to 7, got {n}"
+            ))),
+        }
+    }
+}
+
 /// The site the fund-and-sign pages live on.
 pub const SITE: &str = "https://ponk.exchange";
 
@@ -131,6 +178,12 @@ pub fn is_full_range_venue(dex: &str) -> bool {
 /// `CAKE` or `AERO` where an agent can stake its position, else `None`.
 pub fn stake_reward_token(dex: &str) -> Option<&'static str> {
     STAKE_VENUES.iter().find(|(v, _)| *v == dex).map(|(_, t)| *t)
+}
+
+/// True when a shape other than Spot opens as several ranges on this venue
+/// and chain ([`SHAPE_VENUES`]).
+pub fn is_shape_venue(dex: &str, chain: &str) -> bool {
+    SHAPE_VENUES.iter().any(|(v, chains)| *v == dex && chains.contains(&chain))
 }
 
 fn is_hex(s: &str, digits: usize) -> bool {
@@ -282,8 +335,10 @@ fn ticks(fraction: f64) -> u32 {
 /// The config of a range agent on a concentrated EVM venue.
 ///
 /// `down_pct` and `up_pct` are how far the range reaches below and above the
-/// price, as POSITIVE FRACTIONS: 0.05 is 5%. The keys are the ones the API
-/// reads, `range_pct: {down_pct, up_pct}`; `down` and `up` are refused.
+/// price, as FRACTIONS: 0.05 is 5%. The keys are the ones the API reads,
+/// `range_pct: {down_pct, up_pct}`; `down` and `up` are refused. A ONE-SIDED
+/// range is one side at 0: `up_pct` 0 puts the whole band below the price,
+/// `down_pct` 0 above it. Both at 0 is refused.
 ///
 /// Built for the bin rebalancer family (`bin_rebalancer`, and
 /// `conservative_bin_rebalancer`, which takes `min_out_of_range_secs` too:
@@ -302,15 +357,21 @@ pub fn range_config(
     stake: Option<bool>,
 ) -> Result<serde_json::Value, EvmError> {
     for (name, value) in [("down_pct", down_pct), ("up_pct", up_pct)] {
-        if !(value.is_finite() && value > 0.0 && value < 1.0) {
+        if !(value.is_finite() && (0.0..1.0).contains(&value)) {
             return Err(EvmError(format!(
-                "{name} is a positive fraction below 1 (0.05 is 5%), got {value}"
+                "{name} is a fraction from 0 to below 1 (0.05 is 5%), got {value}"
             )));
         }
     }
+    if down_pct == 0.0 && up_pct == 0.0 {
+        return Err(EvmError(
+            "down_pct and up_pct are both 0: give the range a width (one side at 0 is a one-sided range)".into(),
+        ));
+    }
+    let side = |f: f64| if f > 0.0 { ticks(f) } else { 0 };
     let mut config = serde_json::json!({
         "kind": strategy,
-        "target_bin_width": ticks(down_pct) + ticks(up_pct) + 1,
+        "target_bin_width": side(down_pct) + side(up_pct) + 1,
         "auto_compound": true,
         "knobs": { "range_pct": { "down_pct": down_pct, "up_pct": up_pct } },
     });
@@ -333,6 +394,55 @@ pub fn full_range_config(stake: Option<bool>) -> serde_json::Value {
         config["evm"] = serde_json::json!({ "stake": s });
     }
     config
+}
+
+/// `config` with its liquidity shape set, as the API reads it.
+///
+/// `shape` is one of [`SHAPES`]. It goes where the strategy keeps it: top
+/// level `liquidity_shape` on `adaptive_range_recovery`,
+/// `knobs.liquidity_shape` on every other strategy (`strategy`, else the
+/// config's `kind`). `ranges` is written to `config.evm.shape_ranges`: on a
+/// venue in [`SHAPE_VENUES`] a shape other than Spot opens as that many
+/// ranges managed as one position; the server lays them out. A full-range
+/// venue takes no shape. Per-side shapes are the config keys `shape_below`,
+/// `shape_above` (`spot`, `curve` or `bid_ask`) and `ratio_below_pct` (1 to
+/// 99): set them in your own config.
+pub fn with_shape(
+    mut config: serde_json::Value,
+    shape: Option<&str>,
+    ranges: Option<ShapeRanges>,
+    strategy: Option<&str>,
+) -> Result<serde_json::Value, EvmError> {
+    if !config.is_object() {
+        config = serde_json::json!({});
+    }
+    if let Some(shape) = shape {
+        if !SHAPES.contains(&shape) {
+            return Err(EvmError(format!(
+                "shape is one of {}, got '{shape}'",
+                SHAPES.join(", ")
+            )));
+        }
+        let kind = strategy
+            .map(str::to_string)
+            .or_else(|| config.get("kind").and_then(|k| k.as_str()).map(str::to_string));
+        if kind.as_deref() == Some("adaptive_range_recovery") {
+            config["liquidity_shape"] = shape.into();
+        } else {
+            if !config.get("knobs").is_some_and(|k| k.is_object()) {
+                config["knobs"] = serde_json::json!({});
+            }
+            config["knobs"]["liquidity_shape"] = shape.into();
+        }
+    }
+    if let Some(r) = ranges {
+        let v = r.to_json()?;
+        if !config.get("evm").is_some_and(|e| e.is_object()) {
+            config["evm"] = serde_json::json!({});
+        }
+        config["evm"]["shape_ranges"] = v;
+    }
+    Ok(config)
 }
 
 /// `{"evm": {"stake": bool}}`, the patch `update_config` takes on a farm venue.
@@ -600,9 +710,39 @@ mod tests {
 
     #[test]
     fn a_range_is_a_fraction_not_a_percent() {
-        for bad in [5.0, 0.0, -0.05, 1.0, f64::NAN, f64::INFINITY] {
+        for bad in [5.0, -0.05, 1.0, f64::NAN, f64::INFINITY] {
             assert!(range_config(bad, 0.05, "bin_rebalancer", None).is_err(), "{bad}");
             assert!(range_config(0.05, bad, "bin_rebalancer", None).is_err(), "{bad}");
+        }
+        // One side at 0 is a one-sided range (0.16.0); both at 0 is no range.
+        assert!(range_config(0.0, 0.0, "bin_rebalancer", None).is_err());
+        let below = range_config(0.05, 0.0, "bin_rebalancer", None).unwrap();
+        assert_eq!(below["knobs"]["range_pct"], serde_json::json!({ "down_pct": 0.05, "up_pct": 0.0 }));
+        assert!(below["target_bin_width"].as_u64() < range_config(0.05, 0.05, "bin_rebalancer", None).unwrap()["target_bin_width"].as_u64());
+    }
+
+    #[test]
+    fn a_shape_goes_where_the_strategy_keeps_it() {
+        let c = with_shape(range_config(0.05, 0.05, "bin_rebalancer", Some(false)).unwrap(), Some("curve"), Some(ShapeRanges::Auto), None).unwrap();
+        assert_eq!(c["knobs"]["liquidity_shape"], "curve");
+        assert_eq!(c["evm"], serde_json::json!({ "stake": false, "shape_ranges": "auto" }));
+        let a = with_shape(serde_json::json!({ "kind": "adaptive_range_recovery" }), Some("bid_ask"), Some(ShapeRanges::Fixed(3)), None).unwrap();
+        assert_eq!((a["liquidity_shape"].as_str(), a.get("knobs")), (Some("bid_ask"), None));
+        assert_eq!(a["evm"]["shape_ranges"], 3);
+        let named = with_shape(serde_json::json!({}), Some("spot_bid_ask"), None, Some("adaptive_range_recovery")).unwrap();
+        assert_eq!(named["liquidity_shape"], "spot_bid_ask");
+        assert!(with_shape(serde_json::json!({}), Some("hybrid"), None, None).is_err());
+        for n in [0u8, 8] {
+            assert!(with_shape(serde_json::json!({}), None, Some(ShapeRanges::Fixed(n)), None).is_err());
+        }
+        assert!(is_shape_venue("uniswap_v3", "robinhood"));
+        assert!(!is_shape_venue("uniswap_v4", "robinhood"));
+        assert!(is_shape_venue("pancakeswap_infinity_cl", "bsc"));
+        assert!(!is_shape_venue("aerodrome_classic", "base"));
+        for (venue, chains) in SHAPE_VENUES {
+            for chain in chains {
+                assert!(venue_chains(venue).contains(chain), "{venue} {chain}");
+            }
         }
     }
 

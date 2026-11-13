@@ -1,0 +1,26 @@
+{
+  "state": "live",
+  "walletsFresh": 41,
+  "walletsTracked": 44,
+  "lastOkAt": "2026-11-12T08:59:30Z",
+  "evm": [
+    {
+      "chain": "bsc",
+      "state": "live",
+      "walletsTracked": 3,
+      "walletsRead": 3,
+      "lastOkAt": "2026-11-12T08:58:00Z",
+      "cadence": "webhook",
+      "pollMinutes": 5
+    },
+    {
+      "chain": "base",
+      "state": "starting",
+      "walletsTracked": 1,
+      "walletsRead": 0,
+      "lastOkAt": null,
+      "cadence": "poll",
+      "pollMinutes": 5
+    }
+  ]
+}

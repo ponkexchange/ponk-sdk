@@ -203,6 +203,21 @@ impl Client {
             .await
     }
 
+    /// [`Client::leaderboard`] on the chains asked for: `chains` is a list of
+    /// chain ids ([`crate::evm::CHAINS`]; `bnb` is sent as `bsc`) or
+    /// `["all"]`; `None` is every chain. Under a filter the rows on other
+    /// chains are dropped, `rank` is numbered again from 1 and `totals` are
+    /// those of the rows kept; [`Leaderboard::chains`] says which chains the
+    /// answer covers. An unknown id is [`Error::InvalidArgument`] before a
+    /// request.
+    pub async fn leaderboard_on(&self, window: Option<&str>, chains: Option<&[&str]>) -> Result<Leaderboard> {
+        self.get(&with_query(
+            "/public/agents-leaderboard",
+            &[("window", window.map(str::to_string)), ("chains", chains_param(chains)?)],
+        ))
+        .await
+    }
+
     /// `GET /public/agents/{slug}`. A shared agent's public profile. 404 for
     /// an unknown slug, 410 for one its owner stopped sharing.
     pub async fn public_agent(&self, slug: &str) -> Result<PublicAgent> {
@@ -266,7 +281,7 @@ impl Client {
     /// `GET /public/x/feed`. The curated X accounts' posts and events, newest
     /// first. See [`XFeedQuery`] for the filters.
     pub async fn x_feed(&self, query: &XFeedQuery) -> Result<XFeed> {
-        self.get(&with_query("/public/x/feed", &query.params())).await
+        self.get(&with_query("/public/x/feed", &query.params()?)).await
     }
 
     /// `GET /public/x/trending?window=&limit=`. Tokens trending on X with
@@ -287,6 +302,35 @@ impl Client {
     pub async fn x_callers(&self, days: Option<i64>) -> Result<XCallers> {
         self.get(&with_query("/public/x/callers", &[("days", days.map(|n| n.to_string()))]))
             .await
+    }
+
+    /// [`Client::x_trending`] ranked over mentions on `chains` only (chain
+    /// ids, or `["all"]`; `None` is every chain).
+    pub async fn x_trending_on(
+        &self,
+        window: Option<&str>,
+        limit: Option<i64>,
+        chains: Option<&[&str]>,
+    ) -> Result<XTrending> {
+        self.get(&with_query(
+            "/public/x/trending",
+            &[
+                ("window", window.map(str::to_string)),
+                ("limit", limit.map(|n| n.to_string())),
+                ("chains", chains_param(chains)?),
+            ],
+        ))
+        .await
+    }
+
+    /// [`Client::x_callers`] on `chains` only: a caller's record under a
+    /// chain is their calls on it.
+    pub async fn x_callers_on(&self, days: Option<i64>, chains: Option<&[&str]>) -> Result<XCallers> {
+        self.get(&with_query(
+            "/public/x/callers",
+            &[("days", days.map(|n| n.to_string())), ("chains", chains_param(chains)?)],
+        ))
+        .await
     }
 
     /// `GET /public/calls`. The Ponk Calls feed, newest first. `source` is
@@ -310,6 +354,14 @@ impl Client {
         .await
     }
 
+    /// `GET /public/calls?...` with every filter, typed. See
+    /// [`CallsFeedQuery`]: `mint` takes a Solana mint or an EVM token id,
+    /// `wallet` one caller, `chains` the chains of the called tokens. Each
+    /// call carries its `chain`.
+    pub async fn calls_feed_with(&self, query: &CallsFeedQuery) -> Result<CallsFeed> {
+        self.get(&with_query("/public/calls", &query.params()?)).await
+    }
+
     /// `GET /public/calls/callers`. The callers board. Public.
     pub async fn callers_board(&self, days: Option<i64>, source: Option<&str>) -> Result<serde_json::Value> {
         self.get(&with_query(
@@ -319,13 +371,35 @@ impl Client {
         .await
     }
 
+    /// [`Client::callers_board`] on `chains` only (a caller's record under a
+    /// chain is their calls on it), typed.
+    pub async fn callers_board_on(
+        &self,
+        days: Option<i64>,
+        source: Option<&str>,
+        chains: Option<&[&str]>,
+    ) -> Result<CallersBoard> {
+        self.get(&with_query(
+            "/public/calls/callers",
+            &[
+                ("days", days.map(|n| n.to_string())),
+                ("source", source.map(str::to_string)),
+                ("chains", chains_param(chains)?),
+            ],
+        ))
+        .await
+    }
+
     /// `GET /public/calls/caller/{who}`. One caller's profile and calls. Public.
     pub async fn caller(&self, who: &str) -> Result<serde_json::Value> {
         self.get(&format!("/public/calls/caller/{}", seg(who))).await
     }
 
-    /// `GET /public/x/token/{mint}`. Every tracked mention of one token. 400
-    /// for a string that is not a Solana address.
+    /// `GET /public/x/token/{mint}`. Every tracked mention of one token.
+    /// `mint` is a Solana mint or an EVM token id
+    /// ([`crate::evm::token_id`]); the colons of an EVM id are
+    /// percent-encoded in the path. The answer carries `chain` and, on an EVM
+    /// token, `price_source`. 400 for a string that is not a token id.
     pub async fn x_token(&self, mint: &str) -> Result<XToken> {
         self.get(&format!("/public/x/token/{}", seg(mint))).await
     }
@@ -345,7 +419,7 @@ impl Client {
     /// `GET /public/wallets/feed`. The curated wallets' swaps and LP actions,
     /// merged. See [`WalletFeedQuery`] for the filters.
     pub async fn wallets_feed(&self, query: &WalletFeedQuery) -> Result<WalletFeed> {
-        self.get(&with_query("/public/wallets/feed", &query.params())).await
+        self.get(&with_query("/public/wallets/feed", &query.params()?)).await
     }
 
     /// `GET /public/wallets/defaults`. The curated wallet list.
@@ -359,12 +433,15 @@ impl Client {
     }
 
     /// `GET /public/wallets/{address}/activity`. Any wallet's recent swaps and
-    /// LP actions: from the tracker when it stores the wallet (`mode`
-    /// `tracked`), read from chain otherwise (`live`, one page). Rate limited
-    /// per IP. `query.wallet` is ignored here.
+    /// LP actions. `address` is a Solana address or an EVM `0x` address (one
+    /// wallet on all five EVM chains). From the tracker when it stores the
+    /// wallet (`mode` `tracked`); a Solana wallet it does not store is read
+    /// from chain (`live`, one page); an EVM wallet is read once it is
+    /// tracked, and until then answers `untracked` with no items. Rate
+    /// limited per IP. `query.wallet` is ignored here.
     pub async fn wallet_activity(&self, address: &str, query: &WalletFeedQuery) -> Result<WalletActivity> {
         let q = WalletFeedQuery { wallet: None, ..query.clone() };
-        self.get(&with_query(&format!("/public/wallets/{}/activity", seg(address)), &q.params()))
+        self.get(&with_query(&format!("/public/wallets/{}/activity", seg(address)), &q.params()?))
             .await
     }
 
@@ -1809,13 +1886,21 @@ impl Client {
 
     // -- account: calls, push, cards, referral, privacy, logs (0.7.0) --------
 
-    /// `GET /v1/calls/preview?mint=`.
+    /// `GET /v1/calls/preview?mint=`. What a call on this token would attach.
+    /// `mint` is a Solana mint, an EVM token id (`eip155:<chain id>:0x...`)
+    /// or an EVM pool id; a pool resolves to its token (the side that is not
+    /// the gas coin or a stable) and the answer's `mint` is that token's id.
+    /// The answer carries `chain` and, on an EVM token, `price_source`.
     pub async fn call_preview(&self, mint: &str) -> Result<CallPreview> {
         self.get(&with_query("/v1/calls/preview", &[("mint", Some(mint.to_string()))]))
             .await
     }
 
     /// `POST /v1/calls`. The server reads your position from chain itself.
+    /// `mint` takes the same three forms as [`Client::call_preview`]. A call
+    /// on an EVM token is posted by hand (`auto` is false) and its Holder
+    /// mark is your own EVM agents whose pool holds the token. A gas coin or
+    /// a dollar stable is refused (400). Needs a `trade` key.
     pub async fn post_call(&self, mint: &str, text: &str) -> Result<Call> {
         let body = serde_json::json!({ "mint": mint, "text": text });
         self.post("/v1/calls", Some(&body), self.timeout).await
@@ -1925,9 +2010,42 @@ impl Client {
         self.delete("/v1/logs").await
     }
 
-    /// `GET /v1/recap/weekly`.
+    /// `GET /v1/recap/weekly`. Kept as JSON; [`Client::weekly_recap_typed`]
+    /// decodes the same body.
     pub async fn weekly_recap(&self) -> Result<serde_json::Value> {
         self.get("/v1/recap/weekly").await
+    }
+
+    /// `GET /v1/recap/weekly`, typed: the week's agents, summed P&L and fees,
+    /// the best agent with its `chain`, and your rank in the week's race
+    /// across every chain.
+    pub async fn weekly_recap_typed(&self) -> Result<WeeklyRecap> {
+        self.get("/v1/recap/weekly").await
+    }
+
+    /// `GET /v1/feed-prefs`. The account's saved chain filter: one choice per
+    /// account, used by every signed-in board and tracker read that names no
+    /// chains. A `read` key is enough.
+    pub async fn feed_prefs(&self) -> Result<FeedPrefs> {
+        self.get("/v1/feed-prefs").await
+    }
+
+    /// `PATCH /v1/feed-prefs`. Save the chain filter: [`FeedChains::All`]
+    /// (sent as `"all"`) or [`FeedChains::Only`] with chain ids (an empty
+    /// list is every chain; `bnb` is sent as `bsc`). An unknown id is
+    /// [`Error::InvalidArgument`] before a request. Needs a `trade` key.
+    pub async fn set_feed_prefs(&self, chains: &FeedChains) -> Result<FeedPrefs> {
+        let body = match chains {
+            FeedChains::All => FeedChains::All,
+            FeedChains::Only(ids) => {
+                let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+                match chain_ids(&refs)? {
+                    Some(list) => FeedChains::Only(list),
+                    None => FeedChains::All,
+                }
+            }
+        };
+        self.patch_json("/v1/feed-prefs", &serde_json::json!({ "chains": body })).await
     }
 
     /// `GET /v1/ponkillionaires`. Your standing in this week's race.
@@ -2243,8 +2361,30 @@ impl Client {
         .await
     }
 
+    /// [`Client::top_calls`] on tokens on `chains` only (chain ids, or
+    /// `["all"]`; `None` is every chain).
+    pub async fn top_calls_on(
+        &self,
+        days: Option<i64>,
+        limit: Option<i64>,
+        source: Option<&str>,
+        chains: Option<&[&str]>,
+    ) -> Result<TopCalls> {
+        self.get(&with_query(
+            "/public/calls/top",
+            &[
+                ("days", days.map(|n| n.to_string())),
+                ("limit", limit.map(|n| n.to_string())),
+                ("source", source.map(str::to_string)),
+                ("chains", chains_param(chains)?),
+            ],
+        ))
+        .await
+    }
+
     /// `GET /public/wallets/{address}/pnl`. Trading PnL per token for any
-    /// wallet, from its swaps. No key needed.
+    /// Solana wallet, from its swaps. No key needed. An EVM address answers
+    /// 422: its moves are on [`Client::wallet_activity`].
     pub async fn wallet_pnl(&self, address: &str) -> Result<WalletPnl> {
         self.get(&format!("/public/wallets/{}/pnl", seg(address))).await
     }
@@ -2417,6 +2557,21 @@ impl Client {
         self.get(&evm_open_cost_path("/public/evm", chain, dex, pool, stake)).await
     }
 
+    /// `GET /v1/evm/{chain}/open-cost` with every parameter, a shape quote
+    /// included (see [`OpenCostQuery`]). With `shape` set, the answer's
+    /// [`EvmOpenCost::shape`] is the count of ranges the agent would open now
+    /// and the gas of opening and later closing each count against the 3%
+    /// limit, where shapes are switched on. Needs a key.
+    pub async fn evm_open_cost_with(&self, chain: &str, query: &OpenCostQuery) -> Result<EvmOpenCost> {
+        self.get(&query.path("/v1/evm", chain)).await
+    }
+
+    /// The same quote on the keyless public route, with the fee rates of an
+    /// agent created on ponk.exchange.
+    pub async fn evm_open_cost_public_with(&self, chain: &str, query: &OpenCostQuery) -> Result<EvmOpenCost> {
+        self.get(&query.path("/public/evm", chain)).await
+    }
+
     /// `POST /v1/agents`. Create an agent on an EVM chain.
     ///
     /// Build the body with [`NewAgent::evm_range`] (a range venue: the range
@@ -2441,6 +2596,11 @@ impl Client {
     /// ([`Client::create_agent_wallet`]). A refusal is a 422 with a plain
     /// sentence: the venue is not on that chain, the pool is not a pool of
     /// that venue, a v4 hook an agent cannot use.
+    ///
+    /// A liquidity shape is [`NewAgent::shape`] and
+    /// [`NewAgent::shape_ranges`]. A shape on a full-range venue, or a range
+    /// count on a venue outside [`crate::evm::SHAPE_VENUES`], is
+    /// [`Error::InvalidArgument`] here before anything is sent.
     pub async fn create_evm_agent(&self, agent: &NewAgent) -> Result<Agent> {
         match agent.chain.as_deref() {
             Some(chain) if crate::evm::is_evm_chain(chain) => {}
@@ -2461,6 +2621,27 @@ impl Client {
             return Err(Error::InvalidArgument(
                 "an agent on an EVM chain needs pool_address, the pool's CAIP id".into(),
             ));
+        }
+        let shape = agent
+            .config
+            .get("liquidity_shape")
+            .or_else(|| agent.config.get("knobs").and_then(|k| k.get("liquidity_shape")));
+        let ranges = agent.config.get("evm").and_then(|e| e.get("shape_ranges"));
+        if (shape.is_some() || ranges.is_some()) && crate::evm::is_full_range_venue(&agent.dex) {
+            return Err(Error::InvalidArgument(format!(
+                "{} is a full-range venue: a position there is a share of the whole pool and takes no shape",
+                agent.dex
+            )));
+        }
+        let chain = agent.chain.as_deref().unwrap_or_default();
+        if ranges.is_some() && !crate::evm::is_shape_venue(&agent.dex, chain) {
+            return Err(Error::InvalidArgument(format!(
+                "{} on {chain} opens one range, so shape_ranges does not apply there. Shapes open as \
+                 several ranges on Uniswap v3 on Arbitrum, Ethereum and Robinhood Chain, Uniswap v4 on \
+                 Arbitrum and Ethereum, PancakeSwap v3 and Infinity CL on BNB Chain, and Aerodrome \
+                 Slipstream on Base.",
+                agent.dex
+            )));
         }
         self.create_agent(agent).await
     }
@@ -2494,6 +2675,27 @@ impl Client {
     pub async fn copilot_evm_plan(&self, text: &str) -> Result<EvmPlan> {
         self.post("/copilot/evm/plans", Some(&serde_json::json!({ "text": text })), self.timeout)
             .await
+    }
+
+    /// [`Client::copilot_evm_plan`] with a liquidity shape and a side,
+    /// appended to the sentence in the grammar's own words (`", curve
+    /// shape"`, `", one sided below"`). `shape` is `spot`, `curve` or
+    /// `bid_ask` ([`crate::evm::PLAN_SHAPES`]); `one_sided` is `below` or
+    /// `above`. Curve and Bid-Ask open as several ranges managed as one
+    /// position on the venues in [`crate::evm::SHAPE_VENUES`]; with no venue
+    /// named the plan ranks that chain's pools of that venue. Each leg then
+    /// carries [`EvmPlanLeg::shape`]: its kind, the ranges at current gas and
+    /// the gas of opening and later closing them against the 3% limit. On any
+    /// other venue the leg opens one range and says where the shape opens as
+    /// several.
+    pub async fn copilot_evm_plan_shaped(
+        &self,
+        text: &str,
+        shape: Option<&str>,
+        one_sided: Option<&str>,
+    ) -> Result<EvmPlan> {
+        let text = evm_plan_sentence(text, shape, one_sided)?;
+        self.copilot_evm_plan(&text).await
     }
 
     /// `GET /copilot/evm/plans/{id}`. The same plan, readable only by its maker.
@@ -2944,6 +3146,11 @@ impl Client {
         self.send(request, path, &[]).await
     }
 
+    async fn patch_json<B: Serialize + ?Sized, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
+        let request = self.http.patch(self.url(path)).timeout(self.timeout).json(body);
+        self.send(request, path, &[]).await
+    }
+
     /// A POST that carries the caller's Jupiter session in
     /// `X-Jupiter-Session`. The token is used for this one request only.
     async fn post_jupiter<B: Serialize, T: DeserializeOwned>(
@@ -3125,6 +3332,87 @@ fn evm_open_cost_path(prefix: &str, chain: &str, dex: &str, pool: Option<&str>, 
     )
 }
 
+/// The plan sentence with a shape and a side appended in the grammar's own
+/// words. The sentence goes as written when neither is given.
+pub(crate) fn evm_plan_sentence(text: &str, shape: Option<&str>, one_sided: Option<&str>) -> Result<String> {
+    if shape.is_none() && one_sided.is_none() {
+        return Ok(text.to_string());
+    }
+    let mut out = text.trim_end().trim_end_matches('.').to_string();
+    if let Some(shape) = shape {
+        let word = match shape {
+            "spot" => "spot",
+            "curve" => "curve",
+            "bid_ask" => "bid-ask",
+            other => {
+                return Err(Error::InvalidArgument(format!(
+                    "shape is one of {}, got '{other}'",
+                    crate::evm::PLAN_SHAPES.join(", ")
+                )))
+            }
+        };
+        out.push_str(&format!(", {word} shape"));
+    }
+    if let Some(side) = one_sided {
+        if !crate::evm::ONE_SIDED.contains(&side) {
+            return Err(Error::InvalidArgument(format!("one_sided is below or above, got '{side}'")));
+        }
+        out.push_str(&format!(", one sided {side}"));
+    }
+    Ok(out)
+}
+
+/// Every parameter of the EVM open-cost quote. `dex` is required; the rest
+/// are optional. The shape fields are read where shapes are switched on.
+#[derive(Debug, Clone, Default)]
+pub struct OpenCostQuery {
+    /// The venue id.
+    pub dex: String,
+    /// The pool id, checked against the venue and chain.
+    pub pool: Option<String>,
+    /// The server defaults to true where the venue has a farm.
+    pub stake: Option<bool>,
+    /// A shape to quote: one of [`crate::evm::SHAPES`].
+    pub shape: Option<String>,
+    /// The range count asked: `"auto"` or 1 to 7.
+    pub ranges: Option<String>,
+    /// The deposit in dollars.
+    pub amount_usd: Option<f64>,
+    /// PERCENT either side of the price, 1 to 50 (server default 5).
+    pub range_pct: Option<f64>,
+    /// `below` or `above` for a one-sided band.
+    pub side: Option<String>,
+    /// An existing position's width in ticks.
+    pub width_ticks: Option<u32>,
+    /// One of your agents: the quote is sized to its live position.
+    pub agent: Option<String>,
+}
+
+impl OpenCostQuery {
+    /// A quote for `dex` with nothing else set.
+    pub fn new(dex: impl Into<String>) -> Self {
+        Self { dex: dex.into(), ..Self::default() }
+    }
+
+    fn path(&self, prefix: &str, chain: &str) -> String {
+        with_query(
+            &format!("{prefix}/{}/open-cost", seg(chain)),
+            &[
+                ("dex", Some(self.dex.clone())),
+                ("pool", self.pool.clone()),
+                ("stake", self.stake.map(|s| s.to_string())),
+                ("shape", self.shape.clone()),
+                ("ranges", self.ranges.clone()),
+                ("amount_usd", self.amount_usd.map(|v| v.to_string())),
+                ("range_pct", self.range_pct.map(|v| v.to_string())),
+                ("side", self.side.clone()),
+                ("width_ticks", self.width_ticks.map(|v| v.to_string())),
+                ("agent", self.agent.clone()),
+            ],
+        )
+    }
+}
+
 fn with_query(path: &str, params: &[(&str, Option<String>)]) -> String {
     let set: Vec<String> = params
         .iter()
@@ -3155,11 +3443,17 @@ pub struct XFeedQuery {
     pub account: Option<String>,
     /// Text search.
     pub q: Option<String>,
+    /// Only posts that were the first call of a token.
+    pub first_calls: bool,
+    /// Chain ids (or `["all"]`): keeps a post that names a token on one of
+    /// them; a post that names no token is always kept. `None` is every
+    /// chain (the saved filter on a signed-in read).
+    pub chains: Option<Vec<String>>,
 }
 
 impl XFeedQuery {
-    fn params(&self) -> Vec<(&'static str, Option<String>)> {
-        vec![
+    fn params(&self) -> Result<Vec<(&'static str, Option<String>)>> {
+        Ok(vec![
             ("before", self.before.clone()),
             ("since", self.since.clone()),
             ("limit", self.limit.map(|n| n.to_string())),
@@ -3168,7 +3462,39 @@ impl XFeedQuery {
             ("minFollowers", self.min_followers.map(|n| n.to_string())),
             ("account", self.account.clone()),
             ("q", self.q.clone()),
-        ]
+            ("first", self.first_calls.then(|| "1".to_string())),
+            ("chains", chains_param_owned(self.chains.as_deref())?),
+        ])
+    }
+}
+
+/// Filters for [`Client::calls_feed_with`]. Every field is optional.
+#[derive(Debug, Clone, Default)]
+pub struct CallsFeedQuery {
+    /// `ponk` (the default), `x` or `all`.
+    pub source: Option<String>,
+    /// One token: a Solana mint or an EVM token id (`eip155:<chain id>:0x...`).
+    pub mint: Option<String>,
+    /// One caller's wallet.
+    pub wallet: Option<String>,
+    /// RFC 3339: the previous page's `next_before`.
+    pub before: Option<String>,
+    pub limit: Option<i64>,
+    /// Chain ids (or `["all"]`): calls on tokens on those chains. `None` is
+    /// every chain.
+    pub chains: Option<Vec<String>>,
+}
+
+impl CallsFeedQuery {
+    fn params(&self) -> Result<Vec<(&'static str, Option<String>)>> {
+        Ok(vec![
+            ("source", self.source.clone()),
+            ("mint", self.mint.clone()),
+            ("wallet", self.wallet.clone()),
+            ("before", self.before.clone()),
+            ("limit", self.limit.map(|n| n.to_string())),
+            ("chains", chains_param_owned(self.chains.as_deref())?),
+        ])
     }
 }
 
@@ -3181,22 +3507,74 @@ pub struct WalletFeedQuery {
     /// Comma separated: `buy`, `sell`, `swap`, `lp` or any single kind.
     pub kind: Option<String>,
     pub min_usd: Option<f64>,
-    /// Only rows touching this mint.
+    /// Only rows touching this token: a Solana mint or an EVM token id.
     pub token: Option<String>,
-    /// Only this wallet (feed only).
+    /// Only this wallet (feed only): a Solana address or an EVM `0x` address.
     pub wallet: Option<String>,
+    /// Chain ids (or `["all"]`): events on those chains. `None` is every
+    /// chain (the saved filter on a signed-in read).
+    pub chains: Option<Vec<String>>,
 }
 
 impl WalletFeedQuery {
-    fn params(&self) -> Vec<(&'static str, Option<String>)> {
-        vec![
+    fn params(&self) -> Result<Vec<(&'static str, Option<String>)>> {
+        Ok(vec![
             ("before", self.before.clone()),
             ("limit", self.limit.map(|n| n.to_string())),
             ("kind", self.kind.clone()),
             ("minUsd", self.min_usd.map(|n| n.to_string())),
             ("token", self.token.clone()),
             ("wallet", self.wallet.clone()),
-        ]
+            ("chains", chains_param_owned(self.chains.as_deref())?),
+        ])
+    }
+}
+
+/// Chain ids as the API names them, deduplicated in order: `bnb` is `bsc`,
+/// a comma list is split. `None` for an empty list. An id outside
+/// [`crate::evm::CHAINS`] is [`Error::InvalidArgument`].
+fn chain_ids(chains: &[&str]) -> Result<Option<Vec<String>>> {
+    let mut out: Vec<String> = Vec::new();
+    for item in chains {
+        for part in item.split(',') {
+            let word = part.trim().to_ascii_lowercase();
+            if word.is_empty() {
+                continue;
+            }
+            let word = if word == "bnb" { "bsc".to_string() } else { word };
+            if !crate::evm::CHAINS.contains(&word.as_str()) {
+                return Err(Error::InvalidArgument(format!(
+                    "unknown chain '{}': chains are {}, or \"all\"",
+                    part.trim(),
+                    crate::evm::CHAINS.join(", ")
+                )));
+            }
+            if !out.contains(&word) {
+                out.push(word);
+            }
+        }
+    }
+    Ok((!out.is_empty()).then_some(out))
+}
+
+/// The `chains` query value: a comma list of chain ids, or `all`. `None`
+/// sends nothing, so a public read covers every chain and a signed-in read
+/// the account's saved filter ([`Client::feed_prefs`]).
+pub(crate) fn chains_param(chains: Option<&[&str]>) -> Result<Option<String>> {
+    let Some(chains) = chains else { return Ok(None) };
+    if chains.iter().any(|c| c.trim().eq_ignore_ascii_case("all")) {
+        return Ok(Some("all".into()));
+    }
+    Ok(chain_ids(chains)?.map(|ids| ids.join(",")))
+}
+
+fn chains_param_owned(chains: Option<&[String]>) -> Result<Option<String>> {
+    match chains {
+        None => Ok(None),
+        Some(list) => {
+            let refs: Vec<&str> = list.iter().map(String::as_str).collect();
+            chains_param(Some(&refs))
+        }
     }
 }
 
@@ -3579,12 +3957,29 @@ mod tests {
     fn the_tracker_queries_use_the_servers_camel_case_names() {
         let q = XFeedQuery { limit: Some(2), ca_only: true, min_followers: Some(1000), category: Some("kol,news".into()), ..Default::default() };
         assert_eq!(
-            with_query("/public/x/feed", &q.params()),
+            with_query("/public/x/feed", &q.params().unwrap()),
             "/public/x/feed?limit=2&category=kol%2Cnews&ca=1&minFollowers=1000"
         );
-        assert_eq!(with_query("/public/x/feed", &XFeedQuery::default().params()), "/public/x/feed");
+        assert_eq!(with_query("/public/x/feed", &XFeedQuery::default().params().unwrap()), "/public/x/feed");
         let w = WalletFeedQuery { kind: Some("lp".into()), min_usd: Some(50.0), ..Default::default() };
-        assert_eq!(with_query("/public/wallets/feed", &w.params()), "/public/wallets/feed?kind=lp&minUsd=50");
+        assert_eq!(with_query("/public/wallets/feed", &w.params().unwrap()), "/public/wallets/feed?kind=lp&minUsd=50");
+    }
+
+    #[test]
+    fn the_chains_value_is_one_comma_list_or_all() {
+        assert_eq!(chains_param(None).unwrap(), None);
+        assert_eq!(chains_param(Some(&["all"])).unwrap().as_deref(), Some("all"));
+        assert_eq!(chains_param(Some(&["solana", "bsc"])).unwrap().as_deref(), Some("solana,bsc"));
+        assert_eq!(chains_param(Some(&["bnb", "bsc"])).unwrap().as_deref(), Some("bsc"));
+        assert_eq!(chains_param(Some(&crate::evm::CHAINS)).unwrap().unwrap(), crate::evm::CHAINS.join(","));
+        assert_eq!(chains_param(Some(&[])).unwrap(), None);
+        assert!(matches!(chains_param(Some(&["sol"])), Err(Error::InvalidArgument(_))));
+        assert_eq!(
+            with_query("/public/agents-leaderboard", &[("chains", chains_param(Some(&["solana", "bsc"])).unwrap())]),
+            "/public/agents-leaderboard?chains=solana%2Cbsc"
+        );
+        assert_eq!(evm_plan_sentence("$200 in bnb", None, None).unwrap(), "$200 in bnb");
+        assert_eq!(evm_plan_sentence("$200 in bnb.", Some("bid_ask"), Some("above")).unwrap(), "$200 in bnb, bid-ask shape, one sided above");
     }
 
     #[test]
@@ -4328,8 +4723,9 @@ mod tests {
         assert!(has_key(&raw), "{raw}");
         assert_eq!(
             (cost.activation_fee_bps, cost.performance_fee_bps, cost.exit_fee_bps),
-            (Some(150), Some(1500), Some(0))
+            (Some(150), Some(1500), Some(100))
         );
+        assert_eq!((cost.exit_yield_fee_bps, cost.exit_swap_fee_bps), (Some(0), Some(20)));
         assert_eq!(cost.native_symbol.as_deref(), Some("BNB"));
         // Wei stays a string; the minimum is the reserve plus the gas budget.
         assert_eq!(cost.min_open_wei.as_deref(), Some("452200000000000"));
@@ -4343,7 +4739,7 @@ mod tests {
     #[tokio::test]
     async fn the_public_open_cost_needs_no_key_and_omits_what_was_not_set() {
         let (base, server) = one_shot(
-            r#"{"chain":"bsc","dex":"pancakeswap_v3","pool":null,"native_symbol":"BNB","gas_wei":null,"gas_usd":null,"reserve_wei":null,"min_open_wei":null,"native_usd":null,"activation_fee_bps":100,"performance_fee_bps":800,"exit_fee_bps":0}"#,
+            r#"{"chain":"bsc","dex":"pancakeswap_v3","pool":null,"native_symbol":"BNB","gas_wei":null,"gas_usd":null,"reserve_wei":null,"min_open_wei":null,"native_usd":null,"activation_fee_bps":100,"performance_fee_bps":800,"exit_fee_bps":100}"#,
         );
         let cost = Client::public(base)
             .unwrap()

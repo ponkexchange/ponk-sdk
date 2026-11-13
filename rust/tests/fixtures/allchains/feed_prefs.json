@@ -1,0 +1,7 @@
+{
+  "chains": [
+    "solana",
+    "bsc"
+  ],
+  "all": false
+}

@@ -257,6 +257,28 @@ wallet that will receive withdrawals. Those are made in the browser, and
 exits pay only the address that mandate proved, and `exit_agent` returns the
 real amounts that landed there (`amount_wei`, `received`, `tx_hashes`).
 
+**Shapes.** An agent on a range venue takes a liquidity shape: `spot` (one
+even range, the default), `curve` (heaviest at the price), `bid_ask`
+(heaviest at the edges) or `spot_bid_ask` (half of each). On Uniswap v3 on
+Arbitrum, Ethereum and Robinhood Chain, Uniswap v4 on Arbitrum and Ethereum,
+PancakeSwap v3 and Infinity CL on BNB Chain and Aerodrome Slipstream on Base
+a shape other than Spot opens as several ranges managed as one position:
+`shape_ranges` is `auto` (chosen from live gas so opening and later closing
+stays within 3% of the deposit) or 1 to 7. Elsewhere the agent keeps the
+shape and opens one range. A one-sided range is one side at 0. Python:
+`create_evm_agent(..., shape="curve", shape_ranges="auto")`,
+`evm_open_cost(..., shape="curve", amount_usd=1000)`,
+`copilot_evm_plan(text, shape="bid_ask", one_sided="below")`. Rust:
+`NewAgent::shape`, `NewAgent::shape_ranges`, `OpenCostQuery`,
+`copilot_evm_plan_shaped`. The terminal:
+
+```
+ponk open-cost arbitrum --dex uniswap_v3 --shape curve --amount-usd 1000
+ponk create-evm-agent --name "weth usdc" --chain arbitrum --dex uniswap_v3 \
+  --pool eip155:42161:0x... --down-pct 0.05 --up-pct 0.05 --shape curve --shape-ranges auto
+ponk plan "$1000 in an arbitrum pool" --shape bid_ask --one-sided below
+```
+
 **One sentence to a fleet.** `copilot_evm_plan("$200 in the top 5 bnb pools")`
 plans in dollars across one or more chains, and `copilot_evm_start(plan.id)`
 creates one agent per pool and returns the `sign_urls`. The agents form a
@@ -268,11 +290,14 @@ copilot fleet, so `copilot_fleet`, `copilot_stop_fleet` and
 An agent created through these clients, the CLI or any API key pays **1.5% of
 its first open, once, and 15% of the fees it earns**, taken as fees are
 claimed, compounded or recentered. A wallet holding 1,000,000 $PONK pays 0.75%
-and 13.5%. No exit fee is charged on an EVM chain. (An agent created on
-ponk.exchange pays 1% and 8%.) Every answer states the rate it applies:
-`Agent.activation_fee_bps` and `Agent.managed_fee_bps` on a create,
-`evm_open_cost` before one, and `fees` on a plan. Gas is paid from the agent's
-own wallet.
+and 13.5%. (An agent created on ponk.exchange pays 1% and 8%.) A withdrawal or
+an exit from an agent that has opened a position pays an exit fee of 1% of
+what leaves, 0.5% for a wallet holding 1,000,000 $PONK, taken in kind on every
+chain; an agent that never opened a position pays none. Every answer states
+the rate it applies: `Agent.activation_fee_bps`, `Agent.managed_fee_bps` and
+`Agent.exit_fee_bps` on a create, `evm_open_cost` before one, `fees` on a
+plan, and `exit_fees` with `exit_fee_bps` on an EVM withdrawal or exit. Gas is
+paid from the agent's own wallet.
 
 ### Done on ponk.exchange
 
@@ -309,6 +334,7 @@ retrying an authentication failure forever.
 | **Read** | `whoami` · `list_agents` · `get_agent` · `agent_performance` · `agent_position` · `agent_value_history` · `agent_decisions` · `agent_wallet` · `agent_mandate` · `list_positions` · `list_logs` · `get_public_link` · `list_follows` · `points` · `points_leaderboard` · `referral` · `creator_dashboard` · `check_handle` |
 | **Act** (`trade` scope) | `create_agent` · `copy_agent` (Python) · `optimize_draft` · `pause_agent` · `resume_agent` · `set_dry_run` · `set_mode` · `update_config` · `update_exits` · `set_auto_compound` · `set_autonomous` · `share_agent` · `unshare_agent` · `follow` · `unfollow` · `claim_handle` · `compound` · `withdraw` · `exit_agent` · `rebalance` · `collect_fees` · `rename_agent` · `delete_agent` · `create_agent_wallet` · `custody_withdraw` · `custody_exit` |
 | **EVM chains** (0.15.0) | `evm_chains` · `evm_pools` · `evm_pool` · `evm_token` · `evm_open_cost` · `create_evm_agent` · `set_stake_rewards` · `copilot_evm_plan` · `copilot_evm_get_plan` · `copilot_evm_start` · `evm_fleet` · helpers `pool_id` · `v4_pool_id` · `token_id` · `parse_evm_id` · `wei_to_native` · `fund_link` · `fund_links`. Every agent read and control above works on an EVM agent by id. |
+| **All chains** (0.16.0) | `chains` on `leaderboard` · `calls_feed` · `top_calls` · `callers_board` · `x_feed` · `x_trending` · `x_callers` · `wallets_feed` · `wallet_activity` (Rust: the `_on` methods, `CallsFeedQuery`, `XFeedQuery.chains`, `WalletFeedQuery.chains`) · `feed_prefs` · `set_feed_prefs` · `weekly_recap` (Rust: `weekly_recap_typed`) · EVM token ids on `x_token` · `call_preview` · `post_call` · EVM shapes on `create_evm_agent` · `evm_open_cost` · `copilot_evm_plan` |
 | **Fleet** | `create_agents` · `fund_prepare` · `fleet` · `iter_fleet` / `fleet_all` · `get_batch` · `exit_agents` · `withdraw_agents` |
 | **Swap orders** | `plan_orders` (one sign link) · `orders_challenge` · `orders_verify` · `orders_refresh` · `orders_logout` · `order_mint_support` · `craft_order_deposit` · `create_price_order` · `create_dca_order` · `cancel_order` · `confirm_order_cancel` · `list_orders` · `cancel_orders` · `confirm_order_cancels` |
 | **Copy and follow** | `copy_source` · `follow_status` · `follow_leader` · `update_follow` · `unfollow_leader` · `answer_follow_offer` · `list_copy_follows` · `follow_leaders` · `follow_many` · `wallet_follow` · `unfollow_wallet` · `answer_wallet_offer` · `copy_log` · `copy_referral` · `attach_copy_referral` |
@@ -384,6 +410,38 @@ Following X accounts and tracking your own wallets are app session routes
 (`/me/x/*`, `/me/wallets/*`). They take a wallet sign-in, not an API key, so
 they are not in these clients. Live copy follow, Copy LP and the card and push
 settings are, from 0.7.0.
+
+## Chains on the boards and trackers
+
+The agents leaderboard, Calls, the X Tracker and the Wallet Tracker cover
+Solana, BNB Chain, Base, Ethereum, Arbitrum and Robinhood Chain. Each read
+takes `chains` (a list of chain ids, or `all`) and every answer says which
+chains it covers. A token is a Solana mint or an EVM token id
+(`eip155:<chain id>:0x...`), a wallet a Solana or an EVM address. A signed-in
+read that names no chains uses the account's saved filter.
+
+```python
+import os
+from ponk import PonkClient, evm
+
+ponk = PonkClient(api_key=os.environ["PONK_API_KEY"])
+board = ponk.leaderboard("7d", chains=["bsc"])      # ranks from 1 on BNB Chain
+cake = evm.token_id("bsc", "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82")
+print(ponk.x_token(cake).price_source)
+ponk.set_feed_prefs("all")
+```
+
+```rust
+let board = ponk.leaderboard_on(Some("7d"), Some(&["bsc"])).await?;
+let cake = ponk::evm::token_id("bsc", "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82")?;
+let token = ponk.x_token(&cake).await?;
+ponk.set_feed_prefs(&ponk::FeedChains::All).await?;
+```
+
+```
+ponk leaderboard --window 7d --chains bsc
+ponk feed-prefs set all
+```
 
 ## Copy a Top Ponkillionaire
 

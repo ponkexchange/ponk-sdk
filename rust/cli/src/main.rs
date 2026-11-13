@@ -14,8 +14,8 @@
 //! * `PONK_API_KEY`  the `ponk_live_...` key from Settings, API keys. Needed
 //!   by `agents`, `agent <uuid>`, `create-agent`, `create-evm-agent`,
 //!   `wallet`, `pause`, `resume`, `withdraw`, `exit`, `open-cost`, `plan`,
-//!   `start-plan`, `evm-fleet` and `whoami`. The pool, chain and leaderboard
-//!   reads and `fund-link` need none.
+//!   `start-plan`, `evm-fleet`, `feed-prefs` and `whoami`. The pool, chain
+//!   and leaderboard reads and `fund-link` need none.
 //! * `PONK_API_URL`  the API base, default `https://ponk.exchange/api`.
 //! * `PONK_WEB_URL`  the web origin for the two app-served boards, only when
 //!   it is not the API base minus `/api` (local development).
@@ -67,6 +67,12 @@ impl BoardView {
             Self::Tvl => "tvl",
         }
     }
+}
+
+#[derive(Subcommand)]
+enum FeedPrefsCmd {
+    /// Save the filter: a comma list of chain ids, or all.
+    Set { chains: String },
 }
 
 #[derive(Subcommand)]
@@ -144,6 +150,18 @@ enum Cmd {
         /// 24h, 7d, 30d or all.
         #[arg(long)]
         window: Option<String>,
+        /// Only agents on these chains: a comma list of solana, ethereum,
+        /// arbitrum, base, bsc (or bnb), robinhood, or all. Ranks are
+        /// numbered again from 1 over the rows kept.
+        #[arg(long)]
+        chains: Option<String>,
+    },
+    /// Your saved chain filter: the chains every signed-in board and tracker
+    /// read covers when it names none. `ponk feed-prefs set bsc,solana` (or
+    /// `all`) saves it, with a trade key.
+    FeedPrefs {
+        #[command(subcommand)]
+        action: Option<FeedPrefsCmd>,
     },
     /// Confirm the key works and what it is allowed to do.
     Whoami,
@@ -180,6 +198,23 @@ enum Cmd {
         /// Quote an open that does not stake for farm rewards.
         #[arg(long)]
         no_stake: bool,
+        /// Quote a liquidity shape: spot, curve, bid_ask or spot_bid_ask.
+        /// Adds how many ranges the agent would open now and the gas of
+        /// opening and later closing them, where shapes run.
+        #[arg(long)]
+        shape: Option<String>,
+        /// With --shape: the range count asked, auto or 1 to 7.
+        #[arg(long)]
+        ranges: Option<String>,
+        /// With --shape: the deposit in dollars.
+        #[arg(long)]
+        amount_usd: Option<f64>,
+        /// With --shape: percent either side of the price, 1 to 50.
+        #[arg(long)]
+        range_pct: Option<f64>,
+        /// With --shape: below or above, for a one-sided band.
+        #[arg(long)]
+        side: Option<String>,
     },
     /// Create an agent on an EVM chain, then print its deposit address and
     /// the link where your own wallets sign its mandate. Live by default.
@@ -196,12 +231,23 @@ enum Cmd {
         #[arg(long)]
         pool: String,
         /// How far the range reaches below the price, as a fraction: 0.05 is
-        /// 5%. Range venues only.
+        /// 5%. Range venues only. 0 on one side is a one-sided range.
         #[arg(long)]
         down_pct: Option<f64>,
         /// How far the range reaches above the price, as a fraction.
         #[arg(long)]
         up_pct: Option<f64>,
+        /// The liquidity shape: spot (one even range, the default), curve,
+        /// bid_ask or spot_bid_ask. Several ranges managed as one position on
+        /// Uniswap v3 (Arbitrum, Ethereum, Robinhood Chain), Uniswap v4
+        /// (Arbitrum, Ethereum), PancakeSwap v3 and Infinity CL, Aerodrome
+        /// Slipstream; one range on any other range venue.
+        #[arg(long)]
+        shape: Option<String>,
+        /// How many ranges the shape opens as: auto (from live gas, within 3%
+        /// of the deposit) or 1 to 7.
+        #[arg(long)]
+        shape_ranges: Option<String>,
         /// Your own strategy id, with --config.
         #[arg(long)]
         strategy: Option<String>,
@@ -241,7 +287,15 @@ enum Cmd {
     EvmFleet,
     /// Plan one sentence that names an EVM chain, in dollars:
     /// ponk plan "$200 in the top 5 bnb pools". Creates nothing.
-    Plan { text: String },
+    Plan {
+        text: String,
+        /// A liquidity shape for every leg: spot, curve or bid_ask.
+        #[arg(long)]
+        shape: Option<String>,
+        /// A one-sided range: below or above the price.
+        #[arg(long)]
+        one_sided: Option<String>,
+    },
     /// Start a plan: one agent per pool. Moves no money; prints the link
     /// where your own wallets sign and fund.
     StartPlan { id: String },
@@ -312,15 +366,26 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Pause { id } => pause_resume(&cli, id, true).await,
         Cmd::Resume { id } => pause_resume(&cli, id, false).await,
         Cmd::Withdraw { id, lamports } => withdraw(&cli, id, *lamports).await,
-        Cmd::Leaderboard { window } => leaderboard(&cli, window.as_deref()).await,
+        Cmd::Leaderboard { window, chains } => leaderboard(&cli, window.as_deref(), chains.as_deref()).await,
+        Cmd::FeedPrefs { action } => feed_prefs(&cli, action.as_ref()).await,
         Cmd::Whoami => whoami(&cli).await,
         Cmd::Chains => chains(&cli).await,
         Cmd::EvmPools { chain, venue, search, limit } => {
             evm_pools(&cli, chain, venue.as_deref(), search.as_deref(), *limit).await
         }
         Cmd::EvmPool { id } => evm_pool(&cli, id).await,
-        Cmd::OpenCost { chain, dex, pool, no_stake } => {
-            open_cost(&cli, chain, dex, pool.as_deref(), *no_stake).await
+        Cmd::OpenCost { chain, dex, pool, no_stake, shape, ranges, amount_usd, range_pct, side } => {
+            let q = ponk::OpenCostQuery {
+                pool: pool.clone(),
+                stake: no_stake.then_some(false),
+                shape: shape.clone(),
+                ranges: ranges.clone(),
+                amount_usd: *amount_usd,
+                range_pct: *range_pct,
+                side: side.clone(),
+                ..ponk::OpenCostQuery::new(dex.as_str())
+            };
+            open_cost(&cli, chain, &q).await
         }
         Cmd::CreateEvmAgent {
             name,
@@ -329,6 +394,8 @@ async fn run(cli: Cli) -> Result<()> {
             pool,
             down_pct,
             up_pct,
+            shape,
+            shape_ranges,
             strategy,
             config,
             stake,
@@ -344,6 +411,8 @@ async fn run(cli: Cli) -> Result<()> {
                     pool,
                     down_pct: *down_pct,
                     up_pct: *up_pct,
+                    shape: shape.as_deref(),
+                    shape_ranges: shape_ranges.as_deref(),
                     strategy: strategy.as_deref(),
                     config: config.as_deref(),
                     stake: *stake,
@@ -356,7 +425,7 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Wallet { id } => wallet(&cli, id).await,
         Cmd::FundLink { ids, chain, lamports } => fund_link(ids, chain.as_deref(), *lamports),
         Cmd::EvmFleet => evm_fleet(&cli).await,
-        Cmd::Plan { text } => plan(&cli, text).await,
+        Cmd::Plan { text, shape, one_sided } => plan(&cli, text, shape.as_deref(), one_sided.as_deref()).await,
         Cmd::StartPlan { id } => start_plan(&cli, id).await,
         Cmd::Exit { id, confirm } => exit(&cli, id, *confirm).await,
     }
@@ -1153,14 +1222,20 @@ async fn evm_pool(cli: &Cli, id: &str) -> Result<()> {
     Ok(())
 }
 
-fn open_cost_path(chain: &str, dex: &str, pool: Option<&str>, stake: Option<bool>) -> String {
-    let mut path = format!("/v1/evm/{}/open-cost?dex={}", urlencode(chain), urlencode(dex));
-    if let Some(p) = pool {
-        path.push_str(&format!("&pool={}", urlencode(p)));
-    }
-    if let Some(s) = stake {
-        path.push_str(&format!("&stake={s}"));
-    }
+fn open_cost_path(chain: &str, q: &ponk::OpenCostQuery) -> String {
+    let mut path = format!("/v1/evm/{}/open-cost?dex={}", urlencode(chain), urlencode(&q.dex));
+    let mut add = |k: &str, v: Option<String>| {
+        if let Some(v) = v {
+            path.push_str(&format!("&{k}={}", urlencode(&v)));
+        }
+    };
+    add("pool", q.pool.clone());
+    add("stake", q.stake.map(|s| s.to_string()));
+    add("shape", q.shape.clone());
+    add("ranges", q.ranges.clone());
+    add("amount_usd", q.amount_usd.map(|v| v.to_string()));
+    add("range_pct", q.range_pct.map(|v| v.to_string()));
+    add("side", q.side.clone());
     path
 }
 
@@ -1183,15 +1258,43 @@ fn print_open_cost(c: &ponk::EvmOpenCost) {
         bps(c.activation_fee_bps),
         bps(c.performance_fee_bps)
     ));
+    line("exit fee", match c.exit_fee_bps {
+        Some(b) if b > 0 => format!("{} of what an agent that opened a position sends you (half with 1M PONK)", bps(Some(b))),
+        Some(_) => "none".to_string(),
+        None => DASH.to_string(),
+    });
+    if let Some(shape) = &c.shape {
+        let s = |k: &str| shape.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        let n = |k: &str| shape.get(k).and_then(|v| v.as_u64()).map(|v| v.to_string()).unwrap_or_else(|| DASH.into());
+        line("shape", format!(
+            "{}, {} range(s) now (asked {})",
+            s("label").unwrap_or_else(|| DASH.into()),
+            n("ranges"),
+            n("ranges_asked")
+        ));
+        if let Some(rows) = shape.get("entry_cost").and_then(|v| v.as_array()) {
+            for r in rows {
+                let ranges = r.get("ranges").and_then(|v| v.as_u64()).map(|v| v.to_string()).unwrap_or_else(|| DASH.into());
+                let usd = r.get("usd").and_then(|v| v.as_f64());
+                let pct_of = r.get("pct").and_then(|v| v.as_f64());
+                line(
+                    &format!("  {ranges} range(s)"),
+                    format!("{} to open and later close{}", table::usd(usd), pct_of.map(|p| format!(" ({p:.2}%)")).unwrap_or_default()),
+                );
+            }
+        }
+        if let Some(note) = s("note") {
+            line("", note);
+        }
+    }
 }
 
-async fn open_cost(cli: &Cli, chain: &str, dex: &str, pool: Option<&str>, no_stake: bool) -> Result<()> {
+async fn open_cost(cli: &Cli, chain: &str, q: &ponk::OpenCostQuery) -> Result<()> {
     let client = client(cli, true)?;
-    let stake = no_stake.then_some(false);
     if cli.json {
-        return print_json(&client.get_json(&open_cost_path(chain, dex, pool, stake)).await?);
+        return print_json(&client.get_json(&open_cost_path(chain, q)).await?);
     }
-    let cost = client.evm_open_cost(chain, dex, pool, stake).await?;
+    let cost = client.evm_open_cost_with(chain, q).await?;
     print_open_cost(&cost);
     Ok(())
 }
@@ -1203,6 +1306,8 @@ struct EvmCreate<'a> {
     pool: &'a str,
     down_pct: Option<f64>,
     up_pct: Option<f64>,
+    shape: Option<&'a str>,
+    shape_ranges: Option<&'a str>,
     strategy: Option<&'a str>,
     config: Option<&'a str>,
     stake: bool,
@@ -1256,6 +1361,28 @@ fn evm_new_agent(a: &EvmCreate<'_>, wallet: &str, own_config: Option<serde_json:
             bail!("{} has no farm to stake in; --stake is for pancakeswap_v3, aerodrome_slipstream and aerodrome_classic", a.dex);
         }
         agent = agent.stake(true);
+    }
+    if a.shape.is_some() || a.shape_ranges.is_some() {
+        if ponk::evm::is_full_range_venue(a.dex) {
+            bail!("{} is a full-range venue: a position there takes no shape, so leave --shape out", a.dex);
+        }
+        if let Some(shape) = a.shape {
+            agent = agent.shape(shape).map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        if let Some(raw) = a.shape_ranges {
+            if !ponk::evm::is_shape_venue(a.dex, a.chain) {
+                bail!(
+                    "{} on {} opens one range, so --shape-ranges does not apply there. Shapes open as several ranges on uniswap_v3 (arbitrum, ethereum, robinhood), uniswap_v4 (arbitrum, ethereum), pancakeswap_v3 and pancakeswap_infinity_cl (bsc) and aerodrome_slipstream (base)",
+                    a.dex,
+                    a.chain
+                );
+            }
+            let ranges = match raw.trim() {
+                r if r.eq_ignore_ascii_case("auto") => ponk::evm::ShapeRanges::Auto,
+                r => ponk::evm::ShapeRanges::Fixed(r.parse().map_err(|_| anyhow::anyhow!("--shape-ranges is auto or 1 to 7, got {r}"))?),
+            };
+            agent = agent.shape_ranges(ranges).map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
     }
     if let Some(address) = a.withdrawal_address {
         agent = agent.withdrawal_address(address);
@@ -1473,6 +1600,11 @@ fn print_plan(plan: &ponk::EvmPlan) {
                 ]
             })
             .collect();
+        let shapes: Vec<String> = c
+            .legs
+            .iter()
+            .filter_map(|l| l.shape.as_ref().and_then(|s| s.sentence.clone()).map(|t| format!("  {}: {t}", dash(l.pair.as_deref()))))
+            .collect();
         if !rows.is_empty() {
             println!(
                 "{}",
@@ -1491,6 +1623,9 @@ fn print_plan(plan: &ponk::EvmPlan) {
                     &rows,
                 )
             );
+        }
+        for line in shapes {
+            println!("{line}");
         }
     }
     for d in &plan.dropped {
@@ -1519,13 +1654,39 @@ fn print_plan(plan: &ponk::EvmPlan) {
     }
 }
 
-async fn plan(cli: &Cli, text: &str) -> Result<()> {
+/// The plan sentence with the shape and the side in the grammar's own words,
+/// exactly as `copilot_evm_plan_shaped` sends it.
+fn plan_sentence(text: &str, shape: Option<&str>, one_sided: Option<&str>) -> Result<String> {
+    if shape.is_none() && one_sided.is_none() {
+        return Ok(text.to_string());
+    }
+    let mut out = text.trim_end().trim_end_matches('.').to_string();
+    if let Some(shape) = shape {
+        let word = match shape {
+            "spot" => "spot",
+            "curve" => "curve",
+            "bid_ask" | "bid-ask" => "bid-ask",
+            other => bail!("--shape is spot, curve or bid_ask, got {other}"),
+        };
+        out.push_str(&format!(", {word} shape"));
+    }
+    if let Some(side) = one_sided {
+        if !ponk::evm::ONE_SIDED.contains(&side) {
+            bail!("--one-sided is below or above, got {side}");
+        }
+        out.push_str(&format!(", one sided {side}"));
+    }
+    Ok(out)
+}
+
+async fn plan(cli: &Cli, text: &str, shape: Option<&str>, one_sided: Option<&str>) -> Result<()> {
     let client = client(cli, true)?;
+    let text = plan_sentence(text, shape, one_sided)?;
     let body = serde_json::json!({ "text": text });
     if cli.json {
         return print_json(&client.post_json("/copilot/evm/plans", Some(&body), None).await?);
     }
-    let plan = client.copilot_evm_plan(text).await?;
+    let plan = client.copilot_evm_plan(&text).await?;
     print_plan(&plan);
     if plan.state.as_deref() == Some("ready") {
         if let Some(id) = &plan.id {
@@ -1553,23 +1714,90 @@ async fn start_plan(cli: &Cli, id: &str) -> Result<()> {
 /* leaderboard, whoami                                                     */
 /* ---------------------------------------------------------------------- */
 
-fn leaderboard_path(window: Option<&str>) -> String {
-    match window {
-        Some(w) => format!("/public/agents-leaderboard?window={}", urlencode(w)),
-        None => "/public/agents-leaderboard".to_string(),
+/// The chain ids a `--chains` value names: `all`, or each id checked
+/// against the chains ponk runs on (`bnb` is `bsc`), in order, once each.
+fn chain_list(value: &str) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for part in value.split(',') {
+        let word = part.trim().to_ascii_lowercase();
+        if word.is_empty() {
+            continue;
+        }
+        if word == "all" {
+            return Ok(vec!["all".into()]);
+        }
+        let word = if word == "bnb" { "bsc".to_string() } else { word };
+        if !ponk::evm::CHAINS.contains(&word.as_str()) {
+            bail!("unknown chain {}: chains are {}, or all", part.trim(), ponk::evm::CHAINS.join(", "));
+        }
+        if !out.contains(&word) {
+            out.push(word);
+        }
+    }
+    Ok(out)
+}
+
+fn leaderboard_path(window: Option<&str>, chains: &[String]) -> String {
+    let mut q: Vec<String> = Vec::new();
+    if let Some(w) = window {
+        q.push(format!("window={}", urlencode(w)));
+    }
+    if !chains.is_empty() {
+        q.push(format!("chains={}", urlencode(&chains.join(","))));
+    }
+    if q.is_empty() {
+        "/public/agents-leaderboard".to_string()
+    } else {
+        format!("/public/agents-leaderboard?{}", q.join("&"))
     }
 }
 
-async fn leaderboard(cli: &Cli, window: Option<&str>) -> Result<()> {
-    let client = client(cli, false)?;
+async fn feed_prefs(cli: &Cli, action: Option<&FeedPrefsCmd>) -> Result<()> {
+    let client = client(cli, true)?;
+    let prefs = match action {
+        None => {
+            if cli.json {
+                return print_json(&client.get_json("/v1/feed-prefs").await?);
+            }
+            client.feed_prefs().await?
+        }
+        Some(FeedPrefsCmd::Set { chains }) => {
+            let ids = chain_list(chains)?;
+            let filter = if ids.is_empty() || ids == ["all"] {
+                ponk::FeedChains::All
+            } else {
+                ponk::FeedChains::Only(ids)
+            };
+            client.set_feed_prefs(&filter).await?
+        }
+    };
     if cli.json {
-        return print_json(&client.get_json(&leaderboard_path(window)).await?);
+        return print_json(&serde_json::json!({ "chains": prefs.chains, "all": prefs.all }));
     }
-    let board = client.leaderboard(window).await?;
+    match prefs.all {
+        Some(true) => println!("every chain ({})", prefs.chains.join(", ")),
+        _ if prefs.chains.is_empty() => println!("{DASH}"),
+        _ => println!("{}", prefs.chains.join(", ")),
+    }
+    Ok(())
+}
+
+async fn leaderboard(cli: &Cli, window: Option<&str>, chains: Option<&str>) -> Result<()> {
+    let client = client(cli, false)?;
+    let ids = match chains {
+        Some(c) => chain_list(c)?,
+        None => Vec::new(),
+    };
+    if cli.json {
+        return print_json(&client.get_json(&leaderboard_path(window, &ids)).await?);
+    }
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let board = client.leaderboard_on(window, (!refs.is_empty()).then_some(refs.as_slice())).await?;
     let row = |r: &ponk::LeaderboardRow| -> Vec<String> {
         vec![
             r.rank.map(|n| n.to_string()).unwrap_or_else(|| DASH.into()),
             dash(r.slug.as_deref()),
+            dash(r.chain.as_deref()),
             dash(r.dex.as_deref()),
             dash(r.strategy.as_deref()),
             pct(r.score_pct, 2),
@@ -1585,9 +1813,10 @@ async fn leaderboard(cli: &Cli, window: Option<&str>) -> Result<()> {
     println!(
         "{}",
         render(
-            &["RANK", "SLUG", "DEX", "STRATEGY", "SCORE", "PNL", "VS HODL", "PNL USD", "FEES", "FOLLOWERS"],
+            &["RANK", "SLUG", "CHAIN", "DEX", "STRATEGY", "SCORE", "PNL", "VS HODL", "PNL USD", "FEES", "FOLLOWERS"],
             &[
                 Align::Right,
+                Align::Left,
                 Align::Left,
                 Align::Left,
                 Align::Left,
@@ -1602,8 +1831,9 @@ async fn leaderboard(cli: &Cli, window: Option<&str>) -> Result<()> {
         )
     );
     println!(
-        "\nwindow {}: {} ranked, {} unranked. Profile: ponk agent <slug>",
+        "\nwindow {}, chains {}: {} ranked, {} unranked. Profile: ponk agent <slug>",
         dash(board.window.as_deref()),
+        if board.chains.is_empty() { DASH.to_string() } else { board.chains.join(", ") },
         board.ranked.len(),
         board.unranked.len()
     );
@@ -1641,8 +1871,13 @@ mod tests {
             board_path(BoardView::New, Some("SOL USDC")),
             "/pools/board?view=new&q=SOL%20USDC"
         );
-        assert_eq!(leaderboard_path(None), "/public/agents-leaderboard");
-        assert_eq!(leaderboard_path(Some("7d")), "/public/agents-leaderboard?window=7d");
+        assert_eq!(leaderboard_path(None, &[]), "/public/agents-leaderboard");
+        assert_eq!(leaderboard_path(Some("7d"), &[]), "/public/agents-leaderboard?window=7d");
+        assert_eq!(
+            leaderboard_path(Some("7d"), &chain_list("bsc,solana").unwrap()),
+            "/public/agents-leaderboard?window=7d&chains=bsc%2Csolana"
+        );
+        assert_eq!(leaderboard_path(None, &chain_list("all").unwrap()), "/public/agents-leaderboard?chains=all");
     }
 
     #[test]
@@ -1689,6 +1924,20 @@ mod tests {
             vec!["ponk", "resume", "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1"],
             vec!["ponk", "withdraw", "018f2c4e-9a71-7c3b-8f10-2b6a0d5e77c1", "--lamports", "100"],
             vec!["ponk", "leaderboard", "--window", "7d"],
+            vec!["ponk", "leaderboard", "--chains", "bsc,solana"],
+            vec!["ponk", "feed-prefs"],
+            vec!["ponk", "feed-prefs", "set", "all"],
+            vec!["ponk", "feed-prefs", "set", "solana,bsc"],
+            vec![
+                "ponk", "open-cost", "arbitrum", "--dex", "uniswap_v3", "--shape", "curve", "--ranges", "auto",
+                "--amount-usd", "1000", "--range-pct", "5", "--side", "below",
+            ],
+            vec![
+                "ponk", "create-evm-agent", "--name", "c", "--chain", "arbitrum", "--dex", "uniswap_v3",
+                "--pool", "eip155:42161:0xc6962004f452be9203591991d15f6b388e09e8d0",
+                "--down-pct", "0.05", "--up-pct", "0", "--shape", "curve", "--shape-ranges", "auto",
+            ],
+            vec!["ponk", "plan", "$200 in an arbitrum pool", "--shape", "curve", "--one-sided", "below"],
             vec!["ponk", "whoami"],
             vec!["ponk", "--json", "pools"],
             vec!["ponk", "chains"],
@@ -1723,12 +1972,64 @@ mod tests {
             pool: "eip155:56:0x92b7807bf19b7dddf89b706143896d05228f3121",
             down_pct: None,
             up_pct: None,
+            shape: None,
+            shape_ranges: None,
             strategy: None,
             config: None,
             stake: false,
             withdrawal_address: None,
             dry_run: false,
         }
+    }
+
+    #[test]
+    fn a_shape_is_written_or_refused_before_any_request() {
+        let mut a = evm_args("uniswap_v3", "arbitrum");
+        a.down_pct = Some(0.05);
+        a.up_pct = Some(0.0);
+        a.shape = Some("curve");
+        a.shape_ranges = Some("auto");
+        let agent = evm_new_agent(&a, "W", None).unwrap();
+        assert_eq!(agent.config["knobs"]["liquidity_shape"], "curve");
+        assert_eq!(agent.config["knobs"]["range_pct"]["up_pct"], 0.0);
+        assert_eq!(agent.config["evm"]["shape_ranges"], "auto");
+        a.shape_ranges = Some("3");
+        assert_eq!(evm_new_agent(&a, "W", None).unwrap().config["evm"]["shape_ranges"], 3);
+
+        let err = |a: &EvmCreate<'_>| evm_new_agent(a, "W", None).unwrap_err().to_string();
+        let mut full = evm_args("pancakeswap_v2", "bsc");
+        full.shape = Some("curve");
+        assert!(err(&full).contains("takes no shape"));
+        let mut one_range = evm_args("uniswap_v4", "robinhood");
+        one_range.down_pct = Some(0.05);
+        one_range.up_pct = Some(0.05);
+        one_range.shape = Some("curve");
+        // A shape alone is kept and opens one range there.
+        assert_eq!(evm_new_agent(&one_range, "W", None).unwrap().config["knobs"]["liquidity_shape"], "curve");
+        one_range.shape_ranges = Some("auto");
+        assert!(err(&one_range).contains("opens one range"));
+        let mut bad = evm_args("uniswap_v3", "arbitrum");
+        bad.down_pct = Some(0.05);
+        bad.up_pct = Some(0.05);
+        bad.shape = Some("hybrid");
+        assert!(err(&bad).contains("shape is one of"));
+        bad.shape = Some("curve");
+        bad.shape_ranges = Some("9");
+        assert!(err(&bad).contains("1 to 7"));
+    }
+
+    #[test]
+    fn the_plan_sentence_and_the_chain_list() {
+        assert_eq!(plan_sentence("$200 in bnb", None, None).unwrap(), "$200 in bnb");
+        assert_eq!(
+            plan_sentence("$200 in an arbitrum pool.", Some("bid_ask"), Some("below")).unwrap(),
+            "$200 in an arbitrum pool, bid-ask shape, one sided below"
+        );
+        assert!(plan_sentence("$200 in bnb", Some("hybrid"), None).is_err());
+        assert!(plan_sentence("$200 in bnb", None, Some("left")).is_err());
+        assert_eq!(chain_list("bnb, Solana,bsc").unwrap(), ["bsc", "solana"]);
+        assert_eq!(chain_list("solana,all").unwrap(), ["all"]);
+        assert!(chain_list("polygon").is_err());
     }
 
     #[test]
@@ -1775,11 +2076,30 @@ mod tests {
     fn the_evm_json_paths_match_the_typed_calls() {
         assert_eq!(evm_board_path("bsc", None), "/public/evm/bsc/board");
         assert_eq!(evm_board_path("bsc", Some("pancakeswap_v3")), "/public/evm/bsc/board?venue=pancakeswap_v3");
+        let q = ponk::OpenCostQuery {
+            pool: Some("eip155:56:0xab".into()),
+            stake: Some(false),
+            ..ponk::OpenCostQuery::new("pancakeswap_v3")
+        };
         assert_eq!(
-            open_cost_path("bsc", "pancakeswap_v3", Some("eip155:56:0xab"), Some(false)),
+            open_cost_path("bsc", &q),
             "/v1/evm/bsc/open-cost?dex=pancakeswap_v3&pool=eip155%3A56%3A0xab&stake=false"
         );
-        assert_eq!(open_cost_path("bsc", "pancakeswap_v3", None, None), "/v1/evm/bsc/open-cost?dex=pancakeswap_v3");
+        assert_eq!(
+            open_cost_path("bsc", &ponk::OpenCostQuery::new("pancakeswap_v3")),
+            "/v1/evm/bsc/open-cost?dex=pancakeswap_v3"
+        );
+        let shaped = ponk::OpenCostQuery {
+            shape: Some("curve".into()),
+            ranges: Some("auto".into()),
+            amount_usd: Some(1000.0),
+            side: Some("below".into()),
+            ..ponk::OpenCostQuery::new("uniswap_v3")
+        };
+        assert_eq!(
+            open_cost_path("arbitrum", &shaped),
+            "/v1/evm/arbitrum/open-cost?dex=uniswap_v3&shape=curve&ranges=auto&amount_usd=1000&side=below"
+        );
     }
 
     #[test]

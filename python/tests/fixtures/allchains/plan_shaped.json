@@ -1,0 +1,79 @@
+{
+  "id": "0190a1b2-cccc-7000-8000-0000000000cc",
+  "state": "ready",
+  "text": "$1000 in the top 1 arbitrum pools, curve shape",
+  "echo": "$1000 in the top 1 Arbitrum pool, balanced risk, curve shape.",
+  "refusal": null,
+  "total_usd": "1000.00",
+  "funding_by_chain": [
+    {
+      "chain": "arbitrum",
+      "native_symbol": "ETH",
+      "amount_usd": "1000.00",
+      "amount_native": "0.312500",
+      "legs": [
+        {
+          "chain": "arbitrum",
+          "dex": "uniswap_v3",
+          "pool_address": "eip155:42161:0xc6962004f452be9203591991d15f6b388e09e8d0",
+          "pair": "WETH/USDC",
+          "native_symbol": "ETH",
+          "fund_usd": "1000.00",
+          "fund_native": "0.312500",
+          "fund_native_wei": "312500000000000000",
+          "deploy_usd": "996.10",
+          "strategy": "bin_rebalancer",
+          "config": {
+            "kind": "bin_rebalancer",
+            "target_bin_width": 977,
+            "auto_compound": true,
+            "knobs": {
+              "range_pct": {
+                "down_pct": 0.05,
+                "up_pct": 0.05
+              },
+              "liquidity_shape": "curve"
+            },
+            "evm": {
+              "shape_ranges": "auto"
+            }
+          },
+          "range_pct": 5.0,
+          "fee_yield_24h_pct": 0.0012,
+          "ranked_apr_pct": 0.438,
+          "fee_apr_pct": 0.424,
+          "farm_apr_pct": null,
+          "tvl_usd": 31488780.51,
+          "name": "WETH/USDC on Uniswap v3",
+          "open_gas_usd": "0.06",
+          "open_gas_native": "0.000083",
+          "wallet_floor_usd": "0.31",
+          "shape": {
+            "kind": "curve",
+            "label": "Curve",
+            "ranges": 5,
+            "ranges_asked": 5,
+            "several_ranges": true,
+            "one_sided": null,
+            "entry_cost_usd": "1.84",
+            "entry_cost_pct": 0.18,
+            "entry_cost_limit_pct": 3.0,
+            "sentence": "Curve in 5 ranges. Opening and later closing them costs about $1.84, 0.2% of the $996 deployed at current gas, inside the 3% limit."
+          }
+        }
+      ],
+      "dropped": [],
+      "notes": [],
+      "refusal": null,
+      "minimum_usd": null,
+      "alternative": null
+    }
+  ],
+  "dropped": [],
+  "solana": null,
+  "fees": "Ponk fees: 1.5% of each agent's first deposit when it opens, 15% of the fees it earns, taken as they are claimed or compounded, and 1% of what it withdraws to you (0.5% with 1M PONK). Gas is paid from each agent's own wallet.",
+  "notes": [],
+  "agents": [],
+  "sign_urls": [],
+  "fleet_id": null
+}

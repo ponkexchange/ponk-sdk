@@ -1,0 +1,39 @@
+{
+  "signature": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "tx_hashes": [
+    "0xabababababababababababababababababababababababababababababababab",
+    "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+  ],
+  "destination": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+  "source": "0x52908400098527886E0F7030069857D2E4169EE7",
+  "lamports": 0,
+  "amount_wei": "147510000000000000",
+  "received": [
+    {
+      "token": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+      "amount": "49618800000000000000",
+      "tx_hash": "0xabababababababababababababababababababababababababababababababab"
+    },
+    {
+      "token": "eip155:56:0x0000000000000000000000000000000000000000",
+      "amount": "147510000000000000",
+      "tx_hash": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+    }
+  ],
+  "chain": "bsc",
+  "status": "completed",
+  "sentence": "1 token transfer and 0.14751 BNB reached your withdrawal address.",
+  "exit_fees": [
+    {
+      "token": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+      "amount": "501200000000000000",
+      "tx_hash": "0xabababababababababababababababababababababababababababababababab"
+    },
+    {
+      "token": "eip155:56:0x0000000000000000000000000000000000000000",
+      "amount": "1490000000000000",
+      "tx_hash": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+    }
+  ],
+  "exit_fee_bps": 100
+}

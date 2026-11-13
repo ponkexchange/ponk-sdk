@@ -1,0 +1,40 @@
+{
+  "mint": "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+  "chain": "bsc",
+  "priceSource": "onchain_pool",
+  "symbol": "CAKE",
+  "accounts1h": 3,
+  "accounts24h": 5,
+  "firstCall": {
+    "handle": "bnbcaller",
+    "screenName": "BnbCaller",
+    "avatarUrl": null,
+    "postId": "1856000000000000001",
+    "url": "https://x.com/BnbCaller/status/1856000000000000001",
+    "at": "2026-11-12T07:30:00Z",
+    "priceUsd": 2.38,
+    "mcapUsd": null
+  },
+  "priceUsd": 2.53,
+  "multiple": 1.063,
+  "mentions": [
+    {
+      "account": {
+        "handle": "bnbcaller",
+        "screenName": "BnbCaller",
+        "name": "BNB Caller",
+        "avatarUrl": null,
+        "followers": 48210,
+        "category": "callers"
+      },
+      "postId": "1856000000000000001",
+      "url": "https://x.com/BnbCaller/status/1856000000000000001",
+      "text": "CAKE send it",
+      "kind": "post",
+      "at": "2026-11-12T07:30:00Z",
+      "priceUsd": 2.38,
+      "mcapUsd": null,
+      "deleted": false
+    }
+  ]
+}

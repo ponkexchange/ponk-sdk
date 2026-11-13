@@ -26,6 +26,14 @@ ACTIVATION_REFERRER_BPS = 25
 #: the rates of one agent; `PonkClient.evm_open_cost` states them before a create.
 ACTIVATION_FEE_API_BPS = 150
 ACTIVATION_FEE_API_HOLDER_BPS = 75
+#: The exit fee, in basis points of what leaves an agent that has opened a
+#: position: 1%, or 0.5% for a wallet holding 1,000,000 $PONK, taken in kind
+#: on every withdrawal and exit, on every chain, for agents created in the
+#: app and through the API alike. An agent that never opened a position pays
+#: none. `Agent.exit_fee_bps` and `PonkClient.ponk_perks(...).exit_fee` state
+#: the live rates.
+EXIT_FEE_BPS = 100
+EXIT_FEE_HOLDER_BPS = 50
 from . import evm
 from .evm import (
     CHAINS,
@@ -42,6 +50,16 @@ from .evm import (
     token_id,
     v4_pool_id,
     wei_to_native,
+)
+from .models import (  # 0.16.0
+    CallersBoard,
+    CallsFeed,
+    EvmLegShape,
+    FeedPrefs,
+    RecapBestAgent,
+    WalletEvmSource,
+    WeeklyRecap,
+    XPostToken,
 )
 from .models import (  # 0.15.0
     EvmBoard,
@@ -293,6 +311,16 @@ from .models import (  # 0.7.0
 __all__ = [
     "ACTIVATION_FEE_API_BPS",
     "ACTIVATION_FEE_API_HOLDER_BPS",
+    "EXIT_FEE_BPS",
+    "EXIT_FEE_HOLDER_BPS",
+    "CallersBoard",
+    "CallsFeed",
+    "EvmLegShape",
+    "FeedPrefs",
+    "RecapBestAgent",
+    "WalletEvmSource",
+    "WeeklyRecap",
+    "XPostToken",
     "evm",
     "CHAINS",
     "EVM_CHAINS",

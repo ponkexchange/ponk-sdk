@@ -1,0 +1,40 @@
+{
+  "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+  "chain": "solana",
+  "priceSource": null,
+  "symbol": "BONK",
+  "accounts1h": 2,
+  "accounts24h": 6,
+  "firstCall": {
+    "handle": "bnbcaller",
+    "screenName": "BnbCaller",
+    "avatarUrl": null,
+    "postId": "1856000000000000001",
+    "url": "https://x.com/BnbCaller/status/1856000000000000001",
+    "at": "2026-11-12T07:30:00Z",
+    "priceUsd": 2.38,
+    "mcapUsd": null
+  },
+  "priceUsd": 2.44e-05,
+  "multiple": 1.0563,
+  "mentions": [
+    {
+      "account": {
+        "handle": "bnbcaller",
+        "screenName": "BnbCaller",
+        "name": "BNB Caller",
+        "avatarUrl": null,
+        "followers": 48210,
+        "category": "callers"
+      },
+      "postId": "1856000000000000001",
+      "url": "https://x.com/BnbCaller/status/1856000000000000001",
+      "text": "CAKE send it",
+      "kind": "post",
+      "at": "2026-11-12T07:30:00Z",
+      "priceUsd": 2.31e-05,
+      "mcapUsd": 1910000000.0,
+      "deleted": false
+    }
+  ]
+}

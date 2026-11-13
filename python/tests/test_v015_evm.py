@@ -69,8 +69,9 @@ def auth(opener):
 
 
 class TestVersion(unittest.TestCase):
-    def test_version_is_0_15_0(self):
-        self.assertEqual(ponk.__version__, "0.15.0")
+    def test_version_is_at_least_0_15_0(self):
+        # The exact version is pinned by the newest release's own test file.
+        self.assertGreaterEqual(tuple(int(p) for p in ponk.__version__.split(".")[:2]), (0, 15))
 
 
 class TestIds(unittest.TestCase):
@@ -346,7 +347,9 @@ class TestOpenCost(unittest.TestCase):
             sent(opener),
             ("GET", BASE + "/v1/evm/bsc/open-cost?dex=pancakeswap_v3&pool=" + POOL_Q + "&stake=true"),
         )
-        self.assertEqual((cost.activation_fee_bps, cost.performance_fee_bps, cost.exit_fee_bps), (150, 1500, 0))
+        self.assertEqual((cost.activation_fee_bps, cost.performance_fee_bps, cost.exit_fee_bps), (150, 1500, 100))
+        self.assertEqual(cost.exit_fee_bps, ponk.EXIT_FEE_BPS)
+        self.assertEqual((cost.exit_yield_fee_bps, cost.exit_swap_fee_bps), (0, 20))
         self.assertEqual(cost.activation_fee_bps, ponk.ACTIVATION_FEE_API_BPS)
         self.assertEqual(cost.native_symbol, "BNB")
         # Wei stays a string; the minimum is the reserve plus the gas budget.
@@ -428,9 +431,12 @@ class TestCreate(unittest.TestCase):
         self.assertNotIn("evm", asym)
 
     def test_a_range_is_a_fraction_not_a_percent(self):
-        for bad in (5, 0, -0.05, 1, "0.05", True, None):
+        for bad in (5, -0.05, 1, "0.05", True, None):
             with self.assertRaises(ValueError):
                 evm.range_config(bad, 0.05)
+        # One side at 0 is a one-sided range (0.16.0); both at 0 is no range.
+        with self.assertRaises(ValueError):
+            evm.range_config(0, 0)
 
     def test_a_full_range_venue_is_compound_and_hold(self):
         c, opener = client(dict(fx("agent.json"), dex="aerodrome_classic", chain="base", strategy="fee_collector"))

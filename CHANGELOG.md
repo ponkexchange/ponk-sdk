@@ -3,6 +3,77 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.16.0
+
+Both clients and the `ponk-cli` crate. The agents leaderboard, Calls, the X
+Tracker and the Wallet Tracker now cover Solana, BNB Chain, Base, Ethereum,
+Arbitrum and Robinhood Chain.
+
+- **The chain filter.** `chains` on `leaderboard`, `calls_feed`, `top_calls`,
+  `callers_board`, `x_feed`, `x_trending`, `x_callers`, `wallets_feed` and
+  `wallet_activity`: a list of chain ids, or `all`. Every answer carries
+  `chains`, the ids it covers. Rust: the `_on` methods, `CallsFeedQuery`, and
+  `chains` on `XFeedQuery` and `WalletFeedQuery`.
+- **The saved filter.** `feed_prefs` and `set_feed_prefs`
+  (`GET` and `PATCH /v1/feed-prefs`): one choice per account, used by a
+  signed-in read that names no chains.
+- **EVM ids.** A token is a Solana mint or an EVM token id
+  (`eip155:<chain id>:0x...`) on `x_token`, `calls_feed`, `call_preview`,
+  `post_call` and the wallet feed's `token`; `call_preview` and `post_call`
+  also take an EVM pool id and call the pool's token. A wallet is a Solana or
+  an EVM address on `wallets_feed` and `wallet_activity`.
+- **Calls on EVM tokens.** `Call.chain` and `Call.price_source` (`chainlink`,
+  `onchain_pool`, `coingecko`, `defillama` or `dexscreener`). The Holder mark
+  on an EVM call is the caller's own EVM agents whose pool holds the token.
+- **X Tracker.** Each token a post names carries `chain`, and `chains` when
+  the address is a token on several chains. `XToken.chain` and
+  `XToken.price_source`. Rust: `XPost.tokens` is now `Vec<XPostToken>`.
+- **Wallet Tracker.** `WalletEvent.chain` and `WalletEvent.explorer_url`;
+  `WalletSource.evm`, the read state per EVM chain.
+- **Leaderboard and recap.** `LeaderboardRow.chain`; `WeeklyRecap` with
+  `best_agent.chain`.
+- **CLI.** `ponk leaderboard --chains`, `ponk feed-prefs`,
+  `ponk feed-prefs set`.
+- **Liquidity shapes on EVM agents.** `spot`, `curve`, `bid_ask` and
+  `spot_bid_ask` (`ponk.evm.SHAPES`), written as the config's
+  `liquidity_shape`. On Uniswap v3 (Arbitrum, Ethereum, Robinhood Chain),
+  Uniswap v4 (Arbitrum, Ethereum), PancakeSwap v3 and Infinity CL (BNB Chain)
+  and Aerodrome Slipstream (Base) a shape other than Spot opens as several
+  ranges managed as one position, `shape_ranges` `auto` (from live gas, within
+  3% of the deposit) or 1 to 7 (`config.evm.shape_ranges`); on any other range
+  venue it opens one range. Python: `shape` and `shape_ranges` on
+  `create_evm_agent`, `ponk.evm.with_shape`, `SHAPE_VENUES`,
+  `is_shape_venue`. Rust: `NewAgent::shape`, `NewAgent::shape_ranges`,
+  `evm::with_shape`, `evm::ShapeRanges`. A shape on a full-range venue, or a
+  range count where one range opens, is refused before a request.
+- **One-sided ranges.** `down_pct` or `up_pct` of 0 is a band wholly above or
+  below the price (`range_config` refused 0 before); both 0 is refused.
+- **Shape quotes and shaped plans.** `evm_open_cost` takes `shape`, `ranges`,
+  `amount_usd`, `range_pct`, `side`, `width_ticks` and `agent` and returns
+  `shape` (the ranges it opens as now and the gas of each count against the
+  3% limit); Rust: `OpenCostQuery`, `evm_open_cost_with`,
+  `evm_open_cost_public_with`. `copilot_evm_plan` takes `shape` and
+  `one_sided` (Rust: `copilot_evm_plan_shaped`) and each leg carries
+  `EvmLegShape`. CLI: `--shape` and `--shape-ranges` on `create-evm-agent`,
+  `--shape`, `--ranges`, `--amount-usd`, `--range-pct` and `--side` on
+  `open-cost`, `--shape` and `--one-sided` on `plan`.
+- **The exit fee.** A withdrawal or an exit from an agent that has opened a
+  position pays 1% of what leaves (100 bps; 50 for a wallet holding 1,000,000
+  PONK), taken in kind, on every chain. `Agent.exit_fee_bps`,
+  `PonkPerks.exit_fee`, `Withdrawal.exit_fees` and `Withdrawal.exit_fee_bps`
+  (what an EVM withdrawal or exit paid), and `exit_yield_fee_bps` and
+  `exit_swap_fee_bps` on `EvmOpenCost`. The docs that said no exit fee is
+  charged are corrected. Python: `ponk.EXIT_FEE_BPS`,
+  `ponk.EXIT_FEE_HOLDER_BPS`. CLI: `open-cost` prints the exit fee.
+- **Typed answers.** Python `calls_feed` returns `CallsFeed`,
+  `callers_board` returns `CallersBoard` and `weekly_recap` returns
+  `WeeklyRecap` (each was the decoded body; `raw_json` keeps it). Rust keeps
+  its 0.15.0 signatures and adds `calls_feed_with`, `callers_board_on` and
+  `weekly_recap_typed`.
+- **Fixed: calls read camelCase.** `Call` and `CallPreview` now read the
+  API's camelCase keys (`priceUsd`, `multipleNow`, `hasPosition`, ...), which
+  0.15.0 left `None`.
+
 ## 0.15.0 (2026-11-10)
 
 Both clients and the `ponk-cli` crate. Ponk agents now run on five EVM chains
