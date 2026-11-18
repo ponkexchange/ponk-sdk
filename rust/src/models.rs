@@ -174,6 +174,9 @@ pub struct WhoAmI {
 pub struct Agent {
     pub id: Option<String>,
     pub name: Option<String>,
+    /// The product kind, `lp` for every agent today. Each kind's actions and
+    /// figures are listed in [`crate::Client::registry`].
+    pub kind: Option<String>,
     pub wallet_address: Option<String>,
     /// `meteora_dlmm`, `meteora_damm_v2`, `orca`, `ponk_clouds` or `raydium`
     /// on Solana; an EVM venue id ([`crate::evm::EVM_VENUES`]) on an EVM chain.
@@ -289,18 +292,45 @@ pub struct AgentPerformance {
     pub hodl_value_usd: Option<String>,
     /// How `pnl_usd` is counted on an EVM agent, in a sentence.
     pub pnl_note: Option<String>,
-    /// CAKE or AERO on an EVM agent. `None` on a venue with no farm.
+    /// CAKE or AERO on an EVM agent; on a Solana agent (Meteora DLMM,
+    /// Meteora DAMM v2, Orca, Raydium) the pending, claimed and fee-booked
+    /// block per reward mint. `None` on a venue with no farm.
     pub farm_rewards: Option<FarmRewards>,
     /// The one sentence that says why the live dollar figures are `None`
     /// when they are: no wallet yet, the chain could not be read, no
     /// position, a token with no price.
     pub figures_unavailable: Option<String>,
+    /// Solana: farming rewards the open position is owed, USD (the sum of
+    /// `rewards[].usd`). `None` when none is owed or one has no price. In
+    /// none of the fee, value or PnL figures.
+    pub rewards_claimable_usd: Option<String>,
+    /// Solana: one line per farming reward token the open position is owed.
+    pub rewards: Vec<RewardLine>,
+    /// Fees earned over the vs-HODL span.
+    pub vs_hodl_fees_usd: Option<String>,
+    /// Divergence against holding over the vs-HODL span.
+    pub vs_hodl_il_usd: Option<String>,
+    /// The span the vs-HODL figures cover: `current_position`.
+    pub vs_hodl_scope: Option<String>,
+    /// RFC 3339 open time of that span.
+    pub vs_hodl_since: Option<String>,
+    /// Why `vs_hodl_usd` is `None`: `venue`, `no_position`, `not_indexed`,
+    /// `unpriced`, `fees_unreported`, `inconsistent`, `no_baseline` or
+    /// `capital_moved`.
+    pub vs_hodl_unavailable: Option<String>,
 }
 
-/// Farm rewards on an EVM agent or position: CAKE or AERO.
+/// Farming rewards on an agent or position.
 ///
-/// `pending_amount` is whole tokens as a decimal string; `pending_usd` and
-/// `harvested_usd` are USD strings.
+/// On an EVM agent or position: CAKE or AERO. `pending_amount` is whole
+/// tokens as a decimal string; `pending_usd` and `harvested_usd` are USD
+/// strings.
+///
+/// On a Solana agent: `pending_usd` with `pending_unavailable` (`no_position`,
+/// `none_owed`, `unpriced`, `read_failed`) when it is `None`, `claimed_usd`
+/// with `claimed_unavailable` (`none_claimed`, `unpriced`, `read_failed`),
+/// `fee_booked_usd` (the farming reward fee booked on those claims) and
+/// `mints`, one [`FarmRewardMint`] per reward mint.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct FarmRewards {
@@ -317,6 +347,39 @@ pub struct FarmRewards {
     /// rate at this instant, exactly 0 while it is out of range. `pool`: the
     /// pool's figure ([`EvmFarm::apr_pct`]).
     pub apr_basis: Option<String>,
+    pub pending_unavailable: Option<String>,
+    pub claimed_usd: Option<String>,
+    pub claimed_unavailable: Option<String>,
+    pub fee_booked_usd: Option<String>,
+    pub mints: Vec<FarmRewardMint>,
+}
+
+/// One reward mint of a Solana agent's [`FarmRewards`]. Amounts are whole
+/// tokens, USD figures USD strings; `None` is unknown, never zero.
+/// `claimed_amount_unavailable` is `fee_converted_to_sol` when a claim's fee
+/// was settled in SOL and the reward amount is no longer on the ledger.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FarmRewardMint {
+    pub mint: Option<String>,
+    pub pending_amount: Option<String>,
+    pub pending_usd: Option<String>,
+    pub claimed_amount: Option<String>,
+    pub claimed_amount_unavailable: Option<String>,
+    pub claimed_usd: Option<String>,
+    pub fee_booked_amount: Option<String>,
+    pub fee_booked_usd: Option<String>,
+    pub claims: Option<i64>,
+}
+
+/// One farming reward token an open Solana position is owed. `usd` is `None`
+/// when the mint has no price.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct RewardLine {
+    pub mint: Option<String>,
+    pub amount: Option<String>,
+    pub usd: Option<String>,
 }
 
 /// One bin's slice of a position's liquidity.
@@ -1809,6 +1872,9 @@ pub struct LeaderboardRow {
     pub fees_unclaimed_usd: Option<String>,
     pub deposited_usd: Option<String>,
     pub spark: Vec<Option<f64>>,
+    /// The span `spark` covers: its first and last value reading.
+    pub spark_from: Option<String>,
+    pub spark_until: Option<String>,
     pub followers: Option<i64>,
     pub crew: Option<String>,
     pub win_rate: Option<serde_json::Value>,
@@ -1999,9 +2065,16 @@ pub struct Referral {
     pub referred_lp_fees_usd: Option<f64>,
     pub handle: Option<String>,
     pub creator_application: Option<serde_json::Value>,
-    /// Your referral tier now and the next rung.
+    /// Owed and not yet paid out, USD, and the events behind it.
+    pub accrued_unpaid_usd: Option<f64>,
+    pub accrued_unpaid_events: Option<i64>,
+    pub operator: Option<bool>,
+    /// Your share of ponk's platform fee on the agent yield of the people you
+    /// referred, bps: a flat 1000 (10%), paid inside the fee transaction.
+    pub share_bps: Option<u16>,
+    /// No longer sent since the flat rate; reads `None`.
     pub tier: Option<ReferralTier>,
-    /// The whole ladder, so no client hardcodes a rate.
+    /// No longer sent since the flat rate; reads `None`.
     pub programme: Option<ReferralProgramme>,
 }
 
@@ -2114,6 +2187,9 @@ pub struct ActivityEvent {
     pub reason_key: Option<String>,
     pub evaluations: Option<i64>,
     pub last_seen_at: Option<String>,
+    /// The pair named for display.
+    pub token_x: Option<TokenLabel>,
+    pub token_y: Option<TokenLabel>,
 }
 
 /// `GET /public/agents-activity`: the board agents' actions of the last 24
@@ -2123,6 +2199,8 @@ pub struct ActivityEvent {
 pub struct AgentsActivity {
     pub events: Vec<ActivityEvent>,
     pub holding: Option<i64>,
+    /// Every live hold's evaluations summed (the strip's "checked N times").
+    pub checks: Option<i64>,
     pub computed_at: Option<String>,
 }
 
@@ -2471,6 +2549,9 @@ pub struct XDirectoryEntry {
     pub category: Option<String>,
     pub is_default: Option<bool>,
     pub status: Option<String>,
+    /// `ok`, `unreadable` (the source has not answered for it lately) or
+    /// `not_found`.
+    pub read_state: Option<String>,
     pub last_ok_at: Option<String>,
     pub followed: Option<bool>,
     pub muted: Option<bool>,
@@ -2681,10 +2762,10 @@ impl FleetBatchItem {
     }
 }
 
-/// A create, exit or withdraw over many agents.
+/// A create, exit, withdraw or claim over many agents.
 ///
-/// `kind` is `create`, `exit` or `withdraw`, and `done + failed + running ==
-/// total`. The server answers once its fund deadline passes; whatever is
+/// `kind` is `create`, `exit`, `withdraw` or `claim`, and `done + failed +
+/// running + unknown + skipped == total`. The server answers once its fund deadline passes; whatever is
 /// still in flight then is `running`, and the batch keeps going after the
 /// response. Poll [`crate::Client::get_batch`] until `running == 0`. A
 /// finished batch is kept for 30 minutes.
@@ -2697,6 +2778,11 @@ pub struct FleetBatch {
     pub done: usize,
     pub failed: usize,
     pub running: usize,
+    /// Sent and not confirmed (`outcome_unknown`): read the state before
+    /// doing anything again. Never retried by the batch.
+    pub unknown: usize,
+    /// Nothing to do and nothing sent (`nothing_to_collect` on a claim).
+    pub skipped: usize,
     pub items: Vec<FleetBatchItem>,
 }
 
@@ -4145,6 +4231,20 @@ pub struct FollowState {
     pub notify_push: Option<bool>,
     pub muted: Option<bool>,
     pub private: Option<bool>,
+    /// How many accounts the person follows, read with `followers`.
+    pub following_count: Option<i64>,
+    /// You after this change, with your own counts.
+    pub viewer: Option<ViewerCounts>,
+}
+
+/// You, as a list row, with your own `followers` and `following`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ViewerCounts {
+    #[serde(flatten)]
+    pub person: Person,
+    pub followers: Option<i64>,
+    pub following: Option<i64>,
 }
 
 /// One account you follow. Carries the same fields as [`Person`], plus your
@@ -4231,6 +4331,11 @@ pub struct ActivityRow {
     pub at: Option<String>,
     pub time_rounded: Option<bool>,
     pub copy: Option<CopyAction>,
+    /// The pair named for display.
+    pub token_x: Option<TokenLabel>,
+    pub token_y: Option<TokenLabel>,
+    /// The call on a call row.
+    pub call: Option<Call>,
 }
 
 /// A page of activity, newest first. For your Following feed `following` and
@@ -4945,4 +5050,192 @@ mod live_shape_tests {
         assert_eq!(e.wallet.as_ref().unwrap().agent_slug.as_deref(), Some("abc123"));
         assert_eq!(f.source.unwrap().wallets_tracked, Some(2));
     }
+}
+
+// -- 0.17.0: one position shape, the registry, any wallet's value line -------
+
+/// A token named for display: `symbol` and `logo` (a same-origin icon path
+/// for a Solana mint on ponk.exchange), each `None` when not known.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TokenLabel {
+    pub symbol: Option<String>,
+    pub logo: Option<String>,
+}
+
+/// Why a figure is absent: `kind` is `not_on_venue`, `not_read` or
+/// `unpriced`, and `why` the sentence.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Absence {
+    pub kind: Option<String>,
+    pub why: Option<String>,
+}
+
+/// A figure that is known, or absent for a stated reason. `state` is `known`
+/// (then `value` is exact, and a known zero IS zero) or `absent` (then
+/// `absence` says why; render a dash, never 0).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Observed {
+    pub state: Option<String>,
+    pub value: Option<String>,
+    pub absence: Option<Absence>,
+}
+
+impl Observed {
+    /// True when the figure was read.
+    pub fn is_known(&self) -> bool {
+        self.state.as_deref() == Some("known")
+    }
+}
+
+/// What every position reports. `status` is `open` or `none`; each USD
+/// figure is an [`Observed`] two-decimal string. `yield_usd` (LP fees
+/// earned) stays known after an exit.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PositionSummary {
+    pub status: Option<String>,
+    pub value_usd: Observed,
+    pub cost_basis_usd: Observed,
+    pub pnl_usd: Observed,
+    pub yield_usd: Observed,
+}
+
+/// The kind's own facts. For `kind` `lp`: `pool`, `geometry` (`bins`,
+/// `ticks` or `pool_share`), `has_range` and `reward_token`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PositionDetail {
+    pub kind: Option<String>,
+    pub pool: Option<String>,
+    pub geometry: Option<String>,
+    pub has_range: Option<bool>,
+    pub reward_token: Option<String>,
+}
+
+/// One position of one agent, in the shape every chain and venue fills.
+/// `id` is the chain's own id (base58, or a CAIP id on an EVM chain), `None`
+/// while nothing is open.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PositionEnvelope {
+    pub kind: Option<String>,
+    pub venue: Option<String>,
+    pub chain: Option<String>,
+    pub id: Option<String>,
+    pub summary: PositionSummary,
+    pub detail: PositionDetail,
+}
+
+/// `GET /v1/agents/{id}/positions`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentPositions {
+    pub agent_id: Option<String>,
+    pub kind: Option<String>,
+    pub positions: Vec<PositionEnvelope>,
+}
+
+/// A chain in the registry.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct RegistryChain {
+    pub id: Option<String>,
+    pub label: Option<String>,
+    pub is_evm: Option<bool>,
+    pub evm_chain_id: Option<u64>,
+    pub native_symbol: Option<String>,
+    pub native_decimals: Option<u8>,
+    pub explorer: Option<String>,
+    pub status: Option<String>,
+}
+
+/// One venue in the registry. `capabilities` maps a chain to a capability
+/// id to `supported`, `supported_no_ui`, `unsupported`, `inert` or
+/// `unknown`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct RegistryVenue {
+    pub id: Option<String>,
+    pub label: Option<String>,
+    pub short: Option<String>,
+    pub platform: Option<String>,
+    pub family: Option<String>,
+    pub kind: Option<String>,
+    pub chains: Vec<String>,
+    pub is_evm: Option<bool>,
+    pub gated: Option<bool>,
+    pub geometry: Option<serde_json::Value>,
+    pub farm: Option<String>,
+    pub reward_token: Option<String>,
+    pub fees_compound_in_place: Option<bool>,
+    pub logo: Option<String>,
+    pub docs_slug: Option<String>,
+    pub capabilities: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+}
+
+impl RegistryVenue {
+    /// The support word for `capability` on `chain`, or `None` when the
+    /// venue does not run there.
+    pub fn support(&self, chain: &str, capability: &str) -> Option<&str> {
+        self.capabilities.get(chain)?.get(capability).map(String::as_str)
+    }
+}
+
+/// `GET /public/registry`: chains, live kinds, capability ids, the support
+/// words and every venue with its support matrix.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Registry {
+    pub schema: Option<i64>,
+    pub version: Option<String>,
+    pub evm_version: Option<String>,
+    pub revised: Option<String>,
+    pub chains: Vec<RegistryChain>,
+    pub kinds: Vec<serde_json::Value>,
+    pub capabilities: Vec<serde_json::Value>,
+    pub supports: Vec<String>,
+    pub venues: Vec<RegistryVenue>,
+}
+
+impl Registry {
+    /// The venue with this id.
+    pub fn venue(&self, id: &str) -> Option<&RegistryVenue> {
+        self.venues.iter().find(|v| v.id.as_deref() == Some(id))
+    }
+
+    /// True when `venue` supports `capability` on `chain` (`supported` or
+    /// `supported_no_ui`).
+    pub fn supports_on(&self, venue: &str, chain: &str, capability: &str) -> bool {
+        matches!(
+            self.venue(venue).and_then(|v| v.support(chain, capability)),
+            Some("supported" | "supported_no_ui")
+        )
+    }
+}
+
+/// One bucket of a wallet's value line. `value_usd` is `None` when a
+/// position spanning the bucket went unread: a gap, never a partial sum.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct WalletHistoryPoint {
+    pub t: Option<String>,
+    pub value_usd: Option<f64>,
+}
+
+/// `GET /public/wallet/{address}/history`: one wallet's LP value over time.
+/// `positions` is 0 for a wallet ponk never tracked.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct WalletHistory {
+    pub range: Option<String>,
+    pub bucket_secs: Option<i64>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub points: Vec<WalletHistoryPoint>,
+    pub incomplete_buckets: Option<i64>,
+    pub positions: Option<i64>,
+    pub first_record_at: Option<String>,
 }

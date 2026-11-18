@@ -3,6 +3,60 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.17.0
+
+Both clients and the `ponk-cli` crate.
+
+- **Collect all.** `claim_agents` (`POST /v1/agents/batch/claim`): every
+  listed agent, or every managed agent with an open position, claims through
+  its own mandate-checked claim with its fee taken as one claim takes it. The
+  fees go to the owner's wallet by default (`destination` `connected`), or
+  stay in each agent's wallet (`agent`); an EVM agent's always stay in its
+  agent wallet. Rust: `claim_agents(&ids, destination)` and
+  `claim_all_agents(destination)`. CLI: `ponk collect-all [ids...]
+  [--keep-in-agent]`.
+- **Batch outcomes.** `FleetBatch.unknown` (sent and not confirmed, code
+  `outcome_unknown`: read the state, never retry blind) and
+  `FleetBatch.skipped` (nothing to do and nothing sent, code
+  `nothing_to_collect`, with the reason), on every batch kind.
+- **One position shape.** `agent_positions` (`GET /v1/agents/{id}/positions`):
+  `AgentPositions` of `PositionEnvelope` (`kind`, `venue`, `chain`, the
+  chain's own `id`, `summary` with `Observed` value, cost basis, PnL and
+  yield, `detail` with pool, geometry, range and reward token), on Solana
+  and EVM alike.
+- **One action route.** `agent_action` (`POST /v1/agents/{id}/actions/{action}`,
+  `claim`, `compound` or `rebalance`): what the old routes run, refused in
+  one sentence before any chain read when the venue cannot do it.
+- **The registry.** `registry` (`GET /public/registry`, no key): chains, live
+  product kinds, capability ids and every venue's support matrix per chain.
+  `Registry.supports_on(venue, chain, capability)`.
+- **Any wallet's value line.** `wallet_history`
+  (`GET /public/wallet/{address}/history`, no key), gaps kept as gaps.
+- **Farming rewards on Solana agents.** `AgentPerformance.rewards`
+  (`RewardLine`), `rewards_claimable_usd` and the Solana `farm_rewards` block
+  (`pending_usd`, `claimed_usd`, `fee_booked_usd`, the `*_unavailable`
+  reasons, `mints` of `FarmRewardMint`), on Meteora DLMM, Meteora DAMM v2,
+  Orca and Raydium. Python: `FARM_REWARD_FEE_BPS` (10%) and
+  `FARM_REWARD_FEE_HOLDER_BPS` (9%). The vs-HODL span fields
+  (`vs_hodl_fees_usd`, `vs_hodl_il_usd`, `vs_hodl_scope`, `vs_hodl_since`,
+  `vs_hodl_unavailable`) are named too.
+- **PancakeSwap Infinity Bin.** `pancakeswap_infinity_bin` (BNB Chain) in the
+  EVM venue tables: a range venue whose pool id is the four part form, whose
+  fees compound inside the bins (the agent claims and recenters, never
+  compounds) and whose CAKE is claimed with no staking.
+- **Feeds, follows, trackers, the board.** `token_x` and `token_y`
+  (`TokenLabel`: `symbol`, `logo`) on feed rows and the agents activity
+  strip, a call row's `call`, `AgentsActivity.checks`;
+  `XDirectoryEntry.read_state` (`ok`, `unreadable`, `not_found`);
+  `FollowState.following_count` and `viewer` (`ViewerCounts`);
+  `LeaderboardRow.spark_from` and `spark_until`.
+- **Smaller.** `Agent.kind` (`lp`). `Referral.share_bps`, a flat 10% (the
+  tier ladder is no longer sent). Documented: `next_check_at` on
+  `agent_decisions`, the take-profit ladder on `update_exits` for EVM agents,
+  the copilot's risk words (`steady`, `balanced`, `aggressive`: 6%, 3%, 1%),
+  one agent when no count is named, DAMM v2 legs, and the `skipped` pools on
+  a `no_pool` refusal.
+
 ## 0.16.0
 
 Both clients and the `ponk-cli` crate. The agents leaderboard, Calls, the X

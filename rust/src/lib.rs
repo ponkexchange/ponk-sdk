@@ -130,6 +130,11 @@ pub use client::{
 };
 pub use error::{ApiError, Error, ErrorKind};
 pub use models::{
+    Absence, AgentPositions, FarmRewardMint, Observed, PositionDetail, PositionEnvelope,
+    PositionSummary, Registry, RegistryChain, RegistryVenue, RewardLine, TokenLabel, ViewerCounts,
+    WalletHistory, WalletHistoryPoint,
+};
+pub use models::{
     CallersBoard, CallsFeed, EvmLegShape, FeedChains, FeedPrefs, RecapBestAgent, WalletEvmSource,
     WeeklyRecap, XPostToken,
 };

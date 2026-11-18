@@ -15,7 +15,7 @@ a local clone:
 
 ```toml
 [dependencies]
-ponk = "0.16"
+ponk = "0.17"
 # or: ponk = { git = "https://github.com/ponkexchange/ponk-sdk" }
 # or, from a local clone:
 # ponk = { path = "../ponk-sdk/rust" }
@@ -125,7 +125,8 @@ Agents run on Solana and on Ethereum, Arbitrum, Base, BNB Chain and Robinhood
 Chain. The chain words are `solana`, `ethereum`, `arbitrum`, `base`, `bsc` and
 `robinhood`; the EVM venues are `uniswap_v2`, `uniswap_v3`, `uniswap_v4`
 (Ethereum, Arbitrum, Robinhood Chain), `pancakeswap_v2`, `pancakeswap_v3`,
-`pancakeswap_infinity_cl` (BNB Chain) and `aerodrome_slipstream`,
+`pancakeswap_infinity_cl`, `pancakeswap_infinity_bin` (BNB Chain) and
+`aerodrome_slipstream`,
 `aerodrome_classic` (Base). `ponk::evm` holds those tables and the id helpers.
 
 ```rust
@@ -304,6 +305,8 @@ key can move your funds home. It cannot move them anywhere else.
 | `resolve_referral(code)` | `GET /public/referral/{code}` | nothing |
 | `agents_activity()` | `GET /public/agents-activity` | nothing |
 | `ponkillionaires_week()` | `GET /public/ponkillionaires/week` | nothing |
+| `registry()` | `GET /public/registry` | nothing |
+| `wallet_history(address, range)` | `GET /public/wallet/{address}/history` | nothing |
 | `x_feed(&XFeedQuery)` | `GET /public/x/feed` | nothing |
 | `x_trending(window, limit)` | `GET /public/x/trending?window=1h\|24h` | nothing |
 | `x_callers(days)` | `GET /public/x/callers` | nothing |
@@ -354,6 +357,9 @@ key can move your funds home. It cannot move them anywhere else.
 | `fund_prepare(&[FundRequest])` | `POST /v1/agents/fund/prepare`, unsigned transactions | `trade` |
 | `exit_agents(&ids)` / `exit_all_agents()` | `POST /v1/agents/batch/exit` | `trade` |
 | `withdraw_agents(&ids)` / `withdraw_all_agents()` | `POST /v1/agents/batch/withdraw` | `trade` |
+| `claim_agents(&ids, destination)` / `claim_all_agents(destination)` | `POST /v1/agents/batch/claim` | `trade` |
+| `agent_positions(id)` | `GET /v1/agents/{id}/positions` | `read` |
+| `agent_action(id, action, body)` | `POST /v1/agents/{id}/actions/{action}` | `trade` |
 | `get_batch(batch_id)` | `GET /v1/agents/batch/{batch_id}` | `read` |
 | `fleet(offset, limit)` / `fleet_all(limit)` | `GET /v1/agents/fleet` | `read` |
 | `create_agent_wallet(id)` | `POST /v1/agents/{id}/wallet` | `trade` |

@@ -261,6 +261,28 @@ impl Client {
         self.get(&format!("/public/referral/{}", seg(code))).await
     }
 
+    /// `GET /public/registry`. What every chain and venue can do: chains,
+    /// live product kinds with their owner actions, the capability ids, and
+    /// every venue with its geometry, farm and support matrix per chain. Ask
+    /// it instead of carrying a venue list:
+    /// `registry.supports_on("pancakeswap_infinity_bin", "bsc", "auto_compound")`.
+    pub async fn registry(&self) -> Result<Registry> {
+        self.get("/public/registry").await
+    }
+
+    /// `GET /public/wallet/{address}/history?range=`. Any Solana wallet's LP
+    /// value over time, from the priced readings of the positions ponk
+    /// tracks for it, each counted once. A bucket where a position went
+    /// unread is a gap (`value_usd` `None`), never a partial sum. Value only;
+    /// `range` is `24h`, `7d`, `30d`, `90d` or `all`.
+    pub async fn wallet_history(&self, address: &str, range: Option<&str>) -> Result<WalletHistory> {
+        self.get(&with_query(
+            &format!("/public/wallet/{}/history", seg(address)),
+            &[("range", range.map(str::to_string))],
+        ))
+        .await
+    }
+
     /// `GET /public/agents-activity`. What the board's agents are doing now:
     /// confirmed actions of the last 24 hours and every live hold, with the
     /// reason and the check count. Same agents and privacy as the
@@ -1037,6 +1059,32 @@ impl Client {
         .await
     }
 
+    /// `POST /v1/agents/batch/claim` for the listed agents: each claims its
+    /// fees through the same mandate-enforced claim as
+    /// [`Client::collect_fees`]. `destination` is `connected` (the default
+    /// here: the owner's own wallet) or `agent`. An EVM agent's fees stay in
+    /// its agent wallet. An agent that cannot claim is a `skipped` item with
+    /// code `nothing_to_collect`; one sent and not confirmed is `unknown`
+    /// (`outcome_unknown`): read its state before claiming again. Needs a
+    /// `trade` key.
+    pub async fn claim_agents(&self, agent_ids: &[&str], destination: Option<&str>) -> Result<FleetBatch> {
+        let mut body = serde_json::json!({ "agent_ids": agent_ids });
+        if let Some(d) = destination {
+            body["destination"] = serde_json::Value::from(d);
+        }
+        self.post("/v1/agents/batch/claim", Some(&body), self.fund_timeout).await
+    }
+
+    /// `POST /v1/agents/batch/claim` with `all: true`: every managed agent of
+    /// this account that holds an open position.
+    pub async fn claim_all_agents(&self, destination: Option<&str>) -> Result<FleetBatch> {
+        let mut body = serde_json::json!({ "all": true });
+        if let Some(d) = destination {
+            body["destination"] = serde_json::Value::from(d);
+        }
+        self.post("/v1/agents/batch/claim", Some(&body), self.fund_timeout).await
+    }
+
     /// `GET /v1/agents/batch/{batch_id}`. The latest state of a batch this
     /// account started. Kept for 30 minutes after it finishes.
     pub async fn get_batch(&self, batch_id: &str) -> Result<FleetBatch> {
@@ -1110,6 +1158,36 @@ impl Client {
             }
             None => self.post(&path, None::<&()>, self.fund_timeout).await,
         }
+    }
+
+    /// `GET /v1/agents/{id}/positions`. The agent's positions in the one
+    /// shape every chain and venue fills ([`PositionEnvelope`]): value, cost
+    /// basis, PnL and yield as [`Observed`] figures, the chain's own ids and
+    /// the geometry. Any key scope.
+    pub async fn agent_positions(&self, agent_id: &str) -> Result<AgentPositions> {
+        self.get(&format!("/v1/agents/{}/positions", seg(agent_id))).await
+    }
+
+    /// `POST /v1/agents/{id}/actions/{action}`. One route for every owner
+    /// action: `claim`, `compound` or `rebalance`, on Solana and EVM agents
+    /// alike. It runs what [`Client::collect_fees`], [`Client::compound`] and
+    /// [`Client::rebalance`] run, and refuses an action the venue cannot do
+    /// (a compound on Ponk Clouds or PancakeSwap Infinity Bin, a recenter on
+    /// a pool share) in one sentence before anything is read from chain.
+    /// `body` is the action's own body. Raw JSON answer. Needs a `trade` key.
+    pub async fn agent_action(
+        &self,
+        agent_id: &str,
+        action: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        if !matches!(action, "claim" | "compound" | "rebalance") {
+            return Err(Error::InvalidArgument(format!(
+                "action must be claim, compound or rebalance, got {action:?}"
+            )));
+        }
+        let path = format!("/v1/agents/{}/actions/{}", seg(agent_id), seg(action));
+        self.post(&path, body, self.fund_timeout).await
     }
 
     /// `PATCH /v1/agents/{id}`. Rename an agent (1 to 100 characters).

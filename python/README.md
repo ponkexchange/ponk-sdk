@@ -13,6 +13,11 @@ endpoint. It never computes a number the server did not send.
 pip install ponk
 ```
 
+0.17.0 adds collect all (`claim_agents`), one position shape on every
+chain (`agent_positions`), one route for every owner action
+(`agent_action`), the public venue registry (`registry`), any wallet's LP
+value line (`wallet_history`), farming rewards on Solana agents and
+PancakeSwap Infinity Bin (see [Changes in 0.17.0](#changes-in-0170)).
 0.16.0 puts every chain on the boards and trackers (see
 [Chains on the boards and trackers](#chains-on-the-boards-and-trackers)),
 adds liquidity shapes to EVM agents (see [Shapes](#shapes-on-evm-agents)) and
@@ -170,7 +175,8 @@ Agents run on Solana and on Ethereum, Arbitrum, Base, BNB Chain and Robinhood
 Chain. The chain words are `solana`, `ethereum`, `arbitrum`, `base`, `bsc` and
 `robinhood`; the EVM venues are `uniswap_v2`, `uniswap_v3`, `uniswap_v4`
 (Ethereum, Arbitrum, Robinhood Chain), `pancakeswap_v2`, `pancakeswap_v3`,
-`pancakeswap_infinity_cl` (BNB Chain) and `aerodrome_slipstream`,
+`pancakeswap_infinity_cl`, `pancakeswap_infinity_bin` (BNB Chain) and
+`aerodrome_slipstream`,
 `aerodrome_classic` (Base). `ponk.evm` holds those tables and the id helpers.
 
 ```python
@@ -451,6 +457,11 @@ if m is not None:
 | `fund_prepare(transfers)` | `POST /v1/agents/fund/prepare`, unsigned transactions | `trade` |
 | `exit_agents(agent_ids, all_agents=False)` | `POST /v1/agents/batch/exit` | `trade` |
 | `withdraw_agents(agent_ids, all_agents=False)` | `POST /v1/agents/batch/withdraw` | `trade` |
+| `claim_agents(agent_ids, all_agents=False, destination=None)` | `POST /v1/agents/batch/claim` | `trade` |
+| `agent_positions(id)` | `GET /v1/agents/{id}/positions` | `read` |
+| `agent_action(id, action, body=None)` | `POST /v1/agents/{id}/actions/{action}` | `trade` |
+| `registry()` | `GET /public/registry` | nothing |
+| `wallet_history(address, range=None)` | `GET /public/wallet/{address}/history` | nothing |
 | `get_batch(batch_id)` | `GET /v1/agents/batch/{batch_id}` | `read` |
 | `fleet(offset=None, limit=None)` / `iter_fleet(limit)` / `fleet_all(limit)` | `GET /v1/agents/fleet` | `read` |
 | `create_agent_wallet(id)` | `POST /v1/agents/{id}/wallet` | `trade` |
@@ -685,6 +696,39 @@ wallet. After a start, `copilot_fleet(...).funding` lists what is left to fund
 or approve with a fresh `sign_url`, and `.exit` names any agent whose exit
 failed; `copilot_stop_fleet` on a stopping fleet retries only those. The replay is
 one past window beside holding, not a forecast.
+
+## Changes in 0.17.0
+
+* **Collect all.** `claim_agents(ids)` or `claim_agents(all_agents=True)`
+  (`POST /v1/agents/batch/claim`) collects every agent's fees through its own
+  mandate-checked claim, to your own wallet by default
+  (`destination="agent"` keeps them in each agent's wallet). An agent that
+  cannot claim is a `skipped` item with the reason; one sent and not
+  confirmed is `unknown` with its signature: read its state before claiming
+  again. `FleetBatch` gains `unknown` and `skipped`.
+* **One position shape.** `agent_positions(id)` returns `PositionEnvelope`s:
+  venue, chain, the chain's own id, and value, cost basis, PnL and yield as
+  `Observed` figures (known, or absent with the reason).
+* **One action route.** `agent_action(id, "claim" | "compound" |
+  "rebalance")` refuses what the venue cannot do before anything is read
+  from chain.
+* **The registry.** `registry()` is every chain and venue with its support
+  matrix; `registry().supports_on(venue, chain, capability)`.
+* **Any wallet's value line.** `wallet_history(address, range)`.
+* **Farming rewards on Solana agents.** `AgentPerformance.rewards`,
+  `rewards_claimable_usd` and the Solana `farm_rewards` block (pending,
+  claimed and the fee booked, per mint: `FarmRewardMint`).
+  `FARM_REWARD_FEE_BPS` states the farming reward fee.
+* **PancakeSwap Infinity Bin** (`pancakeswap_infinity_bin`, BNB Chain) in
+  `ponk.evm.EVM_VENUES`: a range venue whose fees compound inside the bins.
+* **Smaller additions.** `Agent.kind`; `next_check_at` on `agent_decisions`;
+  the take-profit ladder on `update_exits` for EVM agents; `token_x` and
+  `token_y` labels on feed rows and the agents activity strip, plus
+  `AgentsActivity.checks`; `XDirectoryEntry.read_state`;
+  `FollowState.following_count` and `viewer`; `LeaderboardRow.spark_from`
+  and `spark_until`; the copilot's risk words (`steady`, `balanced`,
+  `aggressive`) and the `skipped` pools on a refusal;
+  `Referral.share_bps` (a flat 10%).
 
 ## Changes in 0.11.0
 

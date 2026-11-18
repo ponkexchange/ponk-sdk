@@ -145,6 +145,18 @@ enum Cmd {
         #[arg(long)]
         lamports: Option<u64>,
     },
+    /// Collect the fees of every managed agent with an open position (or the
+    /// ids named), each through its own mandate-checked claim, to your own
+    /// wallet. An agent that cannot claim is listed as skipped with the
+    /// reason; one sent and not confirmed is listed as unknown with its
+    /// signature: check it before collecting again.
+    CollectAll {
+        /// Only these agents. Omit for every managed agent with a position.
+        ids: Vec<String>,
+        /// Keep the fees in each agent's wallet instead of paying them out.
+        #[arg(long)]
+        keep_in_agent: bool,
+    },
     /// Top Ponkillionaires: every shared agent, ranked against holding.
     Leaderboard {
         /// 24h, 7d, 30d or all.
@@ -172,8 +184,8 @@ enum Cmd {
         /// ethereum, arbitrum, base, bsc or robinhood.
         chain: String,
         /// One venue: uniswap_v2, uniswap_v3, uniswap_v4, pancakeswap_v2,
-        /// pancakeswap_v3, pancakeswap_infinity_cl, aerodrome_slipstream or
-        /// aerodrome_classic.
+        /// pancakeswap_v3, pancakeswap_infinity_cl, pancakeswap_infinity_bin,
+        /// aerodrome_slipstream or aerodrome_classic.
         #[arg(long)]
         venue: Option<String>,
         /// Filter by token symbol or pool id.
@@ -366,6 +378,7 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Pause { id } => pause_resume(&cli, id, true).await,
         Cmd::Resume { id } => pause_resume(&cli, id, false).await,
         Cmd::Withdraw { id, lamports } => withdraw(&cli, id, *lamports).await,
+        Cmd::CollectAll { ids, keep_in_agent } => collect_all(&cli, ids, *keep_in_agent).await,
         Cmd::Leaderboard { window, chains } => leaderboard(&cli, window.as_deref(), chains.as_deref()).await,
         Cmd::FeedPrefs { action } => feed_prefs(&cli, action.as_ref()).await,
         Cmd::Whoami => whoami(&cli).await,
@@ -512,6 +525,7 @@ fn venue_label(dex: Option<&str>) -> &'static str {
         Some("pancakeswap_v2") => "pancake v2",
         Some("pancakeswap_v3") => "pancake v3",
         Some("pancakeswap_infinity_cl") => "pancake infinity",
+        Some("pancakeswap_infinity_bin") => "pancake infinity bin",
         Some("aerodrome_slipstream") => "slipstream",
         Some("aerodrome_classic") => "aerodrome",
         _ => DASH,
@@ -980,6 +994,53 @@ async fn withdraw(cli: &Cli, id: &str, lamports: Option<u64>) -> Result<()> {
     println!("withdrew {}", sol(w.lamports));
     println!("to       {}", dash(w.destination.as_deref()));
     println!("signature {}", dash(w.signature.as_deref()));
+    Ok(())
+}
+
+async fn collect_all(cli: &Cli, ids: &[String], keep_in_agent: bool) -> Result<()> {
+    let client = client(cli, true)?;
+    let destination = keep_in_agent.then_some("agent");
+    let batch = if ids.is_empty() {
+        client.claim_all_agents(destination).await?
+    } else {
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        client.claim_agents(&refs, destination).await?
+    };
+    if cli.json {
+        return print_json(&serde_json::json!({
+            "batch_id": batch.batch_id,
+            "total": batch.total,
+            "done": batch.done,
+            "failed": batch.failed,
+            "running": batch.running,
+            "unknown": batch.unknown,
+            "skipped": batch.skipped,
+            "items": batch.items.iter().map(|i| serde_json::json!({
+                "agent_id": i.agent_id,
+                "outcome": i.outcome,
+                "code": i.code,
+                "error": i.error,
+                "result": i.result,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+    println!(
+        "collected {} of {}: {} failed, {} running, {} unknown, {} skipped",
+        batch.done, batch.total, batch.failed, batch.running, batch.unknown, batch.skipped
+    );
+    for i in &batch.items {
+        println!(
+            "{}  {}  {}",
+            dash(i.agent_id.as_deref()),
+            dash(i.outcome.as_deref()),
+            i.error.as_deref().unwrap_or("")
+        );
+    }
+    if batch.running > 0 {
+        if let Some(id) = &batch.batch_id {
+            println!("still running on the server; batch {id}");
+        }
+    }
     Ok(())
 }
 

@@ -24,8 +24,10 @@ read their live positions, PnL and fees, and move funds home, from Python,
 Rust or the command line.
 
 An agent opens a concentrated position, collects the fees, compounds them, and
-moves the range when the price does. Where a venue pays farm rewards it stakes
-the position and harvests them: CAKE on PancakeSwap v3, AERO on Aerodrome.
+moves the range when the price does. Where a venue pays farm rewards it
+collects them too: CAKE on PancakeSwap v3 (staked), Infinity CL and Infinity
+Bin, AERO on Aerodrome (staked), and the farms and emissions of Meteora DLMM,
+Meteora DAMM v2, Orca and Raydium.
 
 | Chain | `chain` | Funded in | Venues (`dex`) |
 |---|---|---|---|
@@ -33,7 +35,7 @@ the position and harvests them: CAKE on PancakeSwap v3, AERO on Aerodrome.
 | Ethereum | `ethereum` | ETH | Uniswap v2 `uniswap_v2` · v3 `uniswap_v3` · v4 `uniswap_v4` |
 | Arbitrum | `arbitrum` | ETH | Uniswap v2 `uniswap_v2` · v3 `uniswap_v3` · v4 `uniswap_v4` |
 | Base | `base` | ETH | Aerodrome Slipstream `aerodrome_slipstream` · Aerodrome Classic `aerodrome_classic` |
-| BNB Chain | `bsc` | BNB | PancakeSwap v2 `pancakeswap_v2` · v3 `pancakeswap_v3` · Infinity CL `pancakeswap_infinity_cl` |
+| BNB Chain | `bsc` | BNB | PancakeSwap v2 `pancakeswap_v2` · v3 `pancakeswap_v3` · Infinity CL `pancakeswap_infinity_cl` · Infinity Bin `pancakeswap_infinity_bin` |
 | Robinhood Chain | `robinhood` | ETH | Uniswap v2 `uniswap_v2` · v3 `uniswap_v3` · v4 `uniswap_v4` |
 
 On a full-range venue (Meteora DAMM v2, Uniswap v2, PancakeSwap v2, Aerodrome
@@ -235,7 +237,7 @@ ponk create-evm-agent --name "bnb usdt" --chain bsc --dex pancakeswap_v3 \
 ```
 
 **Ids are CAIP strings.** A pool is `eip155:<chain id>:0x<address>`; a Uniswap
-v4 or PancakeSwap Infinity CL pool is
+v4, PancakeSwap Infinity CL or Infinity Bin pool is
 `eip155:<chain id>:0x<pool manager>:0x<pool id>`. `pool_id`, `v4_pool_id`,
 `token_id` and `parse_evm_id` build and read them. `wallet_address` on an agent
 is always your Solana login wallet, which is the account; the agent's own
@@ -335,7 +337,8 @@ retrying an authentication failure forever.
 | **Act** (`trade` scope) | `create_agent` · `copy_agent` (Python) · `optimize_draft` · `pause_agent` · `resume_agent` · `set_dry_run` · `set_mode` · `update_config` · `update_exits` · `set_auto_compound` · `set_autonomous` · `share_agent` · `unshare_agent` · `follow` · `unfollow` · `claim_handle` · `compound` · `withdraw` · `exit_agent` · `rebalance` · `collect_fees` · `rename_agent` · `delete_agent` · `create_agent_wallet` · `custody_withdraw` · `custody_exit` |
 | **EVM chains** (0.15.0) | `evm_chains` · `evm_pools` · `evm_pool` · `evm_token` · `evm_open_cost` · `create_evm_agent` · `set_stake_rewards` · `copilot_evm_plan` · `copilot_evm_get_plan` · `copilot_evm_start` · `evm_fleet` · helpers `pool_id` · `v4_pool_id` · `token_id` · `parse_evm_id` · `wei_to_native` · `fund_link` · `fund_links`. Every agent read and control above works on an EVM agent by id. |
 | **All chains** (0.16.0) | `chains` on `leaderboard` · `calls_feed` · `top_calls` · `callers_board` · `x_feed` · `x_trending` · `x_callers` · `wallets_feed` · `wallet_activity` (Rust: the `_on` methods, `CallsFeedQuery`, `XFeedQuery.chains`, `WalletFeedQuery.chains`) · `feed_prefs` · `set_feed_prefs` · `weekly_recap` (Rust: `weekly_recap_typed`) · EVM token ids on `x_token` · `call_preview` · `post_call` · EVM shapes on `create_evm_agent` · `evm_open_cost` · `copilot_evm_plan` |
-| **Fleet** | `create_agents` · `fund_prepare` · `fleet` · `iter_fleet` / `fleet_all` · `get_batch` · `exit_agents` · `withdraw_agents` |
+| **Fleet** | `create_agents` · `fund_prepare` · `fleet` · `iter_fleet` / `fleet_all` · `get_batch` · `exit_agents` · `withdraw_agents` · `claim_agents` (Rust: `claim_agents` / `claim_all_agents`) |
+| **0.17.0** | `claim_agents` (collect all, to your wallet by default) · `agent_positions` (one position shape on every chain) · `agent_action` (claim, compound or rebalance on one route) · `registry` (what every venue can do, no key) · `wallet_history` (any wallet's LP value line, no key) · farming rewards on Solana agents' `agent_performance` · PancakeSwap Infinity Bin |
 | **Swap orders** | `plan_orders` (one sign link) · `orders_challenge` · `orders_verify` · `orders_refresh` · `orders_logout` · `order_mint_support` · `craft_order_deposit` · `create_price_order` · `create_dca_order` · `cancel_order` · `confirm_order_cancel` · `list_orders` · `cancel_orders` · `confirm_order_cancels` |
 | **Copy and follow** | `copy_source` · `follow_status` · `follow_leader` · `update_follow` · `unfollow_leader` · `answer_follow_offer` · `list_copy_follows` · `follow_leaders` · `follow_many` · `wallet_follow` · `unfollow_wallet` · `answer_wallet_offer` · `copy_log` · `copy_referral` · `attach_copy_referral` |
 | **Self-custody** (unsigned) | `agent_rebalance_prepare` · `agent_rebalance_prepare_split` · `agent_rebalance_prepare_open` · `agent_rebalance_mark` · `agent_fees_prepare` · `agent_fees_mark` · `agent_fees_confirm` · `position_open_prepare` · `position_mark_tx` · `position_rebalance_split` · `position_rebalance_open` · `position_rebalance_tick` · `position_compound_prepare` · `position_claim_prepare` · `lp_withdraw_prepare` · `reclaim_wsol_prepare` · `stranded_positions` · `cleanup_position_prepare` · `positions_sync` · `clouds_referral_claim_prepare` |
@@ -356,10 +359,10 @@ signed in the app, or off. It cannot create a mandate. `agent_mandate` reads
 that mandate's expiry, which is the thing to watch: a lapsed mandate stops the
 agent signing without any error.
 
-`referral()` carries your referral tier: one level, 20% of ponk's platform
-fee on the people you referred, 25% once they paid $1,000 of platform fees
-over the trailing 30 days, 30% from $5,000. `tier.next` is the next rung and
-`programme.ladder` the whole ladder, so no integration hardcodes a rate.
+`referral()` carries your referral share: `share_bps`, a flat 10% of ponk's
+platform fee on the agent yield of the people you referred, plus 0.25% of the
+capital on each of their agents' first open, both paid inside the fee
+transaction itself and never added to what they pay.
 
 ## Run a fleet
 
@@ -375,6 +378,7 @@ print(plan.sign_urls)             # your wallet signs on ponk.exchange
 for row in ponk.iter_fleet():     # wallet balance, mandate expiry, value
     print(row.agent.name, row.wallet and row.wallet.lamports)
 
+got = ponk.claim_agents(ids)      # collect every agent's fees to your wallet
 out = ponk.exit_agents(ids)       # close every position, sweep every wallet home
 while out.running:
     out = ponk.get_batch(out.batch_id)

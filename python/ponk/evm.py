@@ -13,7 +13,7 @@ Ids are CAIP strings, lowercase hex, exactly as the API writes them:
 
 * pool or token: ``eip155:<chainId>:0x<40 hex>`` (the gas coin is the zero
   address);
-* Uniswap v4 or PancakeSwap Infinity CL pool:
+* Uniswap v4, PancakeSwap Infinity CL or Infinity Bin pool:
   ``eip155:<chainId>:0x<pool manager>:0x<64 hex pool id>``;
 * position NFT: ``eip155:<chainId>:0x<position manager>:<decimal token id>``;
 * v2 position: ``eip155:<chainId>:0x<pair>:0x<owner>``.
@@ -103,6 +103,7 @@ EVM_VENUES: Dict[str, Tuple[str, ...]] = {
     "pancakeswap_v2": ("bsc",),
     "pancakeswap_v3": ("bsc",),
     "pancakeswap_infinity_cl": ("bsc",),
+    "pancakeswap_infinity_bin": ("bsc",),
     "aerodrome_classic": ("base",),
     "aerodrome_slipstream": ("base",),
 }
@@ -225,8 +226,8 @@ def native_token_id(chain: str) -> str:
 def v4_pool_id(chain: str, pool_manager: str, pool_key_hash: str) -> str:
     """`eip155:<chainId>:0x<pool manager>:0x<64 hex>`.
 
-    The form of a Uniswap v4 or PancakeSwap Infinity CL pool, which lives
-    inside its venue's pool manager and is named by a 32 byte pool id.
+    The form of a Uniswap v4, PancakeSwap Infinity CL or PancakeSwap
+    Infinity Bin pool, which lives inside its venue's pool manager and is named by a 32 byte pool id.
     """
     if not isinstance(pool_key_hash, str) or not _HASH.match(pool_key_hash):
         raise ValueError(

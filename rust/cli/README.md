@@ -14,7 +14,7 @@ cargo install ponk-cli
 
 | Variable | Meaning |
 | --- | --- |
-| `PONK_API_KEY` | The `ponk_live_...` key from ponk.exchange Settings, API keys. Needed by `agents`, `agent <uuid>`, `create-agent`, `create-evm-agent`, `wallet`, `pause`, `resume`, `withdraw`, `exit`, `open-cost`, `plan`, `start-plan`, `evm-fleet`, `feed-prefs` and `whoami`. The pool, chain and leaderboard reads and `fund-link` need none. |
+| `PONK_API_KEY` | The `ponk_live_...` key from ponk.exchange Settings, API keys. Needed by `agents`, `agent <uuid>`, `create-agent`, `create-evm-agent`, `wallet`, `pause`, `resume`, `withdraw`, `collect-all`, `exit`, `open-cost`, `plan`, `start-plan`, `evm-fleet`, `feed-prefs` and `whoami`. The pool, chain and leaderboard reads and `fund-link` need none. |
 | `PONK_API_URL` | API base, default `https://ponk.exchange/api`. |
 | `PONK_WEB_URL` | The web origin for the two app-served boards, only when it is not the API base minus `/api` (local development). |
 
@@ -23,8 +23,9 @@ cargo install ponk-cli
 ## Commands
 
 ```
-ponk pools                         LP pools across Meteora DLMM, Orca Whirlpools
-                                   and Raydium CLMM, most 24h fees first
+ponk pools                         LP pools across Meteora DLMM, Meteora DAMM v2,
+                                   Orca Whirlpools and Raydium CLMM, most 24h
+                                   fees first
 ponk pools --view hot              a Meteora board view: hot, new, volume, tvl
 ponk pool <address> [--dex d]      one pool, decoded from chain (venues probed)
 ponk agents                        every agent your key's wallet owns
@@ -34,6 +35,9 @@ ponk create-agent --name n --dex meteora_dlmm --strategy bin_rebalancer \
 ponk pause <id> / ponk resume <id>
 ponk withdraw <id> [--lamports n]  SOL home; destination is server-locked to
                                    the wallet that owns the agent
+ponk collect-all [ids...] [--keep-in-agent]
+                                   collect every managed agent's fees to your
+                                   wallet; skipped and unknown items say why
 ponk leaderboard [--window 7d] [--chains bsc,solana]
                                    Top Ponkillionaires, with a CHAIN column;
                                    --chains (ids or all) ranks from 1 over

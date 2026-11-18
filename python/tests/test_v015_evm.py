@@ -141,7 +141,7 @@ class TestIds(unittest.TestCase):
         self.assertEqual(set(evm.venue_chains("uniswap_v4")), {"arbitrum", "robinhood", "ethereum"})
         self.assertEqual(evm.venue_chains("aerodrome_slipstream"), ("base",))
         self.assertEqual(evm.venue_chains("meteora_dlmm"), ())
-        self.assertEqual(len(evm.EVM_VENUES), 8)
+        self.assertEqual(len(evm.EVM_VENUES), 9)
         self.assertTrue(evm.is_full_range_venue("aerodrome_classic"))
         self.assertFalse(evm.is_full_range_venue("uniswap_v3"))
         self.assertEqual(evm.stake_reward_token("pancakeswap_v3"), "CAKE")

@@ -13,7 +13,7 @@
 //!
 //! * pool or token: `eip155:<chainId>:0x<40 hex>` (the gas coin is the zero
 //!   address);
-//! * Uniswap v4 or PancakeSwap Infinity CL pool:
+//! * Uniswap v4, PancakeSwap Infinity CL or Infinity Bin pool:
 //!   `eip155:<chainId>:0x<pool manager>:0x<64 hex pool id>`;
 //! * position NFT: `eip155:<chainId>:0x<position manager>:<decimal token id>`;
 //! * v2 position: `eip155:<chainId>:0x<pair>:0x<owner>`.
@@ -38,13 +38,14 @@ pub const EVM_CHAINS: [(&str, u64); 5] = [
 
 /// Each EVM venue id (the `dex` of an agent, a pool or a position) and the
 /// chains it runs on.
-pub const EVM_VENUES: [(&str, &[&str]); 8] = [
+pub const EVM_VENUES: [(&str, &[&str]); 9] = [
     ("uniswap_v2", &["arbitrum", "robinhood", "ethereum"]),
     ("uniswap_v3", &["arbitrum", "robinhood", "ethereum"]),
     ("uniswap_v4", &["arbitrum", "robinhood", "ethereum"]),
     ("pancakeswap_v2", &["bsc"]),
     ("pancakeswap_v3", &["bsc"]),
     ("pancakeswap_infinity_cl", &["bsc"]),
+    ("pancakeswap_infinity_bin", &["bsc"]),
     ("aerodrome_classic", &["base"]),
     ("aerodrome_slipstream", &["base"]),
 ];
@@ -221,9 +222,9 @@ pub fn native_token_id(chain: &str) -> Result<String, EvmError> {
     Ok(format!("eip155:{}:{ZERO}", cid(chain)?))
 }
 
-/// `eip155:<chainId>:0x<pool manager>:0x<64 hex>`: the form of a Uniswap v4
-/// or PancakeSwap Infinity CL pool, which lives inside its venue's pool
-/// manager and is named by a 32 byte pool id.
+/// `eip155:<chainId>:0x<pool manager>:0x<64 hex>`: the form of a Uniswap
+/// v4, PancakeSwap Infinity CL or PancakeSwap Infinity Bin pool, which lives
+/// inside its venue's pool manager and is named by a 32 byte pool id.
 pub fn v4_pool_id(chain: &str, pool_manager: &str, pool_key_hash: &str) -> Result<String, EvmError> {
     if !is_hex(pool_key_hash, 64) {
         return Err(EvmError(format!(
@@ -252,7 +253,8 @@ pub fn position_nft_id(chain: &str, position_manager: &str, nft_token_id: u128) 
 pub enum EvmIdKind {
     /// A pool or a token: `eip155:<chainId>:0x<address>`.
     Address,
-    /// A Uniswap v4 or PancakeSwap Infinity CL pool, with its 32 byte pool id.
+    /// A Uniswap v4, PancakeSwap Infinity CL or Infinity Bin pool, with its 32
+    /// byte pool id.
     V4Pool { pool_key_hash: String },
     /// A position NFT, with its token id in decimal.
     PositionNft { nft_token_id: String },
@@ -661,6 +663,10 @@ mod tests {
     #[test]
     fn venues_know_their_chains_ranges_and_farms() {
         assert_eq!(venue_chains("pancakeswap_infinity_cl"), ["bsc"]);
+        assert_eq!(venue_chains("pancakeswap_infinity_bin"), ["bsc"]);
+        assert!(!is_full_range_venue("pancakeswap_infinity_bin"));
+        assert_eq!(stake_reward_token("pancakeswap_infinity_bin"), None);
+        assert!(!is_shape_venue("pancakeswap_infinity_bin", "bsc"));
         assert_eq!(venue_chains("uniswap_v4").len(), 3);
         assert_eq!(venue_chains("aerodrome_slipstream"), ["base"]);
         assert!(venue_chains("meteora_dlmm").is_empty());

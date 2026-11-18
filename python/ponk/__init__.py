@@ -34,6 +34,12 @@ ACTIVATION_FEE_API_HOLDER_BPS = 75
 #: the live rates.
 EXIT_FEE_BPS = 100
 EXIT_FEE_HOLDER_BPS = 50
+#: The farming reward fee, in basis points of a farm emission an agent
+#: harvests or claims (CAKE, AERO, Meteora DAMM v2 pool rewards, and Orca and
+#: Raydium emissions paid in a mint that is not a pool leg): 10%, or 9% for a
+#: wallet holding 1,000,000 $PONK. Swap-fee yield keeps its own rate.
+FARM_REWARD_FEE_BPS = 1000
+FARM_REWARD_FEE_HOLDER_BPS = 900
 from . import evm
 from .evm import (
     CHAINS,
@@ -50,6 +56,23 @@ from .evm import (
     token_id,
     v4_pool_id,
     wei_to_native,
+)
+from .models import (  # 0.17.0
+    Absence,
+    AgentPositions,
+    FarmRewardMint,
+    Observed,
+    PositionDetail,
+    PositionEnvelope,
+    PositionSummary,
+    Registry,
+    RegistryChain,
+    RegistryVenue,
+    RewardLine,
+    TokenLabel,
+    ViewerCounts,
+    WalletHistory,
+    WalletHistoryPoint,
 )
 from .models import (  # 0.16.0
     CallersBoard,
@@ -313,6 +336,23 @@ __all__ = [
     "ACTIVATION_FEE_API_HOLDER_BPS",
     "EXIT_FEE_BPS",
     "EXIT_FEE_HOLDER_BPS",
+    "FARM_REWARD_FEE_BPS",
+    "FARM_REWARD_FEE_HOLDER_BPS",
+    "Absence",
+    "AgentPositions",
+    "FarmRewardMint",
+    "Observed",
+    "PositionDetail",
+    "PositionEnvelope",
+    "PositionSummary",
+    "Registry",
+    "RegistryChain",
+    "RegistryVenue",
+    "RewardLine",
+    "TokenLabel",
+    "ViewerCounts",
+    "WalletHistory",
+    "WalletHistoryPoint",
     "CallersBoard",
     "CallsFeed",
     "EvmLegShape",

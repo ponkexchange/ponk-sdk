@@ -88,6 +88,11 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 from ._version import __version__
 from .errors import PonkError, PonkTransportError, error_from_response
 from . import evm as _evm
+from .models import (  # 0.17.0
+    AgentPositions,
+    Registry,
+    WalletHistory,
+)
 from .models import (  # 0.16.0
     CallersBoard,
     CallsFeed,
@@ -416,6 +421,40 @@ class PonkClient:
                 "GET",
                 "/pools/{0}/{1}/range-cost".format(_seg(dex), _seg(address)),
                 params={"bins": bins},
+            )
+        )
+
+    def registry(self) -> Registry:
+        """`GET /public/registry`. What every chain and venue can do.
+
+        The chains, the live product kinds with their owner actions, the
+        capability ids, and every venue with its chains, geometry (`bins`,
+        `ticks` or `pool_share`), farm and reward token, and its support
+        matrix per chain: `supported`, `supported_no_ui`, `unsupported`,
+        `inert` or `unknown` for each capability. Ask it instead of carrying
+        your own venue list: `registry().supports_on("pancakeswap_infinity_bin",
+        "bsc", "auto_compound")`. The same for every caller; it changes only
+        on a deploy. No key needed.
+        """
+        return Registry.from_dict(self._request("GET", "/public/registry"))
+
+    def wallet_history(self, address: str, range: Optional[str] = None) -> WalletHistory:
+        """`GET /public/wallet/{address}/history?range=`. Any Solana wallet's LP
+        value over time.
+
+        Read from the priced readings of the positions ponk tracks for that
+        wallet, each position counted once. A bucket where a position went
+        unread is a gap (`value_usd` `None`), never a partial sum, and
+        `incomplete_buckets` counts them. A wallet ponk never tracked has no
+        line and `positions` 0. Value only: fees, closes and the calendar
+        stay with the owner (`portfolio_history`). `range` is `24h`, `7d`,
+        `30d`, `90d` or `all`. No key needed.
+        """
+        return WalletHistory.from_dict(
+            self._request(
+                "GET",
+                "/public/wallet/{0}/history".format(_seg(address)),
+                params={"range": range},
             )
         )
 
@@ -1134,6 +1173,10 @@ class PonkClient:
         The server-computed agent state, what it evaluated, what it declined
         and why, and which economics basis ran. Returned as the decoded JSON
         object. `hours` defaults to 24 (1 to 720), `limit` to 50.
+
+        `next_check_at` is when the agent's loop scheduled its next check,
+        `None` when the loop is not running (stopped, paused, between
+        restarts); show no countdown then rather than a guessed one.
         """
         return self._request(
             "GET",
@@ -1169,10 +1212,9 @@ class PonkClient:
     def referral(self) -> Referral:
         """`GET /v1/referral`. Codes, handle, referred count, referral money and tier.
 
-        Earned, owed and unproven are separate facts; never add them. `tier`
-        is your current share of ponk's platform fee and the next rung;
-        `programme.ladder` is the whole ladder (one level: 20%, 25% from
-        $1,000 and 30% from $5,000 of referred platform fees over 30 days).
+        Earned, owed and unproven are separate facts; never add them.
+        `share_bps` is your share of ponk's platform fee on the people you
+        referred: a flat 10%, paid in the fee transaction itself.
         """
         return Referral.from_dict(self._request("GET", "/v1/referral"))
 
@@ -1419,7 +1461,9 @@ class PonkClient:
         `take_profit_market_cap_usd` (the volatile token's market cap),
         `take_profit_position_value_usd` (the position's two legs) and
         `take_profit_value_with_fees_usd` (legs plus unclaimed fees), each a
-        positive USD figure.
+        positive USD figure, and `take_profit_ladder`: up to 5 rungs, each
+        `{"trigger_pnl_pct": 0.10, "fraction": 0.25}` (realize a quarter of
+        the original position at +10%), on Solana and EVM agents alike.
         """
         body: Dict[str, Any] = {}
         if tp_sl is not None:
@@ -1875,6 +1919,49 @@ class PonkClient:
             )
         )
 
+    def claim_agents(
+        self,
+        agent_ids: Optional[Sequence[str]] = None,
+        *,
+        all_agents: bool = False,
+        destination: Optional[str] = None,
+    ) -> FleetBatch:
+        """`POST /v1/agents/batch/claim`. Collect many agents' fees at once.
+
+        Each listed agent claims through the same mandate-enforced claim as
+        `collect_fees`, with its performance fee taken exactly as one claim
+        takes it. Pass `agent_ids`, or `all_agents=True` for every managed
+        agent of this account that holds an open position; not both.
+
+        `destination` is `connected` (the server default here: the fees reach
+        the owner's own wallet, resolved by the server) or `agent` (keep them
+        in each agent's wallet). An EVM agent's claim always stays in its
+        agent wallet (its funds leave only through Withdraw), and its item's
+        `result` carries `kept_in_agent_wallet`.
+
+        An agent that cannot claim is an item with `outcome` `skipped` and
+        code `nothing_to_collect`, with a sentence saying why (no open
+        position, Ponk Clouds fees grow the position, a stopped EVM agent, a
+        You sign agent); nothing was sent for it. An item sent and not
+        confirmed is `unknown` with code `outcome_unknown` and the signature
+        in its `error`: never claim it again before reading its state. One
+        agent failing does not stop the others. Needs a `trade` key. Takes
+        the fund timeout.
+        """
+        if destination is not None and destination not in ("agent", "connected"):
+            raise ValueError("destination must be 'agent' or 'connected', got {0!r}".format(destination))
+        body = dict(_batch_target(agent_ids, all_agents))
+        if destination is not None:
+            body["destination"] = destination
+        return FleetBatch.from_dict(
+            self._request(
+                "POST",
+                "/v1/agents/batch/claim",
+                body=body,
+                timeout=self.fund_timeout,
+            )
+        )
+
     def get_batch(self, batch_id: str) -> FleetBatch:
         """`GET /v1/agents/batch/{batch_id}`. The latest state of a batch this account started.
 
@@ -1965,7 +2052,7 @@ class PonkClient:
         """`GET /public/evm/pools/{id}`. One pool by its CAIP id.
 
         `pool_id` is `eip155:<chainId>:0x<address>`, or the four part form
-        for a Uniswap v4 or PancakeSwap Infinity CL pool
+        for a Uniswap v4, PancakeSwap Infinity CL or Infinity Bin pool
         (`ponk.evm.pool_id`, `ponk.evm.v4_pool_id`). An id that is not one
         raises `PonkBadRequestError`, an unknown pool `PonkNotFoundError`.
         """
@@ -2079,11 +2166,13 @@ class PonkClient:
 
         The strategy ids are the Solana ones:
 
-        * On a range venue (Uniswap v3 and v4, PancakeSwap v3 and Infinity
-          CL, Aerodrome Slipstream) give the range as `down_pct` and `up_pct`,
-          POSITIVE FRACTIONS (0.05 is 5% either side). `strategy` defaults to
-          `bin_rebalancer`; `conservative_bin_rebalancer` works the same way
-          with your own `config`.
+        * On a range venue (Uniswap v3 and v4, PancakeSwap v3, Infinity CL
+          and Infinity Bin, Aerodrome Slipstream) give the range as `down_pct`
+          and `up_pct`, POSITIVE FRACTIONS (0.05 is 5% either side).
+          `strategy` defaults to `bin_rebalancer`;
+          `conservative_bin_rebalancer` works the same way with your own
+          `config`. On PancakeSwap Infinity Bin the fees compound inside the
+          bins, so the agent claims and recenters there and never compounds.
         * On a full-range venue (`uniswap_v2`, `pancakeswap_v2`,
           `aerodrome_classic`) there is no range: the agent is
           `fee_collector`, compound and hold, and that is the default there.
@@ -2229,7 +2318,8 @@ class PonkClient:
         `3 pools`, 1 to 10 per chain), one or more chains (`bnb`, `arbitrum`,
         `base`, `ethereum`, `robinhood`, `solana`), optional venues
         (`pancakeswap v3`, `uniswap v4`, `aerodrome slipstream`), risk
-        (`careful`, `balanced`, `aggressive`) and a range (`8%`). One amount
+        (`steady`, `balanced`, `aggressive`: a 6%, 3% and 1% range) or a
+        range (`8%`). One amount
         is the whole budget, split evenly across the chains named, or one
         amount goes in front of each chain (`$60 in bnb and $40 in solana`).
         Amounts are DOLLARS ONLY: SOL, ETH or BNB amounts are refused.
@@ -2324,6 +2414,15 @@ class PonkClient:
         shows a fleet rather than planning one, raises
         `PonkUnprocessableError` with the parser's sentence. Creates nothing
         and moves nothing. Plans last 15 minutes.
+
+        The risk words are the app's: `steady` (also `careful`, `safe`,
+        `conservative`), `balanced` and `aggressive`, a 6%, 3% and 1% range.
+        A sentence that names no count plans one agent. A pair or a token you
+        name is planned in rank order, a weak pool carrying a warning on its
+        leg rather than being dropped. The plan covers Meteora DLMM, Meteora
+        DAMM v2 (a fee collector on a pool share), Orca and Raydium. A
+        refusal with code `no_pool` carries `skipped`: up to 20 pools looked
+        at, each with `address`, `pair` and `reason`.
         """
         return CopilotPlan.from_dict(
             self._request("POST", "/copilot/plans", body={"text": text}, session_only=True)
@@ -2540,6 +2639,49 @@ class PonkClient:
             self._request(
                 "GET", "/v1/agents/{0}/proof".format(_seg(agent_id)), params={"hours": hours}
             )
+        )
+
+    def agent_positions(self, agent_id: str) -> AgentPositions:
+        """`GET /v1/agents/{id}/positions`. The agent's positions in one shape
+        on every chain and venue.
+
+        Each `PositionEnvelope` carries `kind` (`lp`), `venue`, `chain`, `id`
+        (the chain's own: a base58 address, or a CAIP id on an EVM chain;
+        `None` while nothing is open), `summary` (`status` `open` or `none`,
+        and `value_usd`, `cost_basis_usd`, `pnl_usd`, `yield_usd`, each an
+        `Observed`: known with its two-decimal value, or absent with the
+        reason) and `detail` (`pool`, `geometry` `bins`, `ticks` or
+        `pool_share`, `has_range`, `reward_token`). The figures come from the
+        same view as `agent_performance`. Any key scope.
+        """
+        return AgentPositions.from_dict(
+            self._request("GET", "/v1/agents/{0}/positions".format(_seg(agent_id)))
+        )
+
+    def agent_action(
+        self, agent_id: str, action: str, body: Optional[Mapping[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """`POST /v1/agents/{id}/actions/{action}`. One route for every owner
+        action: `claim`, `compound` or `rebalance`.
+
+        It runs exactly what `collect_fees`, `compound` and `rebalance` run,
+        on Solana and on EVM agents alike. What it adds is the refusal before
+        anything is read from chain: an action the agent's venue cannot do
+        (a compound on Ponk Clouds or PancakeSwap Infinity Bin, a recenter on
+        a pool share) raises `PonkUnprocessableError` with one sentence, as
+        the venue's row in `registry()` states. `body` is the action's own
+        body (`{"destination": ...}` on a Solana claim; `new_lower_bin_id`,
+        `new_upper_bin_id` and `strategy` on a Solana recenter). Returned as
+        the decoded JSON answer of that action. Needs a `trade` key. Takes the
+        fund timeout.
+        """
+        if action not in ("claim", "compound", "rebalance"):
+            raise ValueError("action must be 'claim', 'compound' or 'rebalance', got {0!r}".format(action))
+        return self._request(
+            "POST",
+            "/v1/agents/{0}/actions/{1}".format(_seg(agent_id), _seg(action)),
+            body=dict(body) if body is not None else None,
+            timeout=self.fund_timeout,
         )
 
     def agent_range_history(self, agent_id: str, range: Optional[str] = None) -> RangeHistory:

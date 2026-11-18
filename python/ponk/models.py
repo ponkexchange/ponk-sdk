@@ -24,6 +24,22 @@ from decimal import Decimal
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Type, TypeVar
 
 __all__ = [
+    # 0.17.0
+    "Absence",
+    "AgentPositions",
+    "FarmRewardMint",
+    "Observed",
+    "PositionDetail",
+    "PositionEnvelope",
+    "PositionSummary",
+    "Registry",
+    "RegistryChain",
+    "RegistryVenue",
+    "RewardLine",
+    "TokenLabel",
+    "ViewerCounts",
+    "WalletHistory",
+    "WalletHistoryPoint",
     "CallersBoard",
     "CallsFeed",
     "EvmLegShape",
@@ -704,10 +720,14 @@ class Agent(Model):
     `wallet_address` is still the owner's Solana login wallet (the account;
     the agent's own EVM address is on `agent_wallet`), `wallet_source` is
     `managed` and `mode` is `auto`.
+
+    `kind` is the product kind, `lp` for every agent today; the actions and
+    figures it takes are listed per kind in `PonkClient.registry()`.
     """
 
     id: Optional[str] = None
     name: Optional[str] = None
+    kind: Optional[str] = None
     wallet_address: Optional[str] = None
     dex: Optional[str] = None
     pool_address: Optional[str] = None
@@ -730,8 +750,57 @@ class Agent(Model):
 
 
 @dataclass
+class FarmRewardMint(Model):
+    """One reward mint of a Solana agent's `farm_rewards`. Amounts are whole
+    tokens as decimal strings, USD figures USD strings.
+
+    `pending_amount` and `pending_usd` are what the open position is owed in
+    this mint now; `claimed_amount` and `claimed_usd` what the agent's claims
+    have paid its wallet in it; `fee_booked_amount` and `fee_booked_usd` the
+    farming reward fee booked on those claims; `claims` the confirmed claims
+    that paid it. `claimed_amount_unavailable` is `fee_converted_to_sol` when
+    a claim's fee was settled in SOL and the reward amount is no longer on
+    the ledger (`claimed_usd` still is). `None` is unknown, never zero.
+    """
+
+    mint: Optional[str] = None
+    pending_amount: Optional[str] = None
+    pending_usd: Optional[str] = None
+    claimed_amount: Optional[str] = None
+    claimed_amount_unavailable: Optional[str] = None
+    claimed_usd: Optional[str] = None
+    fee_booked_amount: Optional[str] = None
+    fee_booked_usd: Optional[str] = None
+    claims: Optional[int] = None
+
+
+@dataclass
+class RewardLine(Model):
+    """One farming reward token an open Solana position is owed: its `mint`,
+    the `amount` in whole tokens and `usd` (`None` when the mint has no
+    price)."""
+
+    mint: Optional[str] = None
+    amount: Optional[str] = None
+    usd: Optional[str] = None
+
+
+@dataclass
 class FarmRewards(Model):
-    """Farm rewards on an EVM agent or position: CAKE or AERO.
+    """Farming rewards on an agent or position.
+
+    ON A SOLANA AGENT (`AgentPerformance.farm_rewards`, on Meteora DLMM,
+    Meteora DAMM v2, Orca and Raydium; left out on Ponk Clouds) the block is
+    `pending_usd` (what the open position is owed now) with
+    `pending_unavailable` (`no_position`, `none_owed`, `unpriced` or
+    `read_failed`) when it is `None`, `claimed_usd` (what the agent's claims
+    have paid its wallet in a mint of its own) with `claimed_unavailable`
+    (`none_claimed`, `unpriced` or `read_failed`), `fee_booked_usd` (the
+    farming reward fee booked on those claims) and `mints`, one
+    `FarmRewardMint` per reward mint. None of it is in the fee, value or
+    PnL figures.
+
+    ON AN EVM AGENT OR POSITION it is the CAKE or AERO block below.
 
     `pending_amount` is whole tokens as a decimal string; `pending_usd` and
     `harvested_usd` are USD strings. `apr_pct` is a number in PERCENT (8.2 is
@@ -750,6 +819,13 @@ class FarmRewards(Model):
     staked: Optional[bool] = None
     apr_pct: Optional[float] = None
     apr_basis: Optional[str] = None
+    pending_unavailable: Optional[str] = None
+    claimed_usd: Optional[str] = None
+    claimed_unavailable: Optional[str] = None
+    fee_booked_usd: Optional[str] = None
+    mints: List[FarmRewardMint] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"mints": (FarmRewardMint,)}
 
 
 @dataclass
@@ -775,7 +851,14 @@ class AgentPerformance(Model):
     position value plus unclaimed fees minus the capital put in
     (`cost_basis_usd`, also `deposits_usd`): the value at the open plus every
     later top-up. `farm_rewards` is the CAKE or AERO block, `None` on a venue
-    with no farm. `figures_unavailable` is the one sentence that says why the
+    with no farm.
+
+    On a Solana agent `rewards` lists the farming reward tokens the open
+    position is owed (`RewardLine`), `rewards_claimable_usd` is their total
+    (`None` when none is owed or one has no price), and `farm_rewards` is
+    the Solana block (pending, claimed and the fee booked, per mint). Rewards
+    are paid in their own mints and are in none of the fee, value or PnL
+    figures. `figures_unavailable` is the one sentence that says why the
     live figures are `None` when they are (no wallet yet, the chain could not
     be read, no position, a token with no price).
     """
@@ -814,8 +897,15 @@ class AgentPerformance(Model):
     pnl_note: Optional[str] = None
     farm_rewards: Optional[FarmRewards] = None
     figures_unavailable: Optional[str] = None
+    rewards_claimable_usd: Optional[str] = None
+    rewards: List[RewardLine] = field(default_factory=list)
+    vs_hodl_fees_usd: Optional[str] = None
+    vs_hodl_il_usd: Optional[str] = None
+    vs_hodl_scope: Optional[str] = None
+    vs_hodl_since: Optional[str] = None
+    vs_hodl_unavailable: Optional[str] = None
 
-    _NESTED: ClassVar[Mapping[str, Any]] = {"farm_rewards": FarmRewards}
+    _NESTED: ClassVar[Mapping[str, Any]] = {"farm_rewards": FarmRewards, "rewards": (RewardLine,)}
 
 
 @dataclass
@@ -1354,6 +1444,10 @@ class LeaderboardRow(Model):
     `chain` is `solana` or the EVM chain the agent runs on. On an EVM row
     `dex` is an EVM venue id and `pool_address`, `token_x_mint` and
     `token_y_mint` are CAIP ids (`ponk.evm.parse_evm_id`).
+
+    `spark` runs from the agent's first value reading to its last in the
+    window, and `spark_from` and `spark_until` are that span; a `None` inside
+    it is a gap between readings, never a zero.
     """
 
     rank: Optional[int] = None
@@ -1382,6 +1476,8 @@ class LeaderboardRow(Model):
     fees_unclaimed_usd: Optional[str] = None
     deposited_usd: Optional[str] = None
     spark: Optional[List[Optional[float]]] = None
+    spark_from: Optional[str] = None
+    spark_until: Optional[str] = None
     followers: Optional[int] = None
     crew: Optional[str] = None
     win_rate: Optional[Any] = None
@@ -1580,6 +1676,13 @@ class Referral(Model):
     EARNED (`total_earned_usd`, reached your wallet), OWED (`owed_usd`, held by
     the treasury for you) and UNPROVEN (`unproven_usd`, booked against a
     signature that did not verify) are three different facts. Never add them.
+
+    `share_bps` is your share of ponk's platform fee on the agent yield of
+    the people you referred: a flat 1000 (10%), paid inside the fee
+    transaction itself, plus 0.25% of the capital on an agent's first open
+    out of the activation fee. Swaps and Telegram trades earn no referral
+    share. `tier` and `programme` are no longer sent (the ladder ended with
+    the flat rate) and read `None`.
     """
 
     code: Optional[str] = None
@@ -1601,6 +1704,10 @@ class Referral(Model):
     referred_lp_fees_usd: Optional[float] = None
     handle: Optional[str] = None
     creator_application: Optional[Any] = None
+    accrued_unpaid_usd: Optional[float] = None
+    accrued_unpaid_events: Optional[int] = None
+    operator: Optional[bool] = None
+    share_bps: Optional[int] = None
     tier: Optional["ReferralTier"] = None
     programme: Optional["ReferralProgramme"] = None
 
@@ -1710,6 +1817,17 @@ Referral._NESTED = {
 
 
 @dataclass
+class TokenLabel(Model):
+    """A token named for display: `symbol` (from the known table or the
+    verified token list) and `logo` (a same-origin icon path for a Solana
+    mint on ponk.exchange), each `None` when not known. Display only: the
+    mint stays on the row."""
+
+    symbol: Optional[str] = None
+    logo: Optional[str] = None
+
+
+@dataclass
 class ActivityEvent(Model):
     """One event on the live agents strip. It carries no identity at all.
 
@@ -1718,7 +1836,8 @@ class ActivityEvent(Model):
     no live public link). `usd` is a decimal string or `None`; `usd_kind`
     says what it is: `fees` (realized net fees of a compound or claim) or
     `margin` (the rebalance gate's benefit minus cost on a hold). Holds also
-    carry `reason_key`, `evaluations` and `last_seen_at`.
+    carry `reason_key`, `evaluations` and `last_seen_at`. `token_x` and
+    `token_y` name the pair for display (`TokenLabel`: `symbol` and `logo`).
     """
 
     key: Optional[str] = None
@@ -1733,16 +1852,23 @@ class ActivityEvent(Model):
     reason_key: Optional[str] = None
     evaluations: Optional[int] = None
     last_seen_at: Optional[str] = None
+    token_x: Optional[TokenLabel] = None
+    token_y: Optional[TokenLabel] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"token_x": TokenLabel, "token_y": TokenLabel}
 
 
 @dataclass
 class AgentsActivity(Model):
     """`GET /public/agents-activity`: the last 24 hours of board agents' actions
     and every live hold, under the board's privacy. `holding` counts agents
-    holding right now."""
+    holding right now, and `checks` sums every live hold's evaluations (the
+    strip's "checked N times"). A hold with no pair yet (Degen Mode waiting
+    for a runner) is counted in `holding` and left off `events`."""
 
     events: List[ActivityEvent] = field(default_factory=list)
     holding: Optional[int] = None
+    checks: Optional[int] = None
     computed_at: Optional[str] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"events": (ActivityEvent,)}
@@ -2158,8 +2284,11 @@ class XToken(Model):
 
 @dataclass
 class XDirectoryEntry(Model):
-    """A directory account. `status` is `active` or `not_found`. `followed`,
-    `muted` and `alerting` are always false signed out."""
+    """A directory account. `status` is `active` or `not_found`.
+    `read_state` is how the account reads now: `ok`, `unreadable` (the
+    source has not answered for it lately: show "Not readable right now",
+    not "not found") or `not_found`. `followed`, `muted` and `alerting` are
+    always false signed out."""
 
     handle: Optional[str] = None
     screen_name: Optional[str] = None
@@ -2169,6 +2298,7 @@ class XDirectoryEntry(Model):
     category: Optional[str] = None
     is_default: Optional[bool] = None
     status: Optional[str] = None
+    read_state: Optional[str] = None
     last_ok_at: Optional[str] = None
     followed: Optional[bool] = None
     muted: Optional[bool] = None
@@ -2382,14 +2512,19 @@ class AgentWalletCreated(Model):
 class FleetBatchItem(Model):
     """One agent's outcome inside a batch.
 
-    `outcome` is `done`, `failed` or `running`. `running` is not a failure: the
-    work is still going on the server, detached from the request, and
-    `get_batch(batch_id)` collects it. A `failed` item always carries `error`
+    `outcome` is `done`, `failed`, `running`, `unknown` or `skipped`.
+    `running` is not a failure: the work is still going on the server,
+    detached from the request, and `get_batch(batch_id)` collects it.
+    `unknown` (code `outcome_unknown`) was sent and its landing is not
+    confirmed: read the agent's state before doing anything again, never
+    retry it blind. `skipped` (code `nothing_to_collect` on a claim batch)
+    had nothing to do and nothing was sent; `error` says why. A `failed` item always carries `error`
     (a plain sentence) plus `status` and `code` to branch on. `result` is the
     single-agent call's own answer, verbatim: for a create it is
     `{"agent": ..., "wallet": ...}` (plus `wallet_error` when the wallet could
     not be made, which never undoes the create), for an exit or a withdraw it
-    is the `Withdrawal` shape. `agent_id` is `None` on a create that failed.
+    is the `Withdrawal` shape, for a claim the `ActionReceipt` shape (an EVM
+    agent's adds `kept_in_agent_wallet`). `agent_id` is `None` on a create that failed.
     """
 
     index: Optional[int] = None
@@ -2416,10 +2551,10 @@ class FleetBatchItem(Model):
 
 @dataclass
 class FleetBatch(Model):
-    """A create, exit or withdraw over many agents.
+    """A create, exit, withdraw or claim over many agents.
 
-    `kind` is `create`, `exit` or `withdraw`, and `done + failed + running ==
-    total`. The server answers once its fund deadline passes; whatever is
+    `kind` is `create`, `exit`, `withdraw` or `claim`, and `done + failed +
+    running + unknown + skipped == total`. The server answers once its fund deadline passes; whatever is
     still in flight then is `running`, and the batch keeps going after the
     response. Poll `get_batch(batch_id)` until `running == 0`. A finished
     batch is kept for 30 minutes.
@@ -2431,6 +2566,8 @@ class FleetBatch(Model):
     done: Optional[int] = None
     failed: Optional[int] = None
     running: Optional[int] = None
+    unknown: Optional[int] = None
+    skipped: Optional[int] = None
     items: List[FleetBatchItem] = field(default_factory=list)
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"items": (FleetBatchItem,)}
@@ -2619,7 +2756,8 @@ class CopilotPlan(Model):
     `ponk_fee_holder_bps`), `fleet_stop`, `notes`, `skipped` (each pool
     looked at and not used, with its reason) and `resolved_tokens` (each
     token you named and the mint it was resolved to). The copilot plans
-    Meteora DLMM, Orca and Raydium pools. A leg on a pool your sentence named
+    Meteora DLMM, Meteora DAMM v2, Orca and Raydium pools. A refusal with
+    code `no_pool` carries `skipped` too. A leg on a pool your sentence named
     that is below the pool checks carries `warnings` (one sentence each);
     starting the plan accepts them. A `refusal` with code `unverified_token`
     or `ambiguous_token` carries `suggestions`: the tokens with that symbol
@@ -3756,9 +3894,21 @@ class Recommendations(Model):
 
 
 @dataclass
+class ViewerCounts(Person):
+    """You, as a list row, with your own `followers` and `following` counts."""
+
+    followers: Optional[int] = None
+    following: Optional[int] = None
+
+
+@dataclass
 class FollowState(Model):
     """Your follow of one person. `private` is true when they are private:
-    nothing they do is shown until they go public."""
+    nothing they do is shown until they go public.
+
+    `followers` and `following_count` are the person's counts after this
+    change, and `viewer` is you, with your own `followers` and `following`,
+    so both profile headers can be written from this answer."""
 
     key: Optional[str] = None
     following: Optional[bool] = None
@@ -3767,6 +3917,10 @@ class FollowState(Model):
     notify_push: Optional[bool] = None
     muted: Optional[bool] = None
     private: Optional[bool] = None
+    following_count: Optional[int] = None
+    viewer: Optional[ViewerCounts] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"viewer": ViewerCounts}
 
 
 @dataclass
@@ -3812,7 +3966,8 @@ class ActivityRow(Model):
     rebalance or exit, a manual LP move, a call, or a swap (only when the owner
     shares swaps). `size_usd` and `pnl_usd` are `None` when the owner hides
     dollars (`usd_hidden`); `size_rounded` and `time_rounded` say a figure was
-    coarsened to protect a hidden wallet."""
+    coarsened to protect a hidden wallet. `token_x` and `token_y` name the
+    pair for display (`TokenLabel`), and a call row carries `call`."""
 
     id: Optional[int] = None
     kind: Optional[str] = None
@@ -3841,8 +3996,17 @@ class ActivityRow(Model):
     at: Optional[str] = None
     time_rounded: Optional[bool] = None
     copy: Optional[CopyAction] = None
+    token_x: Optional[TokenLabel] = None
+    token_y: Optional[TokenLabel] = None
+    call: Optional[Call] = None
 
-    _NESTED: ClassVar[Mapping[str, Any]] = {"actor": Person, "copy": CopyAction}
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "actor": Person,
+        "copy": CopyAction,
+        "token_x": TokenLabel,
+        "token_y": TokenLabel,
+        "call": Call,
+    }
 
 
 @dataclass
@@ -4694,3 +4858,216 @@ class FeedPrefs(Model):
 
     chains: List[str] = field(default_factory=list)
     all: Optional[bool] = None
+
+
+# --------------------------------------------------------------------------
+# 0.17.0: one position shape, the registry, any wallet's value line
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class Absence(Model):
+    """Why a figure is absent. `kind` is `not_on_venue` (the venue has no such
+    thing, so a zero there would be false), `not_read` (not read on this
+    path) or `unpriced` (known in tokens, no USD price). `why` is the
+    sentence."""
+
+    kind: Optional[str] = None
+    why: Optional[str] = None
+
+
+@dataclass
+class Observed(Model):
+    """A figure that is known, or absent for a stated reason.
+
+    `state` is `known` (then `value` is exact, and a known zero IS zero) or
+    `absent` (then `absence` says why; render a dash, never 0).
+    """
+
+    state: Optional[str] = None
+    value: Optional[Any] = None
+    absence: Optional[Absence] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"absence": Absence}
+
+    @property
+    def known(self) -> bool:
+        return self.state == "known"
+
+
+@dataclass
+class PositionSummary(Model):
+    """What every position reports. `status` is `open` or `none`. Each USD
+    figure is an `Observed` two-decimal string: `value_usd` (worth now),
+    `cost_basis_usd` (put in), `pnl_usd` and `yield_usd` (LP fees earned,
+    which stays known after an exit)."""
+
+    status: Optional[str] = None
+    value_usd: Optional[Observed] = None
+    cost_basis_usd: Optional[Observed] = None
+    pnl_usd: Optional[Observed] = None
+    yield_usd: Optional[Observed] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "value_usd": Observed,
+        "cost_basis_usd": Observed,
+        "pnl_usd": Observed,
+        "yield_usd": Observed,
+    }
+
+
+@dataclass
+class PositionDetail(Model):
+    """The kind's own facts. For `kind` `lp`: `pool` (as the chain names it,
+    `None` before a first open), `geometry` (`bins`, `ticks` or
+    `pool_share`), `has_range` (false on a pool share) and `reward_token`
+    (the farm's token, such as CAKE or AERO, when the venue has one)."""
+
+    kind: Optional[str] = None
+    pool: Optional[str] = None
+    geometry: Optional[str] = None
+    has_range: Optional[bool] = None
+    reward_token: Optional[str] = None
+
+
+@dataclass
+class PositionEnvelope(Model):
+    """One position of one agent, in the shape every chain and venue fills.
+
+    `id` is the chain's own id (base58, or a CAIP id on an EVM chain), `None`
+    while nothing is open.
+    """
+
+    kind: Optional[str] = None
+    venue: Optional[str] = None
+    chain: Optional[str] = None
+    id: Optional[str] = None
+    summary: Optional[PositionSummary] = None
+    detail: Optional[PositionDetail] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"summary": PositionSummary, "detail": PositionDetail}
+
+
+@dataclass
+class AgentPositions(Model):
+    """`GET /v1/agents/{id}/positions`: the agent's `kind` (`lp`) and its
+    positions. An LP agent has one envelope."""
+
+    agent_id: Optional[str] = None
+    kind: Optional[str] = None
+    positions: List[PositionEnvelope] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"positions": (PositionEnvelope,)}
+
+
+@dataclass
+class RegistryChain(Model):
+    """A chain ponk runs agents on: `id` (`solana`, `ethereum`, `arbitrum`,
+    `robinhood`, `base`, `bsc`), `label`, `is_evm`, `evm_chain_id`,
+    `native_symbol`, `native_decimals`, `explorer` and `status`."""
+
+    id: Optional[str] = None
+    label: Optional[str] = None
+    is_evm: Optional[bool] = None
+    evm_chain_id: Optional[int] = None
+    native_symbol: Optional[str] = None
+    native_decimals: Optional[int] = None
+    explorer: Optional[str] = None
+    status: Optional[str] = None
+
+
+@dataclass
+class RegistryVenue(Model):
+    """One venue: `id` (the `dex` of an agent), `label`, `platform`, `family`,
+    `chains`, `is_evm`, `geometry` (`range_unit` `bins`, `ticks` or
+    `pool_share`, `has_position_range`, `max_bins_per_open`,
+    `max_position_bins`), `farm`, `reward_token`, `fees_compound_in_place`
+    and `capabilities`: chain to capability id to `supported`,
+    `supported_no_ui`, `unsupported`, `inert` or `unknown`."""
+
+    id: Optional[str] = None
+    label: Optional[str] = None
+    short: Optional[str] = None
+    platform: Optional[str] = None
+    family: Optional[str] = None
+    kind: Optional[str] = None
+    chains: List[str] = field(default_factory=list)
+    is_evm: Optional[bool] = None
+    gated: Optional[bool] = None
+    geometry: Optional[Dict[str, Any]] = None
+    farm: Optional[str] = None
+    reward_token: Optional[str] = None
+    fees_compound_in_place: Optional[bool] = None
+    logo: Optional[str] = None
+    docs_slug: Optional[str] = None
+    capabilities: Optional[Dict[str, Dict[str, str]]] = None
+
+    def support(self, chain: str, capability: str) -> Optional[str]:
+        """The support word for `capability` on `chain`, or `None` when the
+        venue does not run on that chain."""
+        return ((self.capabilities or {}).get(chain) or {}).get(capability)
+
+
+@dataclass
+class Registry(Model):
+    """`GET /public/registry`: chains, live product kinds (with their owner
+    actions and metrics), the capability ids and labels, the support words,
+    and every venue with its support matrix. `version` and `revised` say
+    which revision of the registry answered."""
+
+    schema: Optional[int] = None
+    version: Optional[str] = None
+    evm_version: Optional[str] = None
+    revised: Optional[str] = None
+    chains: List[RegistryChain] = field(default_factory=list)
+    kinds: List[Dict[str, Any]] = field(default_factory=list)
+    capabilities: List[Dict[str, Any]] = field(default_factory=list)
+    supports: List[str] = field(default_factory=list)
+    venues: List[RegistryVenue] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "chains": (RegistryChain,),
+        "venues": (RegistryVenue,),
+    }
+
+    def venue(self, venue_id: str) -> Optional[RegistryVenue]:
+        """The venue with this id, or `None`."""
+        for v in self.venues:
+            if v.id == venue_id:
+                return v
+        return None
+
+    def supports_on(self, venue_id: str, chain: str, capability: str) -> bool:
+        """True when the venue supports `capability` on `chain`
+        (`supported` or `supported_no_ui`)."""
+        v = self.venue(venue_id)
+        return v is not None and v.support(chain, capability) in ("supported", "supported_no_ui")
+
+
+@dataclass
+class WalletHistoryPoint(Model):
+    """One bucket: `t` (its start) and `value_usd`, `None` when a position
+    spanning the bucket went unread (a gap, never a partial sum)."""
+
+    t: Optional[str] = None
+    value_usd: Optional[float] = None
+
+
+@dataclass
+class WalletHistory(Model):
+    """`GET /public/wallet/{address}/history`: one wallet's LP value over time.
+
+    `positions` is how many tracked positions the line covers (0 for a
+    wallet ponk never tracked), `incomplete_buckets` the gaps, and
+    `first_record_at` the earliest reading."""
+
+    range: Optional[str] = None
+    bucket_secs: Optional[int] = None
+    since: Optional[str] = None
+    until: Optional[str] = None
+    points: List[WalletHistoryPoint] = field(default_factory=list)
+    incomplete_buckets: Optional[int] = None
+    positions: Optional[int] = None
+    first_record_at: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"points": (WalletHistoryPoint,)}

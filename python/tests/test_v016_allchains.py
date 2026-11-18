@@ -77,11 +77,6 @@ def url(opener):
     return opener.calls[0]["url"]
 
 
-class TestVersion(unittest.TestCase):
-    def test_version_is_0_16_0(self):
-        self.assertEqual(ponk.__version__, "0.16.0")
-
-
 # -- the chain filter ---------------------------------------------------------
 
 #: Each of the nine reads that take `chains`, the path it reads and a fixture
