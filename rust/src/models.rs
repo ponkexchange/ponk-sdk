@@ -1143,6 +1143,21 @@ pub struct EvmToken {
     pub verification: Option<serde_json::Value>,
     /// Marks a Robinhood Chain stock token.
     pub stock: Option<serde_json::Value>,
+    /// Set when this token copies a real token's symbol or name at another
+    /// address (a look-alike). Ponk blocks agents on such a pool.
+    pub impersonates: Option<Impersonation>,
+}
+
+/// The real token a look-alike copies.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Impersonation {
+    /// The symbol it copies, as the real token writes it.
+    pub symbol: Option<String>,
+    /// The real token's contract; the zero address for the native coin.
+    pub address: Option<String>,
+    /// The real token is the chain's native coin.
+    pub native: Option<bool>,
 }
 
 /// A USD figure over the board's four windows. A window with no reading is

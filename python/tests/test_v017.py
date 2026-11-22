@@ -49,8 +49,8 @@ def keyless(payload, status=200):
 
 
 class TestVersion(unittest.TestCase):
-    def test_version_is_0_17_0(self):
-        self.assertEqual(ponk.__version__, "0.17.0")
+    def test_version_is_0_17_1(self):
+        self.assertEqual(ponk.__version__, "0.17.1")
 
 
 CLAIM_BATCH = {
@@ -309,3 +309,12 @@ class TestFeedsAndPeople(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestImpersonates(unittest.TestCase):
+    def test_a_look_alike_token_carries_the_real_one(self):
+        from ponk.models import EvmToken
+        t = EvmToken.from_dict({"symbol": "BNB", "impersonates": {"symbol": "BNB", "address": "0x0000000000000000000000000000000000000000", "native": True}})
+        self.assertEqual(t.impersonates["symbol"], "BNB")
+        self.assertTrue(t.impersonates["native"])
+        self.assertIsNone(EvmToken.from_dict({"symbol": "CAKE"}).impersonates)

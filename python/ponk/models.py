@@ -4325,6 +4325,9 @@ class EvmToken(Model):
     verification: Optional[Dict[str, Any]] = None
     stock: Optional[Any] = None
     created_at: Optional[int] = None
+    # Set when this token copies a real token's symbol or name at another
+    # address: {"symbol", "address", "native"}. Ponk blocks agents on it.
+    impersonates: Optional[Dict[str, Any]] = None
 
 
 @dataclass

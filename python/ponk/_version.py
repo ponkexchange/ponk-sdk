@@ -6,4 +6,4 @@ own module so `ponk.client` can import it without importing the package that
 imports `ponk.client`.
 """
 
-__version__ = "0.17.0"
+__version__ = "0.17.1"
