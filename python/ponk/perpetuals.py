@@ -8,16 +8,29 @@ client makes before sending and the high leverage warning. Nothing in it
 sends a request.
 
 Leverage is the user's choice, up to the market's own maximum on
-Hyperliquid (the server checks that). Above 10x the server asks for the
-warning to be acknowledged: `create_perp_agent` takes the agent's name,
-typed by the user after `HIGH_LEVERAGE_WARNING`, as `confirmation_text`.
+Hyperliquid (the server checks that). Two warnings need the user to
+acknowledge them: leverage above 10x, and the stop-room warning (a stop
+inside the liquidation price, but with liquidation closer than twice the
+stop's distance, where a fast move can pass liquidation before the stop
+fills). One acknowledgement covers both: the agent's name, typed by the
+user after reading the warnings, sent as `confirmation_text`. A stop at or
+past the liquidation price (with the safety margin Liquidation Guard keeps)
+is still refused, with a sentence naming a stop that would work. Stops are
+never adjusted automatically.
+
+Only the server knows the stop-room warning, because it reads the live
+price, so the preview is the authority: `needs_confirmation(preview)` reads
+the preview's own `needs_confirmation`, and `preview.confirmation_warnings`
+is what the typed name acknowledges. `needs_confirmation(leverage)` with a
+whole number answers the leverage half only.
 
     from ponk import perpetuals
 
     perpetuals.market_id("BTC")              # 'perp:hyperliquid:BTC'
     perpetuals.check_leverage(20)            # 20
-    perpetuals.needs_confirmation(20)        # True: type the agent's name
-    perpetuals.HIGH_LEVERAGE_WARNING         # the sentence to show first
+    perpetuals.needs_confirmation(20)        # True: above 10x
+    perpetuals.needs_confirmation(preview)   # the server's answer, both warnings
+    perpetuals.HIGH_LEVERAGE_WARNING         # the sentence to show first above 10x
 
 Units, everywhere on the Perpetuals routes: decimal figures the server keeps
 exactly (capital, realized net, balances, ledger amounts) arrive as strings;
@@ -29,7 +42,7 @@ funding rates) arrive as numbers. A figure the server could not read is
 
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Any, Mapping, Tuple
 
 __all__ = [
     "VENUE",
@@ -125,10 +138,28 @@ def check_leverage(leverage: Any) -> int:
     return leverage
 
 
-def needs_confirmation(leverage: Any) -> bool:
-    """True above 10x: the server creates the agent only with its name typed
-    as `confirmation_text` after `HIGH_LEVERAGE_WARNING` was shown."""
-    return check_leverage(leverage) > HIGH_LEVERAGE_ABOVE
+def needs_confirmation(leverage_or_preview: Any) -> bool:
+    """Whether the server creates the agent only with its name typed as
+    `confirmation_text`.
+
+    Given a preview (a `PerpPreview`, a copilot `PerpPlanLeg`, a ticket, or
+    the same answers as dicts), this is the server's own
+    `needs_confirmation`: true above 10x OR with the stop-room warning. Only
+    the preview knows about the stop-room warning, because it reads the
+    live price, so the preview is the authority; show its
+    `confirmation_warnings` before asking for the name.
+
+    Given a whole number, this is the leverage half only: true above 10x,
+    where `HIGH_LEVERAGE_WARNING` is shown. A trade at 10x or less can still
+    need the name when its stop leaves too little room before liquidation.
+    """
+    value = leverage_or_preview
+    if isinstance(value, Mapping):
+        flag = value.get("needsConfirmation", value.get("needs_confirmation"))
+        return flag is True
+    if not isinstance(value, (int, float)) and hasattr(value, "needs_confirmation"):
+        return getattr(value, "needs_confirmation") is True
+    return check_leverage(value) > HIGH_LEVERAGE_ABOVE
 
 
 def check_direction(direction: Any) -> str:

@@ -3109,9 +3109,15 @@ impl Client {
     /// `POST /v1/perp-agents/preview`. Every create gate on live prices,
     /// creating nothing. `ok` true carries the ticket and the rates the
     /// authorization will state; `ok` false the sentence the gates refused
-    /// it with. `warnings` is what the confirm step warns about and
-    /// `needs_confirmation` is true above 10x, where create needs
-    /// [`crate::perpetuals::PerpTrade::confirmation_text`].
+    /// it with (a stop at or past the liquidation price is refused, naming a
+    /// stop that would work). `warnings` is what the confirm step warns
+    /// about; `needs_confirmation` is true above 10x OR with the stop-room
+    /// warning (the stop is inside liquidation but liquidation is closer than
+    /// twice its distance), where create needs
+    /// [`crate::perpetuals::PerpTrade::confirmation_text`], and
+    /// `confirmation_warnings` is what that typed name acknowledges. Only the
+    /// server knows the stop-room warning, so read it here rather than
+    /// guessing from the leverage.
     pub async fn preview_perp_agent(&self, trade: &crate::perpetuals::PerpTrade) -> Result<PerpPreview> {
         trade.check()?;
         self.post("/v1/perp-agents/preview", Some(trade), self.timeout).await
@@ -3125,12 +3131,15 @@ impl Client {
     /// the stop in percent from the entry (required). The ticket is built
     /// from live prices first; a ticket the gates refuse creates nothing and
     /// answers 422 with the sentence, as does leverage above the market's
-    /// maximum. ABOVE 10X the warning must be acknowledged: show the user
-    /// [`crate::perpetuals::HIGH_LEVERAGE_WARNING`], have them type the
-    /// agent's name and set it with
-    /// [`crate::perpetuals::PerpTrade::confirmation_text`]; without it the
-    /// server answers 422 with the warning and the name to type. `warnings`
-    /// says what the agent opens with a warning about. Needs a `trade` key;
+    /// maximum and a stop at or past the liquidation price (naming a stop
+    /// that would work). ABOVE 10X, OR WITH THE STOP-ROOM WARNING, the
+    /// warnings must be acknowledged: preview first, show the user the
+    /// preview's `confirmation_warnings`, have them type the agent's name and
+    /// set it with [`crate::perpetuals::PerpTrade::confirmation_text`]. One
+    /// name acknowledges every such warning. Without it the server answers
+    /// 422 with the warnings and "To go ahead, type the agent's name (NAME)
+    /// to confirm." Stops are never adjusted automatically. `warnings` says
+    /// what the agent opens with a warning about. Needs a `trade` key;
     /// an agent created with a key is on the API rates, which `fees` states.
     ///
     /// NOTHING IS SIGNED OR FUNDED BY THIS CALL. The agent trades only once
@@ -3145,10 +3154,12 @@ impl Client {
     /// web, Telegram and the MCP. An open creates an agent (`id` set); a
     /// close (needs `confirm`) or a stop tightening goes to your one running
     /// agent on that market (`request` set). More than one that fits is
-    /// refused with a sentence naming them. An open above 10x answers the
-    /// high leverage warning first; the same sentence again through
+    /// refused with a sentence naming them. An open that needs an
+    /// acknowledgement (above 10x, or at any leverage a stop that leaves
+    /// liquidation closer than twice its distance) answers 422 with the
+    /// warnings first and creates nothing; the same sentence again through
     /// [`Client::perp_say_confirmed`], with the agent's name typed by the
-    /// user, acknowledges it. `confirm` never does. Needs a `trade` key.
+    /// user, acknowledges them. `confirm` never does. Needs a `trade` key.
     pub async fn perp_say(&self, text: &str, confirm: bool) -> Result<PerpCreated> {
         let body = if confirm {
             serde_json::json!({ "text": text, "confirm": true })
@@ -3158,10 +3169,12 @@ impl Client {
         self.post("/v1/perp-agents/say", Some(&body), self.timeout).await
     }
 
-    /// [`Client::perp_say`] for an open above 10x: `confirmation_text` is the
-    /// agent's name (its market in upper case, like `BTC`) as the user typed
-    /// it after [`crate::perpetuals::HIGH_LEVERAGE_WARNING`]. The server
-    /// checks it; a wrong one answers 422 and nothing is made.
+    /// [`Client::perp_say`] with the warnings acknowledged, at any leverage
+    /// (a 5x line whose stop leaves too little room needs it too):
+    /// `confirmation_text` is the agent's name (its market, like `BTC`, in
+    /// any case) as the user typed it after the warnings the first answer
+    /// stated. The server checks it; a wrong one answers 422 and nothing is
+    /// made.
     pub async fn perp_say_confirmed(&self, text: &str, confirmation_text: &str) -> Result<PerpCreated> {
         let body = serde_json::json!({ "text": text, "confirmationText": confirmation_text });
         self.post("/v1/perp-agents/say", Some(&body), self.timeout).await
@@ -3246,8 +3259,9 @@ impl Client {
     /// fresh prices; the plan comes back `started` with `fleet_id`, `agents`
     /// and `sign_url`, the fleet page where each agent is authorized with its
     /// own signature and funded with its own transfer. Starts at most once.
-    /// A leg above 10x (`needs_confirmation`) needs its agent's name typed by
-    /// the user: use [`Client::copilot_perp_start_confirmed`]; without it the
+    /// A leg with `needs_confirmation` (above 10x, or the stop-room warning)
+    /// needs its agent's name typed by the user after the leg's
+    /// `confirmation_warnings`: use [`Client::copilot_perp_start_confirmed`]; without it the
     /// start answers 422 naming the leg and nothing is made. Needs a `trade`
     /// key. Takes the fund timeout.
     pub async fn copilot_perp_start(&self, plan_id: &str) -> Result<PerpFleetPlan> {
@@ -3255,8 +3269,8 @@ impl Client {
     }
 
     /// [`Client::copilot_perp_start`] with `confirmations`, leg index to the
-    /// agent's name as the user typed it after
-    /// [`crate::perpetuals::HIGH_LEVERAGE_WARNING`], one per leg above 10x.
+    /// agent's name as the user typed it after the leg's
+    /// `confirmation_warnings`, one per leg with `needs_confirmation`.
     /// The name is the leg's `name` as the plan prints it, market, side and
     /// leverage: `{0: "BTC Long 20x"}`.
     pub async fn copilot_perp_start_confirmed(

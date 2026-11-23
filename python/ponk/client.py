@@ -81,11 +81,15 @@ Perpetuals on Hyperliquid
 A Perpetuals agent is one typed trade: `create_perp_agent(coin="BTC",
 direction="long", leverage=3, capital_usd=500, stop_loss_pct=3)`. The server
 builds the ticket from live prices and refuses one its gates refuse, with a
-sentence. Leverage goes up to the market's own maximum; above 10x the
-server asks for the agent's name, typed after the high leverage warning
-(`ponk.perpetuals.HIGH_LEVERAGE_WARNING`), as `confirmation_text`, and the
-preview and the new agent carry what the confirm step warns about in
-`warnings`. A key
+sentence. Leverage goes up to the market's own maximum. Above 10x, or
+when the stop leaves liquidation closer than twice its own distance (the
+stop-room warning), the server asks for the agent's name, typed by the user
+after reading the warnings, as `confirmation_text`: one name acknowledges
+both. The preview is the authority on whether it is needed
+(`needs_confirmation`, `confirmation_warnings`), and the preview and the new
+agent carry everything the confirm step warns about in `warnings`. A stop
+at or past the liquidation price is refused, naming a stop that would work;
+stops are never adjusted automatically. A key
 creates the agent and can preview, close, tighten the stop, pause, resume and
 exit it, but the agent trades nothing until its owner authorizes it in the
 app with their wallet and funds its Hyperliquid account: that authorization
@@ -2803,9 +2807,15 @@ class PonkClient:
         ticket (size, liquidation price, stop price, loss at the stop) and
         the rates the authorization will state, `warnings` (what the
         confirm step warns about: a crowded side, a thin market, unknown
-        funding or volume, above 10x) and `needs_confirmation` (above 10x,
-        create needs `confirmation_text`); `ok` false carries the sentence
-        the gates refused it with.
+        funding or volume, above 10x, a stop with little room before
+        liquidation), `needs_confirmation` (above 10x OR with the stop-room
+        warning, create needs `confirmation_text`) and
+        `confirmation_warnings`, the warnings the typed name acknowledges.
+        Only the server knows the stop-room warning, so read
+        `needs_confirmation` here rather than guessing from the leverage.
+        `ok` false carries the sentence the gates refused it with (a stop
+        at or past the liquidation price is refused, naming a stop that
+        would work).
         """
         return PerpPreview.from_dict(
             self._request(
@@ -2851,11 +2861,18 @@ class PonkClient:
         The ticket is built from live prices first; a ticket the gates refuse
         creates nothing and raises `PonkUnprocessableError` with the
         sentence; so is leverage above the market's maximum, with the
-        figure. ABOVE 10X the warning must be acknowledged: show the user
-        `ponk.perpetuals.HIGH_LEVERAGE_WARNING`, have them type the agent's
-        name and pass it as `confirmation_text` (without it the server
-        answers 422 with the warning and the name to type). `warnings` says
-        what the agent opens with a warning about. Needs a `trade` key; an
+        figure, and a stop at or past the liquidation price, naming a stop
+        that would work. ABOVE 10X, OR WITH THE STOP-ROOM WARNING (the stop
+        is inside liquidation but liquidation is closer than twice the
+        stop's distance), the warnings must be acknowledged: preview first,
+        show the user the preview's `confirmation_warnings`, have them type
+        the agent's name and pass it as `confirmation_text`. One name
+        acknowledges every such warning. Without it the server answers 422
+        with the warnings and "To go ahead, type the agent's name (NAME) to
+        confirm." The name compares exactly after trimming, except its
+        market ticker, which compares in any case ("btc" matches "BTC").
+        Stops are never adjusted automatically. `warnings` says what the
+        agent opens with a warning about. Needs a `trade` key; an
         agent created with a key is on the API rates, which `fees` states.
 
         NOTHING IS SIGNED OR FUNDED BY THIS CALL. The agent trades only once
@@ -2891,12 +2908,15 @@ class PonkClient:
         `create_perp_agent` does. A close (`close my sol short`, needs
         `confirm=True`) or a stop tightening (`tighten btc stop to 2%`) goes
         to your one running agent on that market; more than one that fits is
-        refused with a sentence naming them, never a guess. An open above
-        10x answers the high leverage warning first; the same sentence again
-        with `confirmation_text`, the agent's name typed by the user (its
-        market in upper case, like `"BTC"`), acknowledges it. `confirm=True`
-        alone never does. Needs a `trade` key. The server parses the
-        sentence, so leverage is checked there.
+        refused with a sentence naming them, never a guess. An open that
+        needs an acknowledgement (above 10x, or at any leverage a stop that
+        leaves liquidation closer than twice its distance) answers 422 with
+        the warnings first and creates nothing; the same sentence again with
+        `confirmation_text`, the agent's name typed by the user (its market,
+        like `"BTC"`, in any case), acknowledges them. `confirmation_text`
+        is sent whenever it is given, at any leverage. `confirm=True` alone
+        never acknowledges a warning. Needs a `trade` key. The server parses
+        the sentence, so leverage and the stop are checked there.
         """
         body: Dict[str, Any] = {"text": text}
         if confirm:
@@ -3010,9 +3030,10 @@ class PonkClient:
         agent is authorized with its own signature and funded with its own
         transfer, one after another (`signatures` says so). A practice fleet
         needs neither. Starts at most once: a repeat answers the fleet
-        already made. A leg above 10x (`needs_confirmation`) starts only
-        with its agent's name, typed by the user after the high leverage
-        warning, in `confirmations`, leg index to name (`{"0": "BTC Long 20x"}`,
+        already made. A leg with `needs_confirmation` (above 10x, or the
+        stop-room warning) starts only with its agent's name, typed by the
+        user after the leg's `confirmation_warnings`, in `confirmations`,
+        leg index to name (`{"0": "BTC Long 20x"}`,
         the leg's `name` as the plan prints it: market, side, leverage;
         int keys are sent as strings); a missing one answers 422 naming it
         and nothing is made. Needs a `trade` key or a wallet session, of the
@@ -4596,8 +4617,9 @@ def _perp_body(
     confirmation_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Only the shape is checked here. Every gate is the server's, including
-    # the market's maximum leverage and the acknowledgement above 10x: it
-    # reads live prices.
+    # the market's maximum leverage, the stop against liquidation and the
+    # acknowledgement (above 10x, or the stop-room warning): it reads live
+    # prices. The coin is sent exactly as given (kPEPE stays kPEPE).
     body: Dict[str, Any] = {
         "coin": coin,
         "direction": _perp.check_direction(direction),

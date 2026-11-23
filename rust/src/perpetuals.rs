@@ -8,9 +8,21 @@
 //! the high leverage warning. Nothing in it sends a request.
 //!
 //! Leverage is the user's choice, up to the market's own maximum on
-//! Hyperliquid (the server checks that). Above 10x the server asks for the
-//! warning to be acknowledged: the agent's name, typed by the user after
-//! [`HIGH_LEVERAGE_WARNING`], goes in [`PerpTrade::confirmation_text`].
+//! Hyperliquid (the server checks that). Two warnings need the user to
+//! acknowledge them: leverage above 10x, and the stop-room warning (a stop
+//! inside the liquidation price, but with liquidation closer than twice the
+//! stop's distance, where a fast move can pass liquidation before the stop
+//! fills). One acknowledgement covers both: the agent's name, typed by the
+//! user after reading the warnings, goes in [`PerpTrade::confirmation_text`].
+//! A stop at or past the liquidation price (with the safety margin
+//! Liquidation Guard keeps) is still refused, with a sentence naming a stop
+//! that would work. Stops are never adjusted automatically.
+//!
+//! Only the server knows the stop-room warning, because it reads the live
+//! price, so the preview is the authority: [`needs_confirmation`] given a
+//! [`crate::PerpPreview`] reads its own `needs_confirmation`, and its
+//! `confirmation_warnings` is what the typed name acknowledges. Given a
+//! leverage it answers the leverage half only.
 //!
 //! ```
 //! use ponk::perpetuals::{self, PerpTrade};
@@ -22,6 +34,12 @@
 //! let high = PerpTrade::new("BTC", "long", 20, "500", "3").name("BTC 20x").confirmation_text("BTC 20x");
 //! assert!(high.check().is_ok());
 //! assert!(perpetuals::needs_confirmation(20));
+//!
+//! // At 5x a 4% stop can still need the name: the preview says so.
+//! let preview: ponk::PerpPreview = serde_json::from_str(
+//!     r#"{"ok":true,"needsConfirmation":true,"confirmationWarnings":["Liquidation is about 8.9% away."]}"#,
+//! ).unwrap();
+//! assert!(perpetuals::needs_confirmation(&preview));
 //! ```
 //!
 //! Units, everywhere on the Perpetuals routes: decimal figures the server
@@ -99,10 +117,53 @@ pub fn check_leverage(leverage: u32) -> Result<u32, Error> {
     Ok(leverage)
 }
 
-/// True above 10x: the server creates the agent only with its name typed as
-/// [`PerpTrade::confirmation_text`] after [`HIGH_LEVERAGE_WARNING`] was shown.
-pub fn needs_confirmation(leverage: u32) -> bool {
-    leverage > HIGH_LEVERAGE_ABOVE
+/// Whether the server creates the agent only with its name typed as
+/// [`PerpTrade::confirmation_text`].
+///
+/// Given a preview ([`crate::PerpPreview`], a copilot [`crate::PerpPlanLeg`]
+/// or a [`crate::PerpTicket`]), this is the server's own
+/// `needs_confirmation`: true above 10x OR with the stop-room warning. Only
+/// the preview knows about the stop-room warning, because it reads the live
+/// price, so the preview is the authority; show its `confirmation_warnings`
+/// before asking for the name. A refused preview, or an answer without the
+/// flag, is `false`.
+///
+/// Given a leverage, this is the leverage half only: true above 10x, where
+/// [`HIGH_LEVERAGE_WARNING`] is shown. A trade at 10x or less can still need
+/// the name when its stop leaves too little room before liquidation.
+pub fn needs_confirmation(source: impl NeedsConfirmation) -> bool {
+    source.needs_confirmation()
+}
+
+/// What [`needs_confirmation`] reads: a leverage, or the server's preview,
+/// plan leg or ticket.
+pub trait NeedsConfirmation {
+    /// See [`needs_confirmation`].
+    fn needs_confirmation(&self) -> bool;
+}
+
+impl NeedsConfirmation for u32 {
+    fn needs_confirmation(&self) -> bool {
+        *self > HIGH_LEVERAGE_ABOVE
+    }
+}
+
+impl NeedsConfirmation for &crate::PerpPreview {
+    fn needs_confirmation(&self) -> bool {
+        self.needs_confirmation == Some(true)
+    }
+}
+
+impl NeedsConfirmation for &crate::PerpPlanLeg {
+    fn needs_confirmation(&self) -> bool {
+        self.needs_confirmation == Some(true)
+    }
+}
+
+impl NeedsConfirmation for &crate::PerpTicket {
+    fn needs_confirmation(&self) -> bool {
+        self.needs_confirmation == Some(true)
+    }
 }
 
 /// The body of `POST /v1/perp-agents` and its preview: one typed trade.
@@ -111,9 +172,10 @@ pub fn needs_confirmation(leverage: u32) -> bool {
 /// `"2.5"`); the server reads them as decimals. `stop_loss_pct` is percent
 /// from the entry (3 for 3%) and is required: no position runs without a
 /// stop. `name` defaults to the coin on the server. `practice` runs on live
-/// mainnet prices with a practice balance and sends nothing. Above 10x,
-/// `confirmation_text` is the agent's name as the user typed it after the high
-/// leverage warning.
+/// mainnet prices with a practice balance and sends nothing. Above 10x, or
+/// with the stop-room warning, `confirmation_text` is the agent's name as the
+/// user typed it after the warnings. The coin is sent exactly as given
+/// (`kPEPE` stays `kPEPE`).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PerpTrade {
@@ -171,9 +233,13 @@ impl PerpTrade {
         self
     }
 
-    /// Above 10x: the agent's name as the user typed it after
-    /// [`HIGH_LEVERAGE_WARNING`]. Without it the server answers 422 with the
-    /// warning and the name to type.
+    /// Above 10x, or with the stop-room warning (the preview's
+    /// `needs_confirmation`): the agent's name as the user typed it after the
+    /// preview's `confirmation_warnings`. One name acknowledges every such
+    /// warning. Without it the server answers 422 with the warnings and "To
+    /// go ahead, type the agent's name (NAME) to confirm." The name compares
+    /// exactly after trimming, except its market ticker, which compares in
+    /// any case (`btc` matches `BTC`).
     pub fn confirmation_text(mut self, typed: impl Into<String>) -> Self {
         self.confirmation_text = Some(typed.into());
         self

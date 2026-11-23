@@ -5453,7 +5453,15 @@ class PerpTicket(Model):
     """The ticket's figures from live prices: margin, notional, size in
     coins, the liquidation price and the adverse move to it (a fraction), the
     stop price, its fraction and the loss at the stop, and the take-profit
-    price. `sentence` is the ticket said plainly."""
+    price. `sentence` is the ticket said plainly.
+
+    `needs_confirmation` is true above 10x or with the stop-room warning,
+    where create needs the agent's name typed as `confirmation_text`.
+    `stop_room_warning` is set when the stop is inside the liquidation price
+    but liquidation is closer than twice the stop's distance (a fast move
+    can pass liquidation before the stop fills); `atr_warning` when the stop
+    sits inside the market's usual move. Each is `None` otherwise, and from
+    an older server."""
 
     _CAMEL: ClassVar[bool] = True
 
@@ -5472,6 +5480,9 @@ class PerpTicket(Model):
     loss_at_stop_usd: Optional[float] = None
     take_profit_price: Optional[float] = None
     high_leverage: Optional[bool] = None
+    needs_confirmation: Optional[bool] = None
+    stop_room_warning: Optional[str] = None
+    atr_warning: Optional[str] = None
 
 
 @dataclass
@@ -5491,11 +5502,17 @@ class PerpPreview(Model):
     """`preview_perp_agent(...)`: every create gate on live prices, creating
     nothing. `ok` true carries `ticket`, `fees` and `warnings`, what the
     confirm step warns about, never a refusal (a crowded side, a thin market,
-    unknown funding or volume, above 10x); `needs_confirmation` is true above
-    10x, where create needs `confirmation_text`. `ok` false carries
-    `sentence`, why the gates refused the ticket. `network` is `testnet`, or
-    `mainnet` for practice (mainnet prices, nothing sent). An older server
-    sends no `warnings`: the list is empty."""
+    unknown funding or volume, above 10x, a stop with little room before
+    liquidation). `needs_confirmation` is true above 10x OR with the
+    stop-room warning, where create needs the agent's name typed as
+    `confirmation_text`; `confirmation_warnings` is the warnings that typed
+    name acknowledges (show them before asking for it), a part of
+    `warnings`. Only the server knows the stop-room warning, so this preview
+    is the authority (`ponk.perpetuals.needs_confirmation(preview)`). `ok`
+    false carries `sentence`, why the gates refused the ticket (a stop at or
+    past the liquidation price is refused, naming a stop that would work).
+    `network` is `testnet`, or `mainnet` for practice (mainnet prices,
+    nothing sent). An older server sends neither list: each is empty."""
 
     _CAMEL: ClassVar[bool] = True
 
@@ -5508,6 +5525,7 @@ class PerpPreview(Model):
     fees: Optional[PerpFeeRates] = None
     needs_confirmation: Optional[bool] = None
     warnings: List[str] = field(default_factory=list)
+    confirmation_warnings: List[str] = field(default_factory=list)
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"ticket": PerpTicket, "fees": PerpFeeRates}
 
@@ -5516,7 +5534,8 @@ class PerpPreview(Model):
 class PerpCreated(Model):
     """`create_perp_agent(...)`: the new agent and its ticket.
 
-    `ticket` is the ticket's sentence and `ticket_figures` its numbers.
+    `ticket` is the ticket's sentence and `ticket_figures` its numbers
+    (with `needs_confirmation`, `stop_room_warning` and `atr_warning`).
     `next` says what happens next: a live agent waits for its owner to
     authorize it in the app and fund its Hyperliquid account; a practice
     agent starts on its next tick. `warnings` is what the agent opens with a
@@ -5656,7 +5675,8 @@ class PerpAccount(Model):
 @dataclass
 class PerpAgentConfig(Model):
     """The trade: market, side, leverage, capital, stop and take-profit
-    percents (decimal strings) and practice."""
+    percents (decimal strings) and practice. `warnings` is what the agent
+    was warned about when it was created (empty for an older agent)."""
 
     _CAMEL: ClassVar[bool] = True
 
@@ -5668,6 +5688,7 @@ class PerpAgentConfig(Model):
     stop_loss_pct: Optional[str] = None
     take_profit_pct: Optional[str] = None
     practice: Optional[bool] = None
+    warnings: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -5889,8 +5910,12 @@ class PerpExit(Model):
 @dataclass
 class PerpPlanLeg(Model):
     """One leg of a Perpetuals plan. `*_defaulted` says a stated default was
-    taken. `ticket` is the preview's ticket from live prices. A leg with
-    `refusal` is not planned; the rest still start."""
+    taken. `ticket` is the preview's ticket from live prices, as the server
+    writes it (camelCase keys, with `needsConfirmation`, `stopRoomWarning`
+    and `atrWarning`). `needs_confirmation` is true above 10x OR with the
+    stop-room warning: the leg starts only with its agent's name typed by
+    the user, after `confirmation_warnings` was shown. A leg with `refusal`
+    is not planned; the rest still start."""
 
     index: Optional[int] = None
     name: Optional[str] = None
@@ -5905,6 +5930,7 @@ class PerpPlanLeg(Model):
     ticket: Optional[Dict[str, Any]] = None
     high_leverage: Optional[bool] = None
     needs_confirmation: Optional[bool] = None
+    confirmation_warnings: List[str] = field(default_factory=list)
     note: Optional[str] = None
     refusal: Optional[str] = None
 

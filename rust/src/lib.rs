@@ -97,10 +97,14 @@
 //! `long` or `short`, leverage, the USDC it trades with, a stop that is always
 //! set). The server builds the ticket from live prices and refuses one its
 //! gates refuse, with a sentence. Leverage goes up to the market's own
-//! maximum; above 10x the server asks for the agent's name, typed after
-//! [`perpetuals::HIGH_LEVERAGE_WARNING`], in
-//! [`perpetuals::PerpTrade::confirmation_text`], and the preview and the new
-//! agent carry what the confirm step warns about in `warnings`. A key creates the agent and can
+//! maximum. Above 10x, or when the stop leaves liquidation closer than twice
+//! its own distance (the stop-room warning), the server asks for the agent's
+//! name, typed by the user after the warnings, in
+//! [`perpetuals::PerpTrade::confirmation_text`]: one name acknowledges both.
+//! The preview is the authority on whether it is needed
+//! ([`perpetuals::needs_confirmation`] takes it, and its
+//! `confirmation_warnings` says what the name acknowledges), and the preview
+//! and the new agent carry what the confirm step warns about in `warnings`. A key creates the agent and can
 //! preview, close, tighten the stop, pause, resume and exit it, but the agent
 //! trades nothing until its owner authorizes it in the app with their wallet
 //! and funds its Hyperliquid account: both are wallet signatures, which a key

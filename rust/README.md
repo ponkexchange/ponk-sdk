@@ -251,7 +251,8 @@ async fn main() -> Result<(), ponk::Error> {
         println!("{}", preview.sentence.unwrap_or_default());
         return Ok(());
     }
-    // A crowded side, a thin market, above 10x: warnings, never refusals.
+    // A crowded side, a thin market, above 10x, little stop room: warnings,
+    // never refusals.
     for w in &preview.warnings {
         println!("Warning: {w}");
     }
@@ -266,20 +267,31 @@ async fn main() -> Result<(), ponk::Error> {
 ```
 
 Leverage goes up to the market's own maximum on Hyperliquid (`max_leverage`
-on the board). Above 10x the server asks for the high leverage warning to be
-acknowledged: `perpetuals::needs_confirmation(n)` is true there,
-`perpetuals::HIGH_LEVERAGE_WARNING` is the sentence to show, and the agent's
-name as the user typed it goes in `PerpTrade::confirmation_text`. Without it
-the server answers 422 with the warning and the name to type:
+on the board). Two warnings need the user to acknowledge them: leverage above
+10x, and the stop-room warning, when the stop is inside the liquidation price
+but liquidation is closer than twice the stop's distance (a fast move can
+pass liquidation before the stop fills). One acknowledgement covers both: the
+agent's name as the user typed it, in `PerpTrade::confirmation_text`. Only
+the server knows the stop-room warning, because it reads the live price, so
+the preview is the authority: `perpetuals::needs_confirmation(&preview)`
+reads its `needs_confirmation`, and `preview.confirmation_warnings` is what
+to show. `perpetuals::needs_confirmation(n)` with a leverage answers only the
+above-10x half. Without the name the server answers 422 with the warnings
+and "To go ahead, type the agent's name (NAME) to confirm." A stop at or past
+the liquidation price is refused, naming a stop that would work; stops are
+never adjusted automatically.
 
 ```rust,no_run
 use ponk::perpetuals::{self, PerpTrade};
 
-// `typed` is what the user typed after reading the warning: "BTC 20x".
-async fn high(ponk: &ponk::Client, typed: String) -> Result<(), ponk::Error> {
-    let trade = PerpTrade::new("BTC", "long", 20, "200", "2").name("BTC 20x");
-    let trade = if perpetuals::needs_confirmation(trade.leverage) {
-        println!("{}", perpetuals::HIGH_LEVERAGE_WARNING);
+// `typed` is what the user typed after reading the warnings: "BTC 5x".
+async fn acknowledged(ponk: &ponk::Client, typed: String) -> Result<(), ponk::Error> {
+    let trade = PerpTrade::new("BTC", "long", 5, "200", "4").name("BTC 5x");
+    let preview = ponk.preview_perp_agent(&trade).await?;
+    let trade = if perpetuals::needs_confirmation(&preview) {
+        for w in &preview.confirmation_warnings {
+            println!("{w}");
+        }
         trade.confirmation_text(typed)
     } else {
         trade
@@ -290,9 +302,16 @@ async fn high(ponk: &ponk::Client, typed: String) -> Result<(), ponk::Error> {
 }
 ```
 
+The ticket (`preview.ticket`, `agent.ticket_figures`, a plan leg's `ticket`)
+carries `needs_confirmation`, `stop_room_warning` and `atr_warning`, and
+`perp_agent(id).config.warnings` is what the agent was warned about when it
+was created. `perp_say_confirmed(text, name)` sends the typed name at any
+leverage.
+
 A fleet from one sentence: `copilot_perp_plan`, then `copilot_perp_start`,
-which moves no money and returns `sign_url`. A leg above 10x
-(`needs_confirmation`) starts only through `copilot_perp_start_confirmed` with
+which moves no money and returns `sign_url`. A leg with `needs_confirmation`
+(above 10x, or the stop-room warning, its `confirmation_warnings` say which)
+starts only through `copilot_perp_start_confirmed` with
 its agent's typed name by leg index, the leg's `name` as the plan prints it
 (`BTC Long 20x`). `copilot_tighten_agent_stops` answers
 each agent's sentence in `answers`. Funding an agent waits for its

@@ -317,10 +317,16 @@ stop price, loss at the stop) and refuses a trade its gates refuse, with one
 sentence. Then the agent manages it: the stop rests on Hyperliquid, and
 Liquidation Guard runs every tick, paused or not.
 
-**No agent runs above 10x.** Above 10x a sudden 4% price jump can pass the
-liquidation price before any stop fills. Both clients and the CLI refuse more
-before sending, in the server's own words; the server stays authoritative,
-and a market whose Hyperliquid maximum is lower keeps its own lower maximum.
+Leverage goes up to the market's own maximum on Hyperliquid. Two warnings need
+the user to acknowledge them by typing the agent's name (`confirmation_text`,
+`--confirm-name`): leverage above 10x, and the stop-room warning, when the
+stop is inside the liquidation price but liquidation is closer than twice the
+stop's distance. One typed name covers both. Only the server knows the
+stop-room warning, because it reads the live price, so the preview is the
+authority: its `needs_confirmation` and `confirmation_warnings` say whether
+the name is needed and what it acknowledges. A stop at or past the
+liquidation price is refused, with a sentence naming a stop that would work.
+Stops are never adjusted automatically.
 
 ```python
 from ponk import PonkClient

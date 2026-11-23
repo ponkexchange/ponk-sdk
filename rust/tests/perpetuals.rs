@@ -6,18 +6,23 @@
 use ponk::perpetuals::{self, PerpTrade};
 use ponk::{
     Client, CopilotFleet, Error, PerpAgent, PerpBoard, PerpExitCard, PerpFleetPlan, PerpFleetStop,
-    PerpLedger, PerpPreview,
+    PerpLedger, PerpPreview, PerpTicket,
 };
 
 const AGENT: &str = "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b";
 const FLEET: &str = "6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b";
 const WARNING: &str = "Above 10x a sudden 4% price jump can pass the liquidation price before any stop fills.";
+const STOP_ROOM: &str = "Liquidation is about 8.9% away (7.1% with the safety margin Liquidation Guard keeps), less than twice your 4% stop: a fast move can pass liquidation before the stop fills, and in this zone Liquidation Guard may cut part of the position before the stop does. A stop of 3.5% or less, or lower leverage, keeps twice the room.";
 
 fn decode<T: serde::de::DeserializeOwned>(body: &str) -> T {
     serde_json::from_str(body).unwrap()
 }
 
 fn one_shot(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+    one_shot_status("200 OK", body.to_string())
+}
+
+fn one_shot_status(status: &'static str, body: String) -> (String, std::thread::JoinHandle<String>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -47,7 +52,7 @@ fn one_shot(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
         }
         write!(
             sock,
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             body.len(),
             body
         )
@@ -316,4 +321,129 @@ async fn fleet_pause_and_plan_start() {
     let raw = h.join().unwrap();
     assert_eq!(request_line(&raw), "POST /copilot/perp/plans/p/start HTTP/1.1");
     assert_eq!(body_of(&raw), serde_json::json!({"confirmations": {"0": "BTC Long 2x", "2": "SOL Short 2x"}}));
+}
+
+// The stop rule: a stop inside liquidation but with liquidation closer than
+// twice its distance is a warning acknowledged with the typed name, at any
+// leverage. The preview is the authority.
+
+fn stop_room_preview() -> PerpPreview {
+    decode(&format!(
+        r#"{{"ok":true,"network":"testnet","practice":false,"name":"BTC",
+        "ticket":{{"leverage":5,"highLeverage":false,"needsConfirmation":true,"stopRoomWarning":"{STOP_ROOM}","atrWarning":null}},
+        "fees":null,"needsConfirmation":true,"warnings":["The long side is crowded.","{STOP_ROOM}"],"confirmationWarnings":["{STOP_ROOM}"]}}"#
+    ))
+}
+
+#[test]
+fn the_preview_is_the_authority_at_5x() {
+    let p = stop_room_preview();
+    assert!(!perpetuals::needs_confirmation(5));
+    assert!(perpetuals::needs_confirmation(&p));
+    assert_eq!(p.confirmation_warnings, vec![STOP_ROOM.to_string()]);
+    assert_eq!(p.warnings.len(), 2);
+    let t = p.ticket.as_ref().unwrap();
+    assert!(perpetuals::needs_confirmation(t));
+    assert_eq!(t.needs_confirmation, Some(true));
+    assert_eq!(t.stop_room_warning.as_deref(), Some(STOP_ROOM));
+    assert_eq!(t.atr_warning, None);
+
+    // Above 10x with no stop-room warning, and a plain 3x.
+    let high: PerpPreview = decode(&format!(
+        r#"{{"ok":true,"needsConfirmation":true,"warnings":["{WARNING}"],"confirmationWarnings":["{WARNING}"]}}"#
+    ));
+    assert!(perpetuals::needs_confirmation(&high));
+    let plain: PerpPreview = decode(r#"{"ok":true,"needsConfirmation":false,"ticket":{"leverage":3}}"#);
+    assert!(!perpetuals::needs_confirmation(&plain));
+    assert!(plain.confirmation_warnings.is_empty());
+    assert_eq!(plain.ticket.as_ref().unwrap().stop_room_warning, None);
+    // A refused preview (a stop past liquidation) needs nothing typed: it is refused.
+    let refused: PerpPreview = decode(r#"{"ok":false,"sentence":"A 12% stop sits past the liquidation price. A stop of 7% or less would work."}"#);
+    assert!(!perpetuals::needs_confirmation(&refused));
+    let older: PerpTicket = decode(r#"{"leverage":20,"highLeverage":true}"#);
+    assert!(!perpetuals::needs_confirmation(&older));
+}
+
+#[tokio::test]
+async fn create_at_5x_sends_the_typed_name() {
+    let (base, h) = one_shot_status(
+        "200 OK",
+        format!(
+            r#"{{"id":"{AGENT}","network":"testnet","ticket":"Long BTC 5x","ticketFigures":{{"leverage":5,"needsConfirmation":true,"stopRoomWarning":"{STOP_ROOM}","atrWarning":"The stop sits inside BTC's usual daily move."}},"warnings":["{STOP_ROOM}"]}}"#
+        ),
+    );
+    let t = PerpTrade::new("BTC", "long", 5, "200", "4").confirmation_text("btc");
+    let a = Client::new(&base, "ponk_live_k").unwrap().create_perp_agent(&t).await.unwrap();
+    let body = body_of(&h.join().unwrap());
+    assert_eq!((body["leverage"].as_u64(), body["confirmationText"].as_str()), (Some(5), Some("btc")));
+    let f = a.ticket_figures.unwrap();
+    assert_eq!(f.needs_confirmation, Some(true));
+    assert_eq!(f.stop_room_warning.as_deref(), Some(STOP_ROOM));
+    assert_eq!(f.atr_warning.as_deref(), Some("The stop sits inside BTC's usual daily move."));
+}
+
+#[tokio::test]
+async fn create_without_the_name_is_the_servers_sentence() {
+    let msg = format!("{STOP_ROOM} To go ahead, type the agent's name (BTC) to confirm.");
+    let (base, h) = one_shot_status(
+        "422 Unprocessable Entity",
+        serde_json::json!({"error": {"code": "unprocessable", "message": msg, "request_id": "r"}}).to_string(),
+    );
+    let t = PerpTrade::new("BTC", "long", 5, "200", "4");
+    let e = Client::new(&base, "ponk_live_k").unwrap().create_perp_agent(&t).await.unwrap_err();
+    h.join().unwrap();
+    let api = e.api().expect("an API error");
+    assert_eq!(api.status, 422);
+    assert!(api.message.ends_with("To go ahead, type the agent's name (BTC) to confirm."));
+}
+
+#[tokio::test]
+async fn say_sends_the_typed_name_at_any_leverage() {
+    let (base, h) = one_shot(r#"{"id":"0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b","ticket":"Long BTC 5x."}"#);
+    let s = Client::new(&base, "ponk_live_k").unwrap().perp_say_confirmed("long btc 5x 200 stop 4", "BTC").await.unwrap();
+    assert!(s.created());
+    assert_eq!(body_of(&h.join().unwrap()), serde_json::json!({"text":"long btc 5x 200 stop 4","confirmationText":"BTC"}));
+
+    let msg = format!(
+        "{STOP_ROOM} To go ahead, send the same line again with confirmationText set to the agent's name, BTC, typed by the user. confirm: true alone does not acknowledge it. Nothing was created."
+    );
+    let (base, h) = one_shot_status(
+        "422 Unprocessable Entity",
+        serde_json::json!({"error": {"code": "unprocessable", "message": msg, "request_id": "r"}}).to_string(),
+    );
+    let e = Client::new(&base, "ponk_live_k").unwrap().perp_say("long btc 5x 200 stop 4", true).await.unwrap_err();
+    assert_eq!(body_of(&h.join().unwrap()), serde_json::json!({"text":"long btc 5x 200 stop 4","confirm":true}));
+    assert!(e.api().unwrap().message.ends_with("Nothing was created."));
+}
+
+#[test]
+fn mixed_case_tickers_are_sent_as_given() {
+    let t = PerpTrade::new("kPEPE", "long", 20, "50", "2").name("kPEPE Long 20x").confirmation_text("KPEPE Long 20x");
+    let v = serde_json::to_value(&t).unwrap();
+    assert_eq!(v["coin"], "kPEPE");
+    assert_eq!(v["name"], "kPEPE Long 20x");
+    assert_eq!(v["confirmationText"], "KPEPE Long 20x");
+}
+
+#[test]
+fn agent_config_warnings_and_plan_leg_confirmation_warnings() {
+    let a: PerpAgent = decode(&format!(
+        r#"{{"id":"x","config":{{"coin":"BTC","direction":"long","leverage":5,"capitalUsd":"200","stopLossPct":"4","warnings":["{STOP_ROOM}"]}}}}"#
+    ));
+    assert_eq!(a.config.unwrap().warnings, vec![STOP_ROOM.to_string()]);
+    let older: PerpAgent = decode(r#"{"id":"x","config":{"coin":"BTC","leverage":3}}"#);
+    assert!(older.config.unwrap().warnings.is_empty());
+
+    let plan: PerpFleetPlan = decode(&format!(
+        r#"{{"id":"p","kind":"perp","state":"ready","legs":[
+        {{"index":0,"name":"BTC Long 5x","coin":"BTC","leverage":5,"stop_pct":4.0,"ticket":{{"needsConfirmation":true,"stopRoomWarning":"{STOP_ROOM}"}},
+          "high_leverage":false,"needs_confirmation":true,"confirmation_warnings":["{STOP_ROOM}"],"note":null,"refusal":null}},
+        {{"index":1,"name":"SOL Short 2x","coin":"SOL","leverage":2,"needs_confirmation":false,"refusal":null}}]}}"#
+    ));
+    let leg = &plan.legs[0];
+    assert!(perpetuals::needs_confirmation(leg));
+    assert_eq!(leg.confirmation_warnings, vec![STOP_ROOM.to_string()]);
+    assert_eq!(leg.ticket.as_ref().unwrap().stop_room_warning.as_deref(), Some(STOP_ROOM));
+    assert!(!perpetuals::needs_confirmation(&plan.legs[1]));
+    assert!(plan.legs[1].confirmation_warnings.is_empty());
 }

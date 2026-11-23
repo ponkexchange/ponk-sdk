@@ -32,9 +32,10 @@ Both clients and the `ponk-cli` crate. Perpetuals agents on Hyperliquid.
 - **Warnings.** `PerpPreview.warnings` and `PerpCreated.warnings` (and
   `PerpSaid` in Python): what the confirm step warns about, never a refusal
   (a crowded side, a thin market, unknown funding or volume, above 10x, a
-  liquidation price inside three days of the market's normal daily range).
-  Empty from a server that sends none. `PerpPreview.needs_confirmation` is
-  true above 10x.
+  liquidation price inside three days of the market's normal daily range,
+  a stop with little room before liquidation). Empty from a server that
+  sends none. `PerpPreview.needs_confirmation` is true above 10x or with the
+  stop-room warning (below).
 - **Owner actions.** `perp_say` (one sentence: open, close, tighten),
   `close_perp_agent` and `exit_perp_agent` (both need confirm, refused
   before sending without it), `tighten_perp_stop` (closer only). An open
@@ -62,6 +63,44 @@ Both clients and the `ponk-cli` crate. Perpetuals agents on Hyperliquid.
   acknowledge the warning above 10x; `create` without it prints the warning
   and the flag and sends nothing. `preview`, `create`, `say` and `plan` print
   the warnings before the result.
+- **The stop rule and one acknowledgement.** A stop at or past the padded
+  liquidation price is still refused, and the sentence now names a stop that
+  would work. A stop inside liquidation but with liquidation closer than
+  twice the stop's distance is no longer a refusal: it is the stop-room
+  warning, which, like leverage above 10x, needs the agent's name typed by
+  the user. ONE typed name (`confirmation_text`, `--confirm-name`)
+  acknowledges every warning that needs it. Stops are never adjusted
+  automatically. The server compares the name exactly after trimming,
+  except the market ticker, in any case (`btc` matches `BTC`).
+  - Only the server knows the stop-room warning, so the preview is the
+    authority. `PerpPreview.needs_confirmation` is true above 10x OR with the
+    stop-room warning, and the new `PerpPreview.confirmation_warnings` is
+    what the typed name acknowledges (`warnings` still lists every warning).
+    `perpetuals.needs_confirmation` keeps taking a leverage (the above-10x
+    half only) and now also takes a preview, a plan leg or a ticket (Python:
+    the models or the same answers as dicts; Rust: `&PerpPreview`,
+    `&PerpPlanLeg`, `&PerpTicket` through the `perpetuals::NeedsConfirmation`
+    trait) and returns the server's own flag.
+  - The ticket (`PerpPreview.ticket`, `PerpCreated.ticket_figures`, a plan
+    leg's `ticket`) gains `needs_confirmation`, `stop_room_warning` and
+    `atr_warning` (Python's plan leg ticket stays the server's dict, with
+    `needsConfirmation`, `stopRoomWarning` and `atrWarning`).
+  - `PerpPlanLeg.needs_confirmation` is true above 10x OR with the stop-room
+    warning, and the new `PerpPlanLeg.confirmation_warnings` says why; a fleet
+    start takes a typed name for every such leg.
+  - `PerpAgentConfig.warnings` (`perp_agent(id).config.warnings`): the
+    warnings stated when the agent was created, empty for an older agent.
+  - `perp_say` sends `confirmation_text` at any leverage (Rust
+    `perp_say_confirmed`, CLI `say --confirm-name`): a 5x line whose stop
+    leaves too little room needs it too.
+  - Mixed-case Hyperliquid tickers (`kPEPE`, `kSHIB`, `kBONK`) are sent as
+    given; the CLI no longer upper-cases the coin in the default name it
+    tells you to type.
+  - CLI: `preview` prints the warnings the name acknowledges and the
+    `--confirm-name` to add (above 10x or with the stop-room warning);
+    `create` and `say` add the flag to the server's sentence when it asks for
+    the name; `plan` prints each leg's warnings to acknowledge; `agent`
+    prints the warnings the agent was created with.
 - Authorizing a Perpetuals agent and funding its Hyperliquid account are
   wallet signatures in the app; neither client nor the CLI offers them.
   Funding waits for the authorization, which sets the address withdrawals

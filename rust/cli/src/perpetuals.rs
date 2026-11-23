@@ -42,12 +42,13 @@ pub enum PerpCmd {
     /// "tighten btc stop to 2%".
     Say {
         text: String,
-        /// Required for a close. Never acknowledges the high leverage
-        /// warning: that is --confirm-name.
+        /// Required for a close. Never acknowledges a warning: that is
+        /// --confirm-name.
         #[arg(long)]
         confirm: bool,
-        /// An open above 10x: the agent's name (its market, like BTC), typed
-        /// after reading the high leverage warning.
+        /// An open the server asks to acknowledge (above 10x, or at any
+        /// leverage a stop with little room before liquidation): the agent's
+        /// name (its market, like BTC), typed after reading the warnings.
         #[arg(long = "confirm-name", value_name = "NAME")]
         confirm_name: Option<String>,
     },
@@ -77,8 +78,9 @@ pub enum PerpCmd {
     /// agent is authorized and funded.
     StartPlan {
         id: String,
-        /// Above 10x, a leg's agent name typed after the high leverage
-        /// warning, as INDEX=NAME (e.g. 0="BTC long"). Once per leg above 10x.
+        /// A leg's agent name typed after its warnings, as INDEX=NAME (e.g.
+        /// 0="BTC Long 20x"). Once per leg the plan says to type the name for
+        /// (above 10x, or a stop with little room before liquidation).
         #[arg(long = "confirm-name", value_name = "INDEX=NAME")]
         confirm_names: Vec<String>,
     },
@@ -100,6 +102,7 @@ pub struct TradeArgs {
     side: String,
     /// Isolated leverage, 1 up to the market's own maximum. Above 10x the
     /// high leverage warning is acknowledged with --confirm-name.
+    /// The stop-room warning is acknowledged the same way at any leverage.
     #[arg(long)]
     leverage: u32,
     /// USDC the agent trades with, at least 10.
@@ -116,8 +119,9 @@ pub struct TradeArgs {
     /// Live mainnet prices, a practice balance, nothing sent.
     #[arg(long)]
     practice: bool,
-    /// Above 10x: the agent's name (--name, or the coin), typed after the
-    /// high leverage warning, to acknowledge it.
+    /// The agent's name (--name, or the coin), typed after the warnings
+    /// preview says need it (above 10x, or a stop with little room before
+    /// liquidation), to acknowledge them. One name covers every warning.
     #[arg(long = "confirm-name", value_name = "NAME")]
     confirm_name: Option<String>,
 }
@@ -294,6 +298,11 @@ async fn agent(cli: &Cli, id: &str) -> Result<()> {
             ),
         );
     }
+    if let Some(c) = &a.config {
+        for w in &c.warnings {
+            line("warned", w.clone());
+        }
+    }
     line("status", dash(a.status.as_deref()));
     line("account", dash(a.agent_account.as_deref()));
     match &a.account {
@@ -394,17 +403,50 @@ fn print_warnings(warnings: &[String]) {
     }
 }
 
-/// Above 10x the leverage needs the typed name; say how, in one line.
+/// The name the server gives the agent when --name is not set: the coin as
+/// typed. The server keeps the market's real ticker (kPEPE) and compares the
+/// ticker part of a typed name in any case, so it is never upper-cased here.
+fn default_name(t: &PerpTrade) -> String {
+    t.name.clone().unwrap_or_else(|| t.coin.trim().to_string())
+}
+
+/// Above 10x the leverage needs the typed name; say how, in one line. The
+/// stop-room warning needs it too, at any leverage, but only the server
+/// knows that one: preview says so, and create relays the server's sentence.
 fn confirm_hint(t: &PerpTrade) -> Option<String> {
     if !ponk::perpetuals::needs_confirmation(t.leverage) || t.confirmation_text.is_some() {
         return None;
     }
-    let name = t.name.clone().unwrap_or_else(|| t.coin.trim().to_ascii_uppercase());
     Some(format!(
-        "{} To go ahead at {}x, type the agent's name: --confirm-name \"{name}\"",
+        "{} To go ahead at {}x, type the agent's name: --confirm-name \"{}\"",
         ponk::perpetuals::HIGH_LEVERAGE_WARNING,
-        t.leverage
+        t.leverage,
+        default_name(t)
     ))
+}
+
+/// The preview's warnings that need the typed name, and how to give it.
+fn preview_confirm_hint(p: &ponk::PerpPreview, t: &PerpTrade) -> Option<String> {
+    if !ponk::perpetuals::needs_confirmation(p) || t.confirmation_text.is_some() {
+        return None;
+    }
+    let name = p.name.clone().unwrap_or_else(|| default_name(t));
+    let mut out: Vec<String> = p.confirmation_warnings.iter().map(|w| format!("To acknowledge: {w}")).collect();
+    if out.is_empty() && ponk::perpetuals::needs_confirmation(t.leverage) {
+        out.push(format!("To acknowledge: {}", ponk::perpetuals::HIGH_LEVERAGE_WARNING));
+    }
+    out.push(format!("To go ahead, type the agent's name: --confirm-name \"{name}\""));
+    Some(out.join("\n"))
+}
+
+/// A refusal that asks for the typed name, with the flag that gives it.
+fn with_flag_hint(e: ponk::Error) -> anyhow::Error {
+    let msg = e.to_string();
+    if msg.contains("type the agent's name") || msg.contains("confirmationText") {
+        anyhow::anyhow!("{msg}\nWith the CLI, run it again with --confirm-name and the agent's name as the user typed it.")
+    } else {
+        e.into()
+    }
 }
 
 fn print_fees(f: Option<&ponk::PerpFeeRates>) {
@@ -435,10 +477,8 @@ async fn preview(cli: &Cli, args: &TradeArgs) -> Result<()> {
     }
     print_fees(p.fees.as_ref());
     println!("\nNothing was created. Create it with ponk perpetuals create and the same flags.");
-    if p.needs_confirmation == Some(true) {
-        if let Some(hint) = confirm_hint(&t) {
-            println!("{hint}");
-        }
+    if let Some(hint) = preview_confirm_hint(&p, &t) {
+        println!("{hint}");
     }
     Ok(())
 }
@@ -454,7 +494,7 @@ async fn create(cli: &Cli, args: &TradeArgs) -> Result<()> {
     if cli.json {
         return print_json(&client.post_json("/v1/perp-agents", Some(&serde_json::to_value(&t)?), None).await?);
     }
-    let a = client.create_perp_agent(&t).await?;
+    let a = client.create_perp_agent(&t).await.map_err(with_flag_hint)?;
     print_warnings(&a.warnings);
     match &a.ticket_figures {
         Some(ticket) => print_ticket(ticket),
@@ -475,10 +515,13 @@ async fn say(cli: &Cli, text: &str, confirm: bool, confirm_name: Option<&str>) -
         }
         return print_json(&client.post_json("/v1/perp-agents/say", Some(&body), None).await?);
     }
+    // The typed name is sent at any leverage: a 5x line whose stop leaves
+    // too little room before liquidation needs it too.
     let s = match confirm_name {
-        Some(n) => client.perp_say_confirmed(text, n).await?,
-        None => client.perp_say(text, confirm).await?,
-    };
+        Some(n) => client.perp_say_confirmed(text, n).await,
+        None => client.perp_say(text, confirm).await,
+    }
+    .map_err(with_flag_hint)?;
     if s.created() {
         print_warnings(&s.warnings);
         println!("{}", dash(s.ticket.as_deref()));
@@ -548,6 +591,9 @@ fn print_plan(p: &ponk::PerpFleetPlan) {
         if let Some(n) = l.note.as_deref().filter(|n| !n.is_empty()) {
             println!("Warning, {}: {n}", dash(l.name.as_deref()));
         }
+        for w in l.confirmation_warnings.iter().filter(|w| l.note.as_deref() != Some(w.as_str())) {
+            println!("To acknowledge, {}: {w}", dash(l.name.as_deref()));
+        }
     }
     let rows: Vec<Vec<String>> = p
         .legs
@@ -599,12 +645,20 @@ async fn plan(cli: &Cli, text: &str, practice: bool) -> Result<()> {
             let typed: Vec<String> = p
                 .legs
                 .iter()
-                .filter(|l| l.refusal.is_none() && l.needs_confirmation == Some(true))
+                .filter(|l| l.refusal.is_none() && ponk::perpetuals::needs_confirmation(*l))
                 .map(|l| format!(" --confirm-name {}=\"{}\"", opt(l.index), dash(l.name.as_deref())))
                 .collect();
+            let unlisted_high = p.legs.iter().any(|l| {
+                l.refusal.is_none()
+                    && ponk::perpetuals::needs_confirmation(l)
+                    && l.confirmation_warnings.is_empty()
+                    && l.leverage.is_some_and(|v| v > i64::from(ponk::perpetuals::HIGH_LEVERAGE_ABOVE))
+            });
             if !typed.is_empty() {
-                println!("\n{}", ponk::perpetuals::HIGH_LEVERAGE_WARNING);
-                println!("Above 10x, type each agent's name to confirm.");
+                if unlisted_high {
+                    println!("\n{}", ponk::perpetuals::HIGH_LEVERAGE_WARNING);
+                }
+                println!("\nType each named agent's name to acknowledge its warnings.");
             }
             println!("\nNothing was created. Start it with: ponk perpetuals start-plan {id}{}", typed.concat());
         }
@@ -671,4 +725,45 @@ async fn fleet_batch(cli: &Cli, fleet_id: &str, pause: bool) -> Result<()> {
         println!("  {} {}", dash(i.agent_id.as_deref()), dash(i.error.as_deref()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STOP_ROOM: &str = "Liquidation is about 8.9% away (7.1% with the safety margin Liquidation Guard keeps), less than twice your 4% stop.";
+
+    fn preview(json: &str) -> ponk::PerpPreview {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn the_default_name_keeps_the_ticker_as_typed() {
+        let t = PerpTrade::new("kPEPE", "long", 20, "50", "2");
+        assert_eq!(default_name(&t), "kPEPE");
+        let hint = confirm_hint(&t).unwrap();
+        assert!(hint.ends_with("--confirm-name \"kPEPE\""), "{hint}");
+        assert!(confirm_hint(&PerpTrade::new("BTC", "long", 10, "50", "2")).is_none());
+        assert!(confirm_hint(&PerpTrade::new("BTC", "long", 20, "50", "2").confirmation_text("BTC")).is_none());
+    }
+
+    #[test]
+    fn the_preview_asks_for_the_name_at_5x_with_its_warnings() {
+        let t = PerpTrade::new("BTC", "long", 5, "200", "4");
+        let p = preview(&format!(r#"{{"ok":true,"name":"BTC","needsConfirmation":true,"warnings":["{STOP_ROOM}"],"confirmationWarnings":["{STOP_ROOM}"]}}"#));
+        let hint = preview_confirm_hint(&p, &t).unwrap();
+        assert_eq!(hint, format!("To acknowledge: {STOP_ROOM}\nTo go ahead, type the agent's name: --confirm-name \"BTC\""));
+        // Already typed, or nothing to acknowledge: no hint.
+        assert!(preview_confirm_hint(&p, &t.clone().confirmation_text("BTC")).is_none());
+        let plain = preview(r#"{"ok":true,"name":"BTC","needsConfirmation":false}"#);
+        assert!(preview_confirm_hint(&plain, &t).is_none());
+    }
+
+    #[test]
+    fn the_server_refusal_gets_the_flag() {
+        let e = ponk::Error::InvalidArgument(format!("{STOP_ROOM} To go ahead, type the agent's name (BTC) to confirm."));
+        assert!(with_flag_hint(e).to_string().contains("--confirm-name"));
+        let e = ponk::Error::InvalidArgument("Say long or short.".into());
+        assert_eq!(with_flag_hint(e).to_string(), "Say long or short.");
+    }
 }

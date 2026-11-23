@@ -101,7 +101,7 @@ ponk perpetuals close <id> --confirm   close the position; funds stay on the age
 ponk perpetuals stop <id> 2            move the stop to 2% from the price, closer only
 ponk perpetuals exit <id> --confirm    close, settle, withdraw to the proven address
 ponk perpetuals plan "put $1,000 across 2 Perpetuals agents, long BTC, short SOL" [--practice]
-ponk perpetuals start-plan <plan id> [--confirm-name 0="BTC long"]   one agent per leg; moves no money
+ponk perpetuals start-plan <plan id> [--confirm-name 0="BTC Long 20x"]   one agent per leg; moves no money
 ponk perpetuals fleet-stop <fleet id> 2 / fleet-pause <fleet id> / fleet-resume <fleet id>
 ```
 
@@ -109,11 +109,20 @@ ponk perpetuals fleet-stop <fleet id> 2 / fleet-pause <fleet id> / fleet-resume 
 perpetuals markets`). Above 10x the high leverage warning ("Above 10x a sudden
 4% price jump can pass the liquidation price before any stop fills.") is
 acknowledged by typing the agent's name with `--confirm-name` (the `--name`
-given, or the coin); without it `create` prints the warning and the flag to
-add, and sends nothing. On a fleet, `start-plan` takes one
-`--confirm-name INDEX=NAME` per leg above 10x, as `plan` prints. `preview`,
-`create`, `say` and `plan` print what the confirm step warns about (a crowded
-side, a thin market, above 10x) before the result. `ponk pause` and `ponk resume` work on a
+given, or the coin as typed); without it `create` prints the warning and the
+flag to add, and sends nothing. At any leverage, a stop inside the
+liquidation price but with liquidation closer than twice the stop's distance
+is the stop-room warning, acknowledged the same way: only the server knows
+it, so `preview` prints the warnings the name acknowledges and the
+`--confirm-name` to add, and `create` and `say` add the flag to the server's
+sentence when it asks for the name. One name covers every warning, and
+`say --confirm-name` works at any leverage. A stop at or past the
+liquidation price is refused, naming a stop that would work. On a fleet,
+`start-plan` takes one `--confirm-name INDEX=NAME` per leg `plan` asks the
+name for, after printing that leg's warnings. `preview`, `create`, `say` and
+`plan` print what the confirm step warns about (a crowded side, a thin
+market, above 10x, little stop room) before the result, and `agent` prints
+the warnings the agent was created with. `ponk pause` and `ponk resume` work on a
 Perpetuals agent too. Authorizing the agent and funding its Hyperliquid
 account are wallet signatures in the app; the CLI never signs.
 

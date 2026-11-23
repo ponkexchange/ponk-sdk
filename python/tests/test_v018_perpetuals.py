@@ -41,6 +41,12 @@ PLAN = "7a1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b"
 HL = "0x1111111111111111111111111111111111111111"
 
 WARNING = "Above 10x a sudden 4% price jump can pass the liquidation price before any stop fills."
+STOP_ROOM = (
+    "Liquidation is about 8.9% away (7.1% with the safety margin Liquidation Guard keeps), less than "
+    "twice your 4% stop: a fast move can pass liquidation before the stop fills, and in this zone "
+    "Liquidation Guard may cut part of the position before the stop does. A stop of 3.5% or less, or "
+    "lower leverage, keeps twice the room."
+)
 
 
 def keyless(payload, status=200):
@@ -75,6 +81,8 @@ class TestHelpers(unittest.TestCase):
         self.assertTrue(perpetuals.needs_confirmation(40))
         with self.assertRaises(ValueError):
             perpetuals.needs_confirmation(0)
+        with self.assertRaises(ValueError):
+            perpetuals.needs_confirmation(True)
 
     def test_market_ids(self):
         self.assertEqual(perpetuals.market_id("BTC"), "perp:hyperliquid:BTC")
@@ -557,6 +565,121 @@ class TestCopilot(unittest.TestCase):
         self.assertIsInstance(b, FleetBatch)
         c.copilot_resume_fleet(FLEET)
         self.assertEqual(opener.calls[1]["url"], BASE + "/copilot/fleets/{0}/resume".format(FLEET))
+
+
+STOP_ROOM_TICKET = dict(TICKET, leverage=5, highLeverage=False, needsConfirmation=True,
+                        stopRoomWarning=STOP_ROOM, atrWarning=None)
+STOP_ROOM_PREVIEW = {"ok": True, "network": "testnet", "practice": False, "name": "BTC",
+                     "ticket": STOP_ROOM_TICKET, "fees": None, "needsConfirmation": True,
+                     "warnings": ["The long side is crowded.", STOP_ROOM],
+                     "confirmationWarnings": [STOP_ROOM]}
+
+
+class TestStopRoomAcknowledgement(unittest.TestCase):
+    """The stop rule: a stop inside liquidation but with liquidation closer
+    than twice its distance is a warning acknowledged with the typed name,
+    at any leverage; the preview is the authority."""
+
+    def test_the_preview_is_the_authority_at_5x(self):
+        c, opener = client(STOP_ROOM_PREVIEW)
+        p = c.preview_perp_agent(coin="BTC", direction="long", leverage=5, capital_usd=200, stop_loss_pct=4)
+        self.assertNotIn("confirmationText", opener.calls[0]["body"])
+        self.assertTrue(p.needs_confirmation)
+        self.assertEqual(p.confirmation_warnings, [STOP_ROOM])
+        self.assertEqual(p.warnings, ["The long side is crowded.", STOP_ROOM])
+        # The leverage alone says no; the preview says yes.
+        self.assertFalse(perpetuals.needs_confirmation(5))
+        self.assertTrue(perpetuals.needs_confirmation(p))
+        self.assertTrue(perpetuals.needs_confirmation(STOP_ROOM_PREVIEW))
+        self.assertTrue(perpetuals.needs_confirmation(p.ticket))
+        t = p.ticket
+        self.assertTrue(t.needs_confirmation)
+        self.assertEqual(t.stop_room_warning, STOP_ROOM)
+        self.assertIsNone(t.atr_warning)
+
+    def test_needs_confirmation_reads_the_server_flag_not_the_leverage(self):
+        self.assertFalse(perpetuals.needs_confirmation({"ok": True, "needsConfirmation": False}))
+        self.assertTrue(perpetuals.needs_confirmation({"needs_confirmation": True}))
+        # A refused preview, or an older answer without the flag, is no.
+        self.assertFalse(perpetuals.needs_confirmation({"ok": False, "sentence": "x"}))
+        c, _ = client({"ok": True, "name": "BTC", "ticket": dict(TICKET, leverage=20), "needsConfirmation": True,
+                       "warnings": [WARNING], "confirmationWarnings": [WARNING]})
+        p = c.preview_perp_agent(coin="BTC", direction="long", leverage=20, capital_usd=200, stop_loss_pct=1)
+        self.assertTrue(perpetuals.needs_confirmation(p))
+        c, _ = client({"ok": True, "name": "BTC", "ticket": TICKET, "needsConfirmation": False})
+        p = c.preview_perp_agent(coin="BTC", direction="long", leverage=3, capital_usd=200, stop_loss_pct=3)
+        self.assertFalse(perpetuals.needs_confirmation(p))
+        self.assertEqual(p.confirmation_warnings, [])
+        self.assertIsNone(p.ticket.stop_room_warning)
+
+    def test_create_sends_the_name_at_5x_and_reads_the_ticket(self):
+        created = dict(CREATED, ticketFigures=STOP_ROOM_TICKET, warnings=[STOP_ROOM])
+        c, opener = client(created)
+        a = c.create_perp_agent(coin="BTC", direction="long", leverage=5, capital_usd=200, stop_loss_pct=4,
+                                confirmation_text="btc")
+        self.assertEqual(opener.calls[0]["body"]["confirmationText"], "btc")
+        self.assertEqual(opener.calls[0]["body"]["leverage"], 5)
+        self.assertTrue(a.ticket_figures.needs_confirmation)
+        self.assertEqual(a.ticket_figures.stop_room_warning, STOP_ROOM)
+        self.assertEqual(a.warnings, [STOP_ROOM])
+
+    def test_create_without_the_name_is_the_servers_sentence(self):
+        msg = STOP_ROOM + " To go ahead, type the agent's name (BTC) to confirm."
+        c, _ = client({"error": {"code": "unprocessable", "request_id": "r", "message": msg}}, status=422)
+        with self.assertRaises(PonkUnprocessableError) as ctx:
+            c.create_perp_agent(coin="BTC", direction="long", leverage=5, capital_usd=200, stop_loss_pct=4)
+        self.assertIn("type the agent's name (BTC) to confirm", str(ctx.exception))
+
+    def test_a_stop_past_liquidation_is_still_refused(self):
+        c, _ = client({"ok": False, "sentence": "A 12% stop sits past the liquidation price (8.9% away). "
+                                                "A stop of 7% or less, or lower leverage, would work."})
+        p = c.preview_perp_agent(coin="BTC", direction="long", leverage=10, capital_usd=200, stop_loss_pct=12)
+        self.assertFalse(p.ok)
+        self.assertFalse(perpetuals.needs_confirmation(p))
+        self.assertIn("would work", p.sentence)
+
+    def test_say_sends_the_typed_name_at_any_leverage(self):
+        c, opener = client(dict(CREATED, warnings=[STOP_ROOM]))
+        s = c.perp_say("long btc 5x 200 stop 4", confirmation_text="BTC")
+        self.assertEqual(opener.calls[0]["body"], {"text": "long btc 5x 200 stop 4", "confirmationText": "BTC"})
+        self.assertTrue(s.created)
+        msg = (STOP_ROOM + " To go ahead, send the same line again with confirmationText set to the agent's "
+               "name, BTC, typed by the user. confirm: true alone does not acknowledge it. Nothing was created.")
+        c, opener = client({"error": {"code": "unprocessable", "request_id": "r", "message": msg}}, status=422)
+        with self.assertRaises(PonkUnprocessableError) as ctx:
+            c.perp_say("long btc 5x 200 stop 4", confirm=True)
+        self.assertEqual(opener.calls[0]["body"], {"text": "long btc 5x 200 stop 4", "confirm": True})
+        self.assertIn("Nothing was created", str(ctx.exception))
+
+    def test_mixed_case_tickers_are_sent_as_given(self):
+        c, opener = client(dict(CREATED, ticketFigures=dict(TICKET, coin="kPEPE")))
+        c.create_perp_agent(coin="kPEPE", direction="long", leverage=20, capital_usd=50, stop_loss_pct=2,
+                            name="kPEPE Long 20x", confirmation_text="KPEPE Long 20x")
+        body = opener.calls[0]["body"]
+        self.assertEqual((body["coin"], body["name"], body["confirmationText"]),
+                         ("kPEPE", "kPEPE Long 20x", "KPEPE Long 20x"))
+        self.assertEqual(perpetuals.market_id("kPEPE"), "perp:hyperliquid:kPEPE")
+
+    def test_agent_config_warnings(self):
+        view = dict(AGENT_VIEW, config=dict(AGENT_VIEW["config"], leverage=5, warnings=[STOP_ROOM]))
+        c, _ = client(view)
+        self.assertEqual(c.perp_agent(AGENT).config.warnings, [STOP_ROOM])
+        c, _ = client(AGENT_VIEW)
+        self.assertEqual(c.perp_agent(AGENT).config.warnings, [])
+
+    def test_plan_legs_carry_their_confirmation_warnings(self):
+        leg = dict(PERP_PLAN["legs"][0], name="BTC Long 5x", leverage=5, stop_pct=4.0,
+                   ticket=STOP_ROOM_TICKET, needs_confirmation=True, confirmation_warnings=[STOP_ROOM])
+        c, _ = client(dict(PERP_PLAN, legs=[leg, PERP_PLAN["legs"][1]]))
+        p = c.copilot_perp_plan("long btc 5x stop 4")
+        self.assertTrue(p.legs[0].needs_confirmation)
+        self.assertTrue(perpetuals.needs_confirmation(p.legs[0]))
+        self.assertEqual(p.legs[0].confirmation_warnings, [STOP_ROOM])
+        self.assertEqual(p.legs[0].ticket["stopRoomWarning"], STOP_ROOM)
+        self.assertTrue(p.legs[0].ticket["needsConfirmation"])
+        # An older plan has no list: it is empty.
+        self.assertEqual(p.legs[1].confirmation_warnings, [])
+        self.assertFalse(perpetuals.needs_confirmation(p.legs[1]))
 
 
 if __name__ == "__main__":

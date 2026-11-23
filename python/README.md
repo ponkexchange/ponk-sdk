@@ -311,11 +311,12 @@ p = ponk.preview_perp_agent(coin="ETH", direction="short", leverage=2,
                             capital_usd="300", stop_loss_pct="4", take_profit_pct="8")
 if not p.ok:
     print(p.sentence)
-for w in p.warnings:        # a crowded side, a thin market, above 10x
+for w in p.warnings:        # a crowded side, a thin market, above 10x, little stop room
     print("Warning:", w)
 
-# 3. Create. Above 10x (p.needs_confirmation), show the warning, have the
-#    user type the agent's name and send it as confirmation_text.
+# 3. Create. When p.needs_confirmation (above 10x, or a stop with little room
+#    before liquidation), show p.confirmation_warnings, have the user type
+#    the agent's name and send it as confirmation_text.
 agent = ponk.create_perp_agent(coin="ETH", direction="short", leverage=2,
                                capital_usd="300", stop_loss_pct="4", take_profit_pct="8")
 
@@ -330,38 +331,59 @@ ponk.exit_perp_agent(agent.id, confirm=True)    # close, settle, withdraw
 ```
 
 Leverage goes up to the market's own maximum on Hyperliquid (`max_leverage`
-on the board). Above 10x the server asks for the high leverage warning to be
-acknowledged: `perpetuals.needs_confirmation(n)` is true there,
-`perpetuals.HIGH_LEVERAGE_WARNING` is the sentence to show, and the agent's
-name as the user typed it goes in `confirmation_text`:
+on the board). Two warnings need the user to acknowledge them: leverage above
+10x, and the stop-room warning, when the stop is inside the liquidation
+price but liquidation is closer than twice the stop's distance (a fast move
+can pass liquidation before the stop fills, and Liquidation Guard may cut
+part of the position before the stop does). One acknowledgement covers both:
+the agent's name as the user typed it, in `confirmation_text`. Only the
+server knows the stop-room warning, because it reads the live price, so the
+preview is the authority: `perpetuals.needs_confirmation(preview)` reads its
+`needs_confirmation`, and `preview.confirmation_warnings` is what to show.
+`perpetuals.needs_confirmation(n)` with a whole number answers only the
+leverage half (above 10x).
 
 ```python
-if perpetuals.needs_confirmation(20):
-    print(perpetuals.HIGH_LEVERAGE_WARNING)
+args = dict(coin="BTC", direction="long", leverage=5, capital_usd="200",
+            stop_loss_pct="4", name="BTC 5x")
+p = ponk.preview_perp_agent(**args)
+if p.ok and perpetuals.needs_confirmation(p):
+    for w in p.confirmation_warnings:
+        print(w)
     typed = input("Type the agent's name to confirm: ")
-    agent = ponk.create_perp_agent(coin="BTC", direction="long", leverage=20,
-                                   capital_usd="200", stop_loss_pct="2",
-                                   name="BTC 20x", confirmation_text=typed)
+    agent = ponk.create_perp_agent(**args, confirmation_text=typed)
 ```
 
-Without it the server answers 422 with the warning and the name to type.
+Without it the server answers 422 with the warnings and "To go ahead, type
+the agent's name (NAME) to confirm." The name compares exactly after
+trimming, except its market ticker, which compares in any case (`btc`
+matches the default name `BTC`; `KPEPE Long 20x` matches `kPEPE Long 20x`).
+A stop at or past the liquidation price (with the safety margin Liquidation
+Guard keeps) is refused, with a sentence naming a stop that would work.
+Stops are never adjusted automatically. The ticket (`p.ticket`,
+`agent.ticket_figures`) carries `needs_confirmation`, `stop_room_warning`
+and `atr_warning`, and `perp_agent(id).config.warnings` is what the agent
+was warned about when it was created.
 `warnings` on the preview and on the new agent is what the confirm step warns
 about (a crowded side, a thin market, unknown funding or volume, above 10x,
 a liquidation price inside three days of the market's normal daily range),
 never a refusal. `pause_agent` and `resume_agent` work on a
 Perpetuals agent: paused, it opens nothing new and its resting stop and
 Liquidation Guard keep running. `perp_say("long btc 3x 500 stop 3")` is the
-same one-sentence answer as the app, Telegram and the MCP; above 10x the open
-answers the warning first, and `perp_say(text, confirmation_text="BTC")`, the
-agent's name (its market) typed by the user, acknowledges it. `confirm=True`
-is for a close and never acknowledges the warning.
+same one-sentence answer as the app, Telegram and the MCP; an open that needs
+an acknowledgement (above 10x, or a 5x line whose stop leaves too little
+room) answers 422 with the warnings and creates nothing, and
+`perp_say(text, confirmation_text="BTC")`, the agent's name (its market)
+typed by the user, acknowledges them. `confirmation_text` is sent at any
+leverage. `confirm=True` is for a close and never acknowledges a warning.
 
 A fleet from one sentence: `copilot_perp_plan("put $2,000 across 4 Perpetuals
 agents, long BTC and ETH, short SOL and HYPE, 3x")`, then
 `copilot_perp_start(plan.id)`, which moves no money and returns `sign_url`,
-the page where each agent is authorized and funded. A leg above 10x
-(`needs_confirmation`) starts only with its agent's name typed by the user,
-in `confirmations={leg_index: name}`, the leg's `name` as the plan prints it,
+the page where each agent is authorized and funded. A leg with
+`needs_confirmation` (above 10x, or the stop-room warning) starts only with
+its agent's name typed by the user after its `confirmation_warnings`, in
+`confirmations={leg_index: name}`, the leg's `name` as the plan prints it,
 like `{0: "BTC Long 20x"}`. Funding an agent waits for its
 authorization, which sets the address its withdrawals go to. `copilot_fleet(id).perp`
 reads every agent live; `copilot_tighten_agent_stops`, `copilot_pause_fleet`,
@@ -798,13 +820,18 @@ one past window beside holding, not a forecast.
 * **Perpetuals on Hyperliquid.** The markets board, candles, funding history,
   any 0x wallet's positions and 30 day PnL, the curated long and short book
   and the sentence parser, with no key; a key's Perpetuals agents: create
-  and preview a typed trade (up to the market's own maximum leverage, above
-  10x with the high leverage warning acknowledged by the agent's typed name,
-  `confirmation_text`; `warnings` on the preview and the new agent), one
-  sentence (`perp_say`), close, tighten the stop, exit,
+  and preview a typed trade (up to the market's own maximum leverage; above
+  10x, or with the stop-room warning, the warnings acknowledged by the
+  agent's typed name, `confirmation_text`, one name for every warning;
+  `needs_confirmation(preview)` and `confirmation_warnings` from the
+  preview, the authority; `warnings` on the preview, the new agent and the
+  agent's config; the ticket's `needs_confirmation`, `stop_room_warning`
+  and `atr_warning`), one sentence (`perp_say`, `confirmation_text` at any
+  leverage), close, tighten the stop, exit,
   the agent's account, ledger, decision feed and closing card; Perpetuals
   fleets from one sentence (`copilot_perp_plan`, `copilot_perp_start` with
-  `confirmations` above 10x),
+  `confirmations` for each leg with `needs_confirmation`, whose
+  `confirmation_warnings` say why),
   `copilot_tighten_agent_stops`, `copilot_pause_fleet` and
   `copilot_resume_fleet`. `CopilotFleet.kind` and `CopilotFleet.perp`.
 

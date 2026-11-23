@@ -5535,6 +5535,14 @@ pub struct PerpParse {
 }
 
 /// The ticket's figures from live prices.
+///
+/// `needs_confirmation` is true above 10x or with the stop-room warning,
+/// where create needs the agent's name typed as
+/// [`crate::perpetuals::PerpTrade::confirmation_text`]. `stop_room_warning`
+/// is set when the stop is inside the liquidation price but liquidation is
+/// closer than twice the stop's distance; `atr_warning` when the stop sits
+/// inside the market's usual move. Each is `None` otherwise, and from an
+/// older server.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PerpTicket {
@@ -5555,6 +5563,9 @@ pub struct PerpTicket {
     pub loss_at_stop_usd: Option<f64>,
     pub take_profit_price: Option<f64>,
     pub high_leverage: Option<bool>,
+    pub needs_confirmation: Option<bool>,
+    pub stop_room_warning: Option<String>,
+    pub atr_warning: Option<String>,
 }
 
 /// The rates the agent's authorization will state, in basis points. Sent on
@@ -5570,9 +5581,15 @@ pub struct PerpFeeRates {
 /// Every create gate on live prices, creating nothing. `ok` true carries
 /// `ticket`, `fees` and `warnings`, what the confirm step warns about, never a
 /// refusal (a crowded side, a thin market, unknown funding or volume, above
-/// 10x); `needs_confirmation` is true above 10x, where create needs
-/// [`crate::perpetuals::PerpTrade::confirmation_text`]. `ok` false carries
-/// `sentence`. An older server sends no `warnings`: the list is empty.
+/// 10x, a stop with little room before liquidation). `needs_confirmation` is
+/// true above 10x OR with the stop-room warning, where create needs the
+/// agent's name typed as [`crate::perpetuals::PerpTrade::confirmation_text`];
+/// `confirmation_warnings` is the warnings that typed name acknowledges, a
+/// part of `warnings`. Only the server knows the stop-room warning, so this
+/// preview is the authority ([`crate::perpetuals::needs_confirmation`] takes
+/// it). `ok` false carries `sentence` (a stop at or past the liquidation
+/// price is refused, naming a stop that would work). An older server sends
+/// neither list: each is empty.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PerpPreview {
@@ -5585,13 +5602,15 @@ pub struct PerpPreview {
     pub fees: Option<PerpFeeRates>,
     pub needs_confirmation: Option<bool>,
     pub warnings: Vec<String>,
+    pub confirmation_warnings: Vec<String>,
 }
 
 /// The new agent and its ticket; or, from
 /// [`Client::perp_say`](crate::Client::perp_say), a close or a stop
 /// tightening recorded (`agent_id`, `request`, `sentence`).
 ///
-/// `ticket` is the ticket's sentence and `ticket_figures` its numbers.
+/// `ticket` is the ticket's sentence and `ticket_figures` its numbers (with
+/// `needs_confirmation`, `stop_room_warning` and `atr_warning`).
 /// `next` says what happens next: a live agent waits for its owner to
 /// authorize it in the app and fund its Hyperliquid account. `warnings` is
 /// what the agent opens with a warning about, as the preview said (empty from
@@ -5738,6 +5757,9 @@ pub struct PerpAgentConfig {
     #[serde(deserialize_with = "de_decimal_string")]
     pub take_profit_pct: Option<String>,
     pub practice: Option<bool>,
+    /// What the agent was warned about when it was created (empty for an
+    /// older agent).
+    pub warnings: Vec<String>,
 }
 
 /// One decision: its reason `codes` and `sentences`, and `sent`, the
@@ -5916,8 +5938,10 @@ pub struct PerpExit {
     pub sentence: Option<String>,
 }
 
-/// One leg of a Perpetuals plan. A leg with `refusal` is not planned; the
-/// rest still start.
+/// One leg of a Perpetuals plan. `needs_confirmation` is true above 10x OR
+/// with the stop-room warning: the leg starts only with its agent's name
+/// typed by the user, after `confirmation_warnings` was shown. A leg with
+/// `refusal` is not planned; the rest still start.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct PerpPlanLeg {
@@ -5934,6 +5958,7 @@ pub struct PerpPlanLeg {
     pub ticket: Option<PerpTicket>,
     pub high_leverage: Option<bool>,
     pub needs_confirmation: Option<bool>,
+    pub confirmation_warnings: Vec<String>,
     pub note: Option<String>,
     pub refusal: Option<String>,
 }
