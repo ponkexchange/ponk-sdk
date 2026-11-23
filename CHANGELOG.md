@@ -31,14 +31,18 @@ Both clients and the `ponk-cli` crate. Perpetuals agents on Hyperliquid.
   server answers 422 with the warning and the name to type.
 - **Warnings.** `PerpPreview.warnings` and `PerpCreated.warnings` (and
   `PerpSaid` in Python): what the confirm step warns about, never a refusal
-  (a crowded side, a thin market, unknown funding or volume, above 10x).
+  (a crowded side, a thin market, unknown funding or volume, above 10x, a
+  liquidation price inside three days of the market's normal daily range).
   Empty from a server that sends none. `PerpPreview.needs_confirmation` is
   true above 10x.
 - **Owner actions.** `perp_say` (one sentence: open, close, tighten),
   `close_perp_agent` and `exit_perp_agent` (both need confirm, refused
   before sending without it), `tighten_perp_stop` (closer only). An open
   above 10x through `perp_say` answers the warning first; the same sentence
-  with confirm acknowledges it.
+  with the agent's name typed by the user acknowledges it (Python
+  `perp_say(text, confirmation_text="BTC")`, Rust `perp_say_confirmed`, sent
+  as `confirmationText`). `confirm` is for a close and never acknowledges
+  the warning.
   `pause_agent` and `resume_agent` work on a Perpetuals agent.
 - **Fleets.** `copilot_perp_plan`, `copilot_perp_get_plan`,
   `copilot_perp_start` (Python `confirmations={leg_index: typed_name}`, Rust
@@ -53,7 +57,8 @@ Both clients and the `ponk-cli` crate. Perpetuals agents on Hyperliquid.
 - **CLI.** `ponk perpetuals` (`markets`, `agents`, `agent`, `decisions`,
   `ledger`, `card`, `preview`, `create`, `say`, `close`, `stop`, `exit`,
   `plan`, `start-plan`, `fleet-stop`, `fleet-pause`, `fleet-resume`).
-  `create --confirm-name NAME` and `start-plan --confirm-name INDEX=NAME`
+  `create --confirm-name NAME`, `say --confirm-name NAME` and `start-plan
+  --confirm-name INDEX=NAME` (the leg's name, like `0="BTC Long 20x"`)
   acknowledge the warning above 10x; `create` without it prints the warning
   and the flag and sends nothing. `preview`, `create`, `say` and `plan` print
   the warnings before the result.

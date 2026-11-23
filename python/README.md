@@ -346,18 +346,23 @@ if perpetuals.needs_confirmation(20):
 
 Without it the server answers 422 with the warning and the name to type.
 `warnings` on the preview and on the new agent is what the confirm step warns
-about (a crowded side, a thin market, unknown funding or volume, above 10x),
+about (a crowded side, a thin market, unknown funding or volume, above 10x,
+a liquidation price inside three days of the market's normal daily range),
 never a refusal. `pause_agent` and `resume_agent` work on a
 Perpetuals agent: paused, it opens nothing new and its resting stop and
 Liquidation Guard keep running. `perp_say("long btc 3x 500 stop 3")` is the
-same one-sentence answer as the app, Telegram and the MCP.
+same one-sentence answer as the app, Telegram and the MCP; above 10x the open
+answers the warning first, and `perp_say(text, confirmation_text="BTC")`, the
+agent's name (its market) typed by the user, acknowledges it. `confirm=True`
+is for a close and never acknowledges the warning.
 
 A fleet from one sentence: `copilot_perp_plan("put $2,000 across 4 Perpetuals
 agents, long BTC and ETH, short SOL and HYPE, 3x")`, then
 `copilot_perp_start(plan.id)`, which moves no money and returns `sign_url`,
 the page where each agent is authorized and funded. A leg above 10x
 (`needs_confirmation`) starts only with its agent's name typed by the user,
-in `confirmations={leg_index: name}`. Funding an agent waits for its
+in `confirmations={leg_index: name}`, the leg's `name` as the plan prints it,
+like `{0: "BTC Long 20x"}`. Funding an agent waits for its
 authorization, which sets the address its withdrawals go to. `copilot_fleet(id).perp`
 reads every agent live; `copilot_tighten_agent_stops`, `copilot_pause_fleet`,
 `copilot_resume_fleet` and `copilot_stop_fleet` act on all of them.
@@ -501,7 +506,7 @@ if m is not None:
 | `perp_agent_balances(id)` / `perp_agent_ledger(id)` / `perp_agent_decisions(id)` / `perp_agent_exit_card(id)` | `GET /v1/perp-agents/{id}/balances`, `/ledger`, `/decisions`, `/exit-card` | `read` |
 | `preview_perp_agent(...)` | `POST /v1/perp-agents/preview` | `read` |
 | `create_perp_agent(...)` | `POST /v1/perp-agents` | `trade` |
-| `perp_say(text, confirm=False)` | `POST /v1/perp-agents/say` | `trade` |
+| `perp_say(text, confirm=False, confirmation_text=None)` | `POST /v1/perp-agents/say` | `trade` |
 | `close_perp_agent(id, confirm=True)` / `tighten_perp_stop(id, stop_pct)` / `exit_perp_agent(id, confirm=True)` | `POST /v1/perp-agents/{id}/close`, `/stop`, `/exit` | `trade` |
 | `copilot_perp_plan(text, practice=False)` / `copilot_perp_get_plan(id)` | `POST /copilot/perp/plans`, `GET /copilot/perp/plans/{id}` | nothing (a key to start it later) |
 | `copilot_perp_start(id)` | `POST /copilot/perp/plans/{id}/start` | `trade` |

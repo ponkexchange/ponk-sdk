@@ -2881,7 +2881,9 @@ class PonkClient:
             )
         )
 
-    def perp_say(self, text: str, *, confirm: bool = False) -> PerpSaid:
+    def perp_say(
+        self, text: str, *, confirm: bool = False, confirmation_text: Optional[str] = None
+    ) -> PerpSaid:
         """`POST /v1/perp-agents/say`. One sentence, the same answer as on the
         web, Telegram and the MCP.
 
@@ -2891,12 +2893,16 @@ class PonkClient:
         to your one running agent on that market; more than one that fits is
         refused with a sentence naming them, never a guess. An open above
         10x answers the high leverage warning first; the same sentence again
-        with `confirm=True` acknowledges it. Needs a `trade` key. The server
-        parses the sentence, so leverage is checked there.
+        with `confirmation_text`, the agent's name typed by the user (its
+        market in upper case, like `"BTC"`), acknowledges it. `confirm=True`
+        alone never does. Needs a `trade` key. The server parses the
+        sentence, so leverage is checked there.
         """
         body: Dict[str, Any] = {"text": text}
         if confirm:
             body["confirm"] = True
+        if confirmation_text is not None:
+            body["confirmationText"] = confirmation_text
         return PerpSaid.from_dict(self._request("POST", "/v1/perp-agents/say", body=body))
 
     def close_perp_agent(self, agent_id: str, *, confirm: bool) -> PerpOwnerAnswer:
@@ -3006,7 +3012,8 @@ class PonkClient:
         needs neither. Starts at most once: a repeat answers the fleet
         already made. A leg above 10x (`needs_confirmation`) starts only
         with its agent's name, typed by the user after the high leverage
-        warning, in `confirmations`, leg index to name (`{"0": "BTC long"}`;
+        warning, in `confirmations`, leg index to name (`{"0": "BTC Long 20x"}`,
+        the leg's `name` as the plan prints it: market, side, leverage;
         int keys are sent as strings); a missing one answers 422 naming it
         and nothing is made. Needs a `trade` key or a wallet session, of the
         same kind the plan was made with. Takes the fund timeout.

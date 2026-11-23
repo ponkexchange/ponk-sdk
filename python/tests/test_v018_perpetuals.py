@@ -298,6 +298,11 @@ class TestCreate(unittest.TestCase):
         self.assertFalse(s.created)
         self.assertEqual((s.agent_id, s.request), (AGENT, "close"))
 
+    def test_say_above_10x_sends_the_typed_name(self):
+        c, opener = client(CREATED)
+        c.perp_say("long btc 20x 500 stop 1", confirmation_text="BTC")
+        self.assertEqual(opener.calls[0]["body"], {"text": "long btc 20x 500 stop 1", "confirmationText": "BTC"})
+
 
 AGENT_VIEW = {
     "account": {
@@ -429,10 +434,10 @@ PERP_PLAN = {
     "echo": "2 agents, $500 each: long BTC 2x (default), short SOL 2x (default), stop 3% (default).",
     "refusal": None, "network": "testnet", "practice": False,
     "legs": [
-        {"index": 0, "name": "BTC long", "coin": "BTC", "direction": "long", "leverage": 2, "leverage_defaulted": True,
+        {"index": 0, "name": "BTC Long 2x", "coin": "BTC", "direction": "long", "leverage": 2, "leverage_defaulted": True,
          "capital_usd": "500", "stop_pct": 3.0, "stop_defaulted": True, "take_profit_pct": None, "ticket": TICKET,
          "high_leverage": False, "needs_confirmation": False, "note": None, "refusal": None},
-        {"index": 1, "name": "SOL short", "coin": "SOL", "direction": "short", "leverage": 2,
+        {"index": 1, "name": "SOL Short 2x", "coin": "SOL", "direction": "short", "leverage": 2,
          "leverage_defaulted": True, "capital_usd": "500", "stop_pct": 3.0, "stop_defaulted": True,
          "take_profit_pct": None, "ticket": None, "high_leverage": False, "needs_confirmation": False,
          "note": None, "refusal": "Funding is crowded on the short side."},
@@ -464,7 +469,7 @@ class TestCopilot(unittest.TestCase):
 
     def test_start(self):
         started = dict(PERP_PLAN, state="started", fleet_id=FLEET,
-                       agents=[{"index": 0, "name": "BTC long", "agent_id": AGENT, "created": True}],
+                       agents=[{"index": 0, "name": "BTC Long 2x", "agent_id": AGENT, "created": True}],
                        sign_url="https://ponk.exchange/copilot/fleets/" + FLEET)
         c, opener = client(started)
         p = c.copilot_perp_start(PLAN)
@@ -477,8 +482,8 @@ class TestCopilot(unittest.TestCase):
 
     def test_start_sends_the_typed_names_by_leg_index(self):
         c, opener = client(dict(PERP_PLAN, state="started", fleet_id=FLEET))
-        c.copilot_perp_start(PLAN, confirmations={0: "BTC long", "1": "SOL short"})
-        self.assertEqual(opener.calls[0]["body"], {"confirmations": {"0": "BTC long", "1": "SOL short"}})
+        c.copilot_perp_start(PLAN, confirmations={0: "BTC Long 2x", "1": "SOL Short 2x"})
+        self.assertEqual(opener.calls[0]["body"], {"confirmations": {"0": "BTC Long 2x", "1": "SOL Short 2x"}})
 
     def test_perp_fleet_live(self):
         fleet = {
@@ -489,7 +494,7 @@ class TestCopilot(unittest.TestCase):
             "funding": {}, "as_of": "t", "poll_after_ms": 5000,
             "perp": {
                 "network": "testnet", "practice": False, "exit_fee_bps": 100,
-                "rows": [{"agent_id": AGENT, "name": "BTC long", "status": "running", "coin": "BTC",
+                "rows": [{"agent_id": AGENT, "name": "BTC Long 2x", "status": "running", "coin": "BTC",
                           "direction": "long", "leverage": 2, "practice": False, "value_usd": None,
                           "pnl_usd": None, "pnl_reason": "Closed, settling.", "booking_pending": True,
                           "position": None, "mandate": "active", "funded": True, "needs": "nothing",
@@ -511,7 +516,7 @@ class TestCopilot(unittest.TestCase):
         # The newer server names the list `answers`; `agents` stays the count.
         payload = {"id": FLEET, "kind": "perp", "intent_text": "x", "status": "active", "agents": 2,
                    "stop_drawdown_pct": 10.0,
-                   "answers": [{"agent_id": AGENT, "name": "BTC long", "ok": False,
+                   "answers": [{"agent_id": AGENT, "name": "BTC Long 2x", "ok": False,
                                 "sentence": "The stop is already tighter."}]}
         c, _ = client(payload)
         s = c.copilot_tighten_agent_stops(FLEET, 2.0)
@@ -532,7 +537,7 @@ class TestCopilot(unittest.TestCase):
         # a count, beside the answers list under the same key: the list is
         # written last, so a JSON reader keeps the list.
         raw = ('{"id":"%s","kind":"perp","intent_text":"x","status":"active","agents":2,'
-               '"stop_drawdown_pct":10.0,"agents":[{"agent_id":"%s","name":"BTC long","ok":true,'
+               '"stop_drawdown_pct":10.0,"agents":[{"agent_id":"%s","name":"BTC Long 2x","ok":true,'
                '"sentence":"Moving the stop at your word on the next tick."}]}' % (FLEET, AGENT))
         c, opener = client(json.loads(raw))
         s = c.copilot_tighten_agent_stops(FLEET, 2.0)

@@ -42,10 +42,14 @@ pub enum PerpCmd {
     /// "tighten btc stop to 2%".
     Say {
         text: String,
-        /// Required for a close, and to acknowledge the high leverage warning
-        /// on an open above 10x.
+        /// Required for a close. Never acknowledges the high leverage
+        /// warning: that is --confirm-name.
         #[arg(long)]
         confirm: bool,
+        /// An open above 10x: the agent's name (its market, like BTC), typed
+        /// after reading the high leverage warning.
+        #[arg(long = "confirm-name", value_name = "NAME")]
+        confirm_name: Option<String>,
     },
     /// Close the position; the funds stay on the agent's account.
     Close {
@@ -147,7 +151,7 @@ pub async fn run(cli: &Cli, cmd: &PerpCmd) -> Result<()> {
         PerpCmd::Card { id } => card(cli, id).await,
         PerpCmd::Preview(args) => preview(cli, args).await,
         PerpCmd::Create(args) => create(cli, args).await,
-        PerpCmd::Say { text, confirm } => say(cli, text, *confirm).await,
+        PerpCmd::Say { text, confirm, confirm_name } => say(cli, text, *confirm, confirm_name.as_deref()).await,
         PerpCmd::Close { id, confirm } => close(cli, id, *confirm).await,
         PerpCmd::Stop { id, pct } => stop(cli, id, pct).await,
         PerpCmd::Exit { id, confirm } => exit(cli, id, *confirm).await,
@@ -462,13 +466,19 @@ async fn create(cli: &Cli, args: &TradeArgs) -> Result<()> {
     Ok(())
 }
 
-async fn say(cli: &Cli, text: &str, confirm: bool) -> Result<()> {
+async fn say(cli: &Cli, text: &str, confirm: bool, confirm_name: Option<&str>) -> Result<()> {
     let client = client(cli, true)?;
     if cli.json {
-        let body = serde_json::json!({ "text": text, "confirm": confirm });
+        let mut body = serde_json::json!({ "text": text, "confirm": confirm });
+        if let Some(n) = confirm_name {
+            body["confirmationText"] = serde_json::Value::from(n);
+        }
         return print_json(&client.post_json("/v1/perp-agents/say", Some(&body), None).await?);
     }
-    let s = client.perp_say(text, confirm).await?;
+    let s = match confirm_name {
+        Some(n) => client.perp_say_confirmed(text, n).await?,
+        None => client.perp_say(text, confirm).await?,
+    };
     if s.created() {
         print_warnings(&s.warnings);
         println!("{}", dash(s.ticket.as_deref()));
@@ -602,15 +612,16 @@ async fn plan(cli: &Cli, text: &str, practice: bool) -> Result<()> {
     Ok(())
 }
 
-/// `--confirm-name 0="BTC long"` pairs, leg index to the typed name.
+/// `--confirm-name 0="BTC Long 20x"` pairs, leg index to the typed name
+/// (the leg's name as the plan prints it).
 fn confirmations(pairs: &[String]) -> Result<std::collections::BTreeMap<usize, String>> {
     let mut out = std::collections::BTreeMap::new();
     for p in pairs {
         let Some((i, name)) = p.split_once('=') else {
-            bail!("--confirm-name takes INDEX=NAME, like 0=\"BTC long\", got {p:?}");
+            bail!("--confirm-name takes INDEX=NAME, like 0=\"BTC Long 20x\", got {p:?}");
         };
         let Ok(i) = i.trim().parse::<usize>() else {
-            bail!("--confirm-name takes a leg index before the =, like 0=\"BTC long\", got {p:?}");
+            bail!("--confirm-name takes a leg index before the =, like 0=\"BTC Long 20x\", got {p:?}");
         };
         out.insert(i, name.to_string());
     }

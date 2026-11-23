@@ -293,7 +293,8 @@ async fn high(ponk: &ponk::Client, typed: String) -> Result<(), ponk::Error> {
 A fleet from one sentence: `copilot_perp_plan`, then `copilot_perp_start`,
 which moves no money and returns `sign_url`. A leg above 10x
 (`needs_confirmation`) starts only through `copilot_perp_start_confirmed` with
-its agent's typed name by leg index. `copilot_tighten_agent_stops` answers
+its agent's typed name by leg index, the leg's `name` as the plan prints it
+(`BTC Long 20x`). `copilot_tighten_agent_stops` answers
 each agent's sentence in `answers`. Funding an agent waits for its
 authorization, which sets the address its withdrawals go to.
 
@@ -403,7 +404,7 @@ key can move your funds home. It cannot move them anywhere else.
 | `perp_agent_balances(id)` / `perp_agent_ledger(id)` / `perp_agent_decisions(id)` / `perp_agent_exit_card(id)` | `GET /v1/perp-agents/{id}/balances`, `/ledger`, `/decisions`, `/exit-card` | `read` |
 | `preview_perp_agent(&PerpTrade)` | `POST /v1/perp-agents/preview` | `read` |
 | `create_perp_agent(&PerpTrade)` | `POST /v1/perp-agents` | `trade` |
-| `perp_say(text, confirm)` | `POST /v1/perp-agents/say` | `trade` |
+| `perp_say(text, confirm)`, `perp_say_confirmed(text, name)` | `POST /v1/perp-agents/say` | `trade` |
 | `close_perp_agent(id, true)` / `tighten_perp_stop(id, pct)` / `exit_perp_agent(id, true)` | `POST /v1/perp-agents/{id}/close`, `/stop`, `/exit` | `trade` |
 | `copilot_perp_plan(text, practice)` / `copilot_perp_get_plan(id)` | `POST /copilot/perp/plans`, `GET /copilot/perp/plans/{id}` | nothing (a key to start it later) |
 | `copilot_perp_start(id)` | `POST /copilot/perp/plans/{id}/start` | `trade` |

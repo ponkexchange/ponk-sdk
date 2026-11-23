@@ -3146,14 +3146,24 @@ impl Client {
     /// close (needs `confirm`) or a stop tightening goes to your one running
     /// agent on that market (`request` set). More than one that fits is
     /// refused with a sentence naming them. An open above 10x answers the
-    /// high leverage warning first; the same sentence again with `confirm`
-    /// acknowledges it. Needs a `trade` key.
+    /// high leverage warning first; the same sentence again through
+    /// [`Client::perp_say_confirmed`], with the agent's name typed by the
+    /// user, acknowledges it. `confirm` never does. Needs a `trade` key.
     pub async fn perp_say(&self, text: &str, confirm: bool) -> Result<PerpCreated> {
         let body = if confirm {
             serde_json::json!({ "text": text, "confirm": true })
         } else {
             serde_json::json!({ "text": text })
         };
+        self.post("/v1/perp-agents/say", Some(&body), self.timeout).await
+    }
+
+    /// [`Client::perp_say`] for an open above 10x: `confirmation_text` is the
+    /// agent's name (its market in upper case, like `BTC`) as the user typed
+    /// it after [`crate::perpetuals::HIGH_LEVERAGE_WARNING`]. The server
+    /// checks it; a wrong one answers 422 and nothing is made.
+    pub async fn perp_say_confirmed(&self, text: &str, confirmation_text: &str) -> Result<PerpCreated> {
+        let body = serde_json::json!({ "text": text, "confirmationText": confirmation_text });
         self.post("/v1/perp-agents/say", Some(&body), self.timeout).await
     }
 
@@ -3247,6 +3257,8 @@ impl Client {
     /// [`Client::copilot_perp_start`] with `confirmations`, leg index to the
     /// agent's name as the user typed it after
     /// [`crate::perpetuals::HIGH_LEVERAGE_WARNING`], one per leg above 10x.
+    /// The name is the leg's `name` as the plan prints it, market, side and
+    /// leverage: `{0: "BTC Long 20x"}`.
     pub async fn copilot_perp_start_confirmed(
         &self,
         plan_id: &str,

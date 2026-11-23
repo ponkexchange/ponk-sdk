@@ -186,6 +186,11 @@ async fn say_close_and_stop() {
     assert!(!s.created());
     assert_eq!(s.request.as_deref(), Some("close"));
 
+    // Above 10x the typed name is the acknowledgement, never confirm.
+    let (base, h) = one_shot(r#"{"id":"0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b","ticket":"Long BTC 20x."}"#);
+    Client::new(&base, "ponk_live_k").unwrap().perp_say_confirmed("long btc 20x 500 stop 1", "BTC").await.unwrap();
+    assert_eq!(body_of(&h.join().unwrap()), serde_json::json!({"text":"long btc 20x 500 stop 1","confirmationText":"BTC"}));
+
     let (base, h) = one_shot(r#"{"agentId":"a","request":"tighten_stop","sentence":"Moving the stop."}"#);
     Client::new(&base, "ponk_live_k").unwrap().tighten_perp_stop(AGENT, "2").await.unwrap();
     let raw = h.join().unwrap();
@@ -236,7 +241,7 @@ fn the_agent_reads_strings_and_nulls() {
 fn a_perp_fleet_and_its_plan() {
     let f: CopilotFleet = decode(
         r#"{"kind":"perp","fleet":{"id":"f","kind":"perp","intent_text":"x","status":"active","agents":2},"stop_now":{},"totals":{},"rows":[],"missing_agents":[],
-        "perp":{"network":"testnet","practice":false,"exit_fee_bps":100,"rows":[{"agent_id":"a","name":"BTC long","pnl_usd":null,"pnl_reason":"Closed, settling.","booking_pending":true,"needs":"nothing","close":{"state":"open","sentence":null}}],
+        "perp":{"network":"testnet","practice":false,"exit_fee_bps":100,"rows":[{"agent_id":"a","name":"BTC Long 2x","pnl_usd":null,"pnl_reason":"Closed, settling.","booking_pending":true,"needs":"nothing","close":{"state":"open","sentence":null}}],
         "totals":{"value_usd":null,"notional_usd":0.0,"margin_usd":0.0,"open_positions":0,"reason":"An agent is settling."},"funding":{"to_authorize":1,"to_fund":1,"sign_url":null,"sentence":null}}}"#,
     );
     let p = f.perp.unwrap();
@@ -246,7 +251,7 @@ fn a_perp_fleet_and_its_plan() {
 
     let plan: PerpFleetPlan = decode(
         r#"{"id":"p","kind":"perp","state":"ready","text":"x","echo":"y","refusal":null,"network":"testnet","practice":false,
-        "legs":[{"index":0,"name":"BTC long","coin":"BTC","direction":"long","leverage":2,"leverage_defaulted":true,"capital_usd":"500","stop_pct":3.0,"stop_defaulted":true,
+        "legs":[{"index":0,"name":"BTC Long 2x","coin":"BTC","direction":"long","leverage":2,"leverage_defaulted":true,"capital_usd":"500","stop_pct":3.0,"stop_defaulted":true,
         "take_profit_pct":null,"ticket":{"lossAtStopUsd":30.0},"high_leverage":false,"needs_confirmation":false,"note":null,"refusal":null}],
         "totals":{"agents":1,"capital_usd":"500","notional_usd":1000.0,"loss_at_stops_usd":30.0},"fleet_stop_pct":10.0,"fees":null,"fees_for":"api",
         "signatures":null,"notes":[],"can_start":true,"fleet_id":null,"agents":[],"sign_url":null}"#,
@@ -260,7 +265,7 @@ fn agent_stops_read_answers_beside_the_count() {
     // The newer server names the list `answers`; `agents` stays the count.
     let s = PerpFleetStop::from_value(serde_json::json!({
         "id": FLEET, "kind": "perp", "status": "active", "agents": 2, "stop_drawdown_pct": 10.0,
-        "answers": [{"agent_id": "a", "name": "BTC long", "ok": false, "sentence": "The stop is already tighter."}]
+        "answers": [{"agent_id": "a", "name": "BTC Long 2x", "ok": false, "sentence": "The stop is already tighter."}]
     }))
     .unwrap();
     assert_eq!(s.answers[0].sentence.as_deref(), Some("The stop is already tighter."));
@@ -281,7 +286,7 @@ async fn agent_stops_keep_the_older_agents_list() {
     // list share a key; the list is written last, and that is the one kept.
     let (base, h) = one_shot(
         r#"{"id":"6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b","kind":"perp","intent_text":"x","status":"active","agents":2,"stop_drawdown_pct":10.0,
-        "agents":[{"agent_id":"a","name":"BTC long","ok":true,"sentence":"Moving the stop at your word on the next tick."}]}"#,
+        "agents":[{"agent_id":"a","name":"BTC Long 2x","ok":true,"sentence":"Moving the stop at your word on the next tick."}]}"#,
     );
     let s: PerpFleetStop = Client::new(&base, "ponk_live_k").unwrap().copilot_tighten_agent_stops(FLEET, 2.0).await.unwrap();
     let raw = h.join().unwrap();
@@ -306,9 +311,9 @@ async fn fleet_pause_and_plan_start() {
     assert_eq!(p.agents[0]["created"], true);
 
     let (base, h) = one_shot(r#"{"id":"p","kind":"perp","state":"started","fleet_id":"f","agents":[]}"#);
-    let names = std::collections::BTreeMap::from([(0usize, "BTC long".to_string()), (2, "SOL short".to_string())]);
+    let names = std::collections::BTreeMap::from([(0usize, "BTC Long 2x".to_string()), (2, "SOL Short 2x".to_string())]);
     Client::new(&base, "ponk_live_k").unwrap().copilot_perp_start_confirmed("p", &names).await.unwrap();
     let raw = h.join().unwrap();
     assert_eq!(request_line(&raw), "POST /copilot/perp/plans/p/start HTTP/1.1");
-    assert_eq!(body_of(&raw), serde_json::json!({"confirmations": {"0": "BTC long", "2": "SOL short"}}));
+    assert_eq!(body_of(&raw), serde_json::json!({"confirmations": {"0": "BTC Long 2x", "2": "SOL Short 2x"}}));
 }
