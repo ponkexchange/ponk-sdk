@@ -81,8 +81,11 @@ Perpetuals on Hyperliquid
 A Perpetuals agent is one typed trade: `create_perp_agent(coin="BTC",
 direction="long", leverage=3, capital_usd=500, stop_loss_pct=3)`. The server
 builds the ticket from live prices and refuses one its gates refuse, with a
-sentence. No agent runs above 10x (`ponk.perpetuals.AGENT_MAX_LEVERAGE`);
-this client refuses more before sending, in the server's own words. A key
+sentence. Leverage goes up to the market's own maximum; above 10x the
+server asks for the agent's name, typed after the high leverage warning
+(`ponk.perpetuals.HIGH_LEVERAGE_WARNING`), as `confirmation_text`, and the
+preview and the new agent carry what the confirm step warns about in
+`warnings`. A key
 creates the agent and can preview, close, tighten the stop, pause, resume and
 exit it, but the agent trades nothing until its owner authorizes it in the
 app with their wallet and funds its Hyperliquid account: that authorization
@@ -2791,22 +2794,33 @@ class PonkClient:
         take_profit_pct: Union[str, float, int, None] = None,
         name: Optional[str] = None,
         practice: bool = False,
+        confirmation_text: Optional[str] = None,
     ) -> PerpPreview:
         """`POST /v1/perp-agents/preview`. Every create gate on live prices,
         creating nothing.
 
         Takes exactly what `create_perp_agent` takes. `ok` true carries the
         ticket (size, liquidation price, stop price, loss at the stop) and
-        the rates the authorization will state; `ok` false carries the
-        sentence the gates refused it with. Leverage above 10 raises
-        `ValueError` here with the server's sentence, before anything is sent.
+        the rates the authorization will state, `warnings` (what the
+        confirm step warns about: a crowded side, a thin market, unknown
+        funding or volume, above 10x) and `needs_confirmation` (above 10x,
+        create needs `confirmation_text`); `ok` false carries the sentence
+        the gates refused it with.
         """
         return PerpPreview.from_dict(
             self._request(
                 "POST",
                 "/v1/perp-agents/preview",
                 body=_perp_body(
-                    coin, direction, leverage, capital_usd, stop_loss_pct, take_profit_pct, name, practice
+                    coin,
+                    direction,
+                    leverage,
+                    capital_usd,
+                    stop_loss_pct,
+                    take_profit_pct,
+                    name,
+                    practice,
+                    confirmation_text,
                 ),
             )
         )
@@ -2822,12 +2836,13 @@ class PonkClient:
         take_profit_pct: Union[str, float, int, None] = None,
         name: Optional[str] = None,
         practice: bool = False,
+        confirmation_text: Optional[str] = None,
     ) -> PerpCreated:
         """`POST /v1/perp-agents`. Create a typed trade as a Perpetuals agent.
 
         `coin` is a Hyperliquid market's coin (`BTC`), `direction` `long` or
-        `short` (the agent never reverses it), `leverage` isolated, 1 to 10,
-        `capital_usd` the USDC it trades with (at least 10, Hyperliquid's
+        `short` (the agent never reverses it), `leverage` isolated, 1 up to
+        the market's own maximum on Hyperliquid, `capital_usd` the USDC it trades with (at least 10, Hyperliquid's
         smallest order), `stop_loss_pct` the stop in percent from the entry
         (3 for 3%; required, no position runs without one) and
         `take_profit_pct` an optional take-profit. Money figures may be
@@ -2835,11 +2850,13 @@ class PonkClient:
 
         The ticket is built from live prices first; a ticket the gates refuse
         creates nothing and raises `PonkUnprocessableError` with the
-        sentence. Leverage above 10 raises `ValueError` here with the
-        server's own sentence, before anything is sent; a market whose
-        Hyperliquid maximum is lower is refused by the server with its own
-        figure. Needs a `trade` key; an agent created with a key is on the
-        API rates, which `fees` states.
+        sentence; so is leverage above the market's maximum, with the
+        figure. ABOVE 10X the warning must be acknowledged: show the user
+        `ponk.perpetuals.HIGH_LEVERAGE_WARNING`, have them type the agent's
+        name and pass it as `confirmation_text` (without it the server
+        answers 422 with the warning and the name to type). `warnings` says
+        what the agent opens with a warning about. Needs a `trade` key; an
+        agent created with a key is on the API rates, which `fees` states.
 
         NOTHING IS SIGNED OR FUNDED BY THIS CALL. The agent trades only once
         its owner authorizes it in the app with their wallet and funds its
@@ -2851,7 +2868,15 @@ class PonkClient:
                 "POST",
                 "/v1/perp-agents",
                 body=_perp_body(
-                    coin, direction, leverage, capital_usd, stop_loss_pct, take_profit_pct, name, practice
+                    coin,
+                    direction,
+                    leverage,
+                    capital_usd,
+                    stop_loss_pct,
+                    take_profit_pct,
+                    name,
+                    practice,
+                    confirmation_text,
                 ),
             )
         )
@@ -2864,8 +2889,10 @@ class PonkClient:
         `create_perp_agent` does. A close (`close my sol short`, needs
         `confirm=True`) or a stop tightening (`tighten btc stop to 2%`) goes
         to your one running agent on that market; more than one that fits is
-        refused with a sentence naming them, never a guess. Needs a `trade`
-        key. The server parses the sentence, so leverage is checked there.
+        refused with a sentence naming them, never a guess. An open above
+        10x answers the high leverage warning first; the same sentence again
+        with `confirm=True` acknowledges it. Needs a `trade` key. The server
+        parses the sentence, so leverage is checked there.
         """
         body: Dict[str, Any] = {"text": text}
         if confirm:
@@ -2967,7 +2994,7 @@ class PonkClient:
         )
 
     def copilot_perp_start(
-        self, plan_id: str, *, confirmations: Optional[Mapping[str, str]] = None
+        self, plan_id: str, *, confirmations: Optional[Mapping[Any, str]] = None
     ) -> PerpFleetPlan:
         """`POST /copilot/perp/plans/{id}/start`. Start the plan as one fleet.
 
@@ -2976,18 +3003,21 @@ class PonkClient:
         with `fleet_id`, `agents` and `sign_url`, the fleet page where each
         agent is authorized with its own signature and funded with its own
         transfer, one after another (`signatures` says so). A practice fleet
-        needs neither. A plan with a leg above 10x starts nothing and
-        answers 422 naming the leg. Starts at most once: a repeat answers
-        the fleet already made. `confirmations` is kept for compatibility
-        (leg index to the typed agent name); with leverage capped at 10
-        nothing asks for it. Needs a `trade` key or a wallet session, of the
+        needs neither. Starts at most once: a repeat answers the fleet
+        already made. A leg above 10x (`needs_confirmation`) starts only
+        with its agent's name, typed by the user after the high leverage
+        warning, in `confirmations`, leg index to name (`{"0": "BTC long"}`;
+        int keys are sent as strings); a missing one answers 422 naming it
+        and nothing is made. Needs a `trade` key or a wallet session, of the
         same kind the plan was made with. Takes the fund timeout.
         """
         return PerpFleetPlan.from_dict(
             self._request(
                 "POST",
                 "/copilot/perp/plans/{0}/start".format(_seg(plan_id)),
-                body={"confirmations": dict(confirmations)} if confirmations else {},
+                body={"confirmations": {str(k): v for k, v in confirmations.items()}}
+                if confirmations
+                else {},
                 timeout=self.fund_timeout,
                 session_only=True,
             )
@@ -4556,9 +4586,11 @@ def _perp_body(
     take_profit_pct: Any,
     name: Optional[str],
     practice: bool,
+    confirmation_text: Optional[str] = None,
 ) -> Dict[str, Any]:
-    # The 10x agent cap, in the server's own words, before anything is sent.
-    # Every other gate is the server's: it reads live prices.
+    # Only the shape is checked here. Every gate is the server's, including
+    # the market's maximum leverage and the acknowledgement above 10x: it
+    # reads live prices.
     body: Dict[str, Any] = {
         "coin": coin,
         "direction": _perp.check_direction(direction),
@@ -4571,6 +4603,8 @@ def _perp_body(
         body["takeProfitPct"] = take_profit_pct
     if name is not None:
         body["name"] = name
+    if confirmation_text is not None:
+        body["confirmationText"] = confirmation_text
     return body
 
 

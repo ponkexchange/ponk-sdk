@@ -4,9 +4,13 @@
 //! short), isolated leverage, the USDC it trades with and a stop that is
 //! always set. The server builds the ticket from Hyperliquid's live prices and
 //! refuses one its gates refuse; this module holds the vocabulary, the request
-//! body ([`PerpTrade`]) and the one check this crate makes before sending, the
-//! 10x agent cap, worded exactly as the server words it. Nothing in it sends a
-//! request.
+//! body ([`PerpTrade`]), the shape checks this crate makes before sending and
+//! the high leverage warning. Nothing in it sends a request.
+//!
+//! Leverage is the user's choice, up to the market's own maximum on
+//! Hyperliquid (the server checks that). Above 10x the server asks for the
+//! warning to be acknowledged: the agent's name, typed by the user after
+//! [`HIGH_LEVERAGE_WARNING`], goes in [`PerpTrade::confirmation_text`].
 //!
 //! ```
 //! use ponk::perpetuals::{self, PerpTrade};
@@ -14,8 +18,10 @@
 //! assert_eq!(perpetuals::market_id("BTC"), "perp:hyperliquid:BTC");
 //! let trade = PerpTrade::new("BTC", "long", 3, "500", "3").take_profit_pct("10");
 //! assert!(trade.check().is_ok());
-//! let err = PerpTrade::new("BTC", "long", 20, "500", "3").check().unwrap_err();
-//! assert!(err.to_string().starts_with("20x is above the 10x most an agent can use."));
+//! assert!(!perpetuals::needs_confirmation(3));
+//! let high = PerpTrade::new("BTC", "long", 20, "500", "3").name("BTC 20x").confirmation_text("BTC 20x");
+//! assert!(high.check().is_ok());
+//! assert!(perpetuals::needs_confirmation(20));
 //! ```
 //!
 //! Units, everywhere on the Perpetuals routes: decimal figures the server
@@ -32,10 +38,15 @@ use crate::Error;
 /// The one Perpetuals venue.
 pub const VENUE: &str = "hyperliquid";
 
-/// No agent runs above 10x leverage: above it a sudden 4% price jump can pass
-/// the liquidation price before any stop fills. A market whose Hyperliquid
-/// maximum is lower keeps its own lower maximum (the server says so).
-pub const AGENT_MAX_LEVERAGE: u32 = 10;
+/// Above this leverage the server asks for the high leverage warning to be
+/// acknowledged with the agent's typed name. It is not a cap: an agent can run
+/// up to its market's own maximum on Hyperliquid.
+pub const HIGH_LEVERAGE_ABOVE: u32 = 10;
+
+/// The high leverage warning, word for word as the server and the app state it
+/// on the confirm step above 10x. Show it before asking for the name.
+pub const HIGH_LEVERAGE_WARNING: &str =
+    "Above 10x a sudden 4% price jump can pass the liquidation price before any stop fills.";
 
 /// Hyperliquid's smallest order, in USDC: the least an agent trades with.
 pub const MIN_CAPITAL_USD: u32 = 10;
@@ -78,28 +89,20 @@ pub fn coin_of(market: &str) -> &str {
     market.strip_prefix("perp:hyperliquid:").unwrap_or(market)
 }
 
-/// The server's sentence for leverage above the agent cap, word for word.
-pub fn leverage_refusal(leverage: u32) -> String {
-    format!(
-        "{leverage}x is above the {AGENT_MAX_LEVERAGE}x most an agent can use. Above {AGENT_MAX_LEVERAGE}x a sudden 4% price jump can pass the liquidation price before any stop fills, so pick {AGENT_MAX_LEVERAGE}x or less."
-    )
-}
-
-/// `Ok` for 1 to 10. Above 10 is [`Error::InvalidArgument`] with the
-/// server's own sentence ([`leverage_refusal`]), so a caller sees the same
-/// words whether this crate or the server stopped it. The server stays
-/// authoritative: a market whose Hyperliquid maximum is lower than 10 is
-/// refused there with its own figure.
+/// `Ok` for 1 or more. Only the shape is checked here: how high a market goes
+/// is the server's to say, up to the market's own maximum on Hyperliquid and
+/// above 10x with the warning acknowledged ([`needs_confirmation`]).
 pub fn check_leverage(leverage: u32) -> Result<u32, Error> {
-    if leverage > AGENT_MAX_LEVERAGE {
-        return Err(Error::InvalidArgument(leverage_refusal(leverage)));
-    }
     if leverage == 0 {
-        return Err(Error::InvalidArgument(format!(
-            "leverage is a whole number from 1 to {AGENT_MAX_LEVERAGE}, got 0"
-        )));
+        return Err(Error::InvalidArgument("leverage is a whole number, 1 or more, got 0".into()));
     }
     Ok(leverage)
+}
+
+/// True above 10x: the server creates the agent only with its name typed as
+/// [`PerpTrade::confirmation_text`] after [`HIGH_LEVERAGE_WARNING`] was shown.
+pub fn needs_confirmation(leverage: u32) -> bool {
+    leverage > HIGH_LEVERAGE_ABOVE
 }
 
 /// The body of `POST /v1/perp-agents` and its preview: one typed trade.
@@ -108,7 +111,9 @@ pub fn check_leverage(leverage: u32) -> Result<u32, Error> {
 /// `"2.5"`); the server reads them as decimals. `stop_loss_pct` is percent
 /// from the entry (3 for 3%) and is required: no position runs without a
 /// stop. `name` defaults to the coin on the server. `practice` runs on live
-/// mainnet prices with a practice balance and sends nothing.
+/// mainnet prices with a practice balance and sends nothing. Above 10x,
+/// `confirmation_text` is the agent's name as the user typed it after the high
+/// leverage warning.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PerpTrade {
@@ -122,6 +127,8 @@ pub struct PerpTrade {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub practice: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmation_text: Option<String>,
 }
 
 impl PerpTrade {
@@ -142,6 +149,7 @@ impl PerpTrade {
             take_profit_pct: None,
             name: None,
             practice: false,
+            confirmation_text: None,
         }
     }
 
@@ -163,9 +171,17 @@ impl PerpTrade {
         self
     }
 
-    /// The checks this crate makes before sending: the 10x cap and the side,
-    /// each in the server's own words. Every other gate is the server's,
-    /// because it reads live prices.
+    /// Above 10x: the agent's name as the user typed it after
+    /// [`HIGH_LEVERAGE_WARNING`]. Without it the server answers 422 with the
+    /// warning and the name to type.
+    pub fn confirmation_text(mut self, typed: impl Into<String>) -> Self {
+        self.confirmation_text = Some(typed.into());
+        self
+    }
+
+    /// The shape checks this crate makes before sending: leverage 1 or more
+    /// and the side, in the server's words. Every other gate is the server's,
+    /// including the market's maximum leverage, because it reads live prices.
     pub fn check(&self) -> Result<(), Error> {
         check_leverage(self.leverage)?;
         if !DIRECTIONS.contains(&self.direction.as_str()) {

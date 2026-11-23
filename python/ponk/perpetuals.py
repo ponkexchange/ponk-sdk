@@ -3,15 +3,21 @@
 A Perpetuals agent is one typed trade: a market, a direction (long or short),
 isolated leverage, the USDC it trades with and a stop that is always set. The
 server builds the ticket from Hyperliquid's live prices and refuses one its
-gates refuse; this module only holds the vocabulary and the one check this
-client makes before sending, the 10x agent cap, worded exactly as the server
-words it. Nothing in it sends a request.
+gates refuse; this module only holds the vocabulary, the shape checks this
+client makes before sending and the high leverage warning. Nothing in it
+sends a request.
+
+Leverage is the user's choice, up to the market's own maximum on
+Hyperliquid (the server checks that). Above 10x the server asks for the
+warning to be acknowledged: `create_perp_agent` takes the agent's name,
+typed by the user after `HIGH_LEVERAGE_WARNING`, as `confirmation_text`.
 
     from ponk import perpetuals
 
-    perpetuals.market_id("BTC")          # 'perp:hyperliquid:BTC'
-    perpetuals.check_leverage(3)         # 3
-    perpetuals.check_leverage(20)        # ValueError, the server's sentence
+    perpetuals.market_id("BTC")              # 'perp:hyperliquid:BTC'
+    perpetuals.check_leverage(20)            # 20
+    perpetuals.needs_confirmation(20)        # True: type the agent's name
+    perpetuals.HIGH_LEVERAGE_WARNING         # the sentence to show first
 
 Units, everywhere on the Perpetuals routes: decimal figures the server keeps
 exactly (capital, realized net, balances, ledger amounts) arrive as strings;
@@ -27,7 +33,8 @@ from typing import Any, Tuple
 
 __all__ = [
     "VENUE",
-    "AGENT_MAX_LEVERAGE",
+    "HIGH_LEVERAGE_ABOVE",
+    "HIGH_LEVERAGE_WARNING",
     "MIN_CAPITAL_USD",
     "DIRECTIONS",
     "MARKET_SORTS",
@@ -37,18 +44,24 @@ __all__ = [
     "MAX_STOP_PCT",
     "market_id",
     "coin_of",
-    "leverage_refusal",
     "check_leverage",
+    "needs_confirmation",
     "check_direction",
 ]
 
 #: The one Perpetuals venue.
 VENUE = "hyperliquid"
 
-#: No agent runs above 10x leverage: above it a sudden 4% price jump can pass
-#: the liquidation price before any stop fills. A market whose Hyperliquid
-#: maximum is lower keeps its own lower maximum (the server says so).
-AGENT_MAX_LEVERAGE = 10
+#: Above this leverage the server asks for the high leverage warning to be
+#: acknowledged with the agent's typed name. It is not a cap: an agent can
+#: run up to its market's own maximum on Hyperliquid.
+HIGH_LEVERAGE_ABOVE = 10
+
+#: The high leverage warning, word for word as the server and the app state
+#: it on the confirm step above 10x. Show it before asking for the name.
+HIGH_LEVERAGE_WARNING = (
+    "Above 10x a sudden 4% price jump can pass the liquidation price before any stop fills."
+)
 
 #: Hyperliquid's smallest order, in USDC: the least an agent trades with.
 MIN_CAPITAL_USD = 10
@@ -95,36 +108,27 @@ def coin_of(market: str) -> str:
     return market[len(prefix):] if market.startswith(prefix) else market
 
 
-def leverage_refusal(leverage: Any) -> str:
-    """The server's sentence for leverage above the agent cap, word for word."""
-    return (
-        "{0}x is above the {1}x most an agent can use. Above {1}x a sudden 4% price jump "
-        "can pass the liquidation price before any stop fills, so pick {1}x or less."
-    ).format(leverage, AGENT_MAX_LEVERAGE)
-
-
 def check_leverage(leverage: Any) -> int:
-    """`leverage` as an int, or `ValueError`.
+    """`leverage` as a positive int, or `ValueError`.
 
-    Above 10 raises with the server's own sentence (`leverage_refusal`), so a
-    caller sees the same words whether this client or the server stopped it.
-    The server stays authoritative: a market whose Hyperliquid maximum is
-    lower than 10 is refused there with its own figure.
+    Only the shape is checked here. How high a market goes is the server's to
+    say: up to the market's own maximum on Hyperliquid, and above 10x with
+    the warning acknowledged (`needs_confirmation`).
     """
     if isinstance(leverage, bool) or not isinstance(leverage, int):
         if isinstance(leverage, float) and leverage.is_integer():
             leverage = int(leverage)
         else:
-            raise ValueError(
-                "leverage is a whole number from 1 to {0}, got {1!r}".format(AGENT_MAX_LEVERAGE, leverage)
-            )
-    if leverage > AGENT_MAX_LEVERAGE:
-        raise ValueError(leverage_refusal(leverage))
+            raise ValueError("leverage is a whole number, 1 or more, got {0!r}".format(leverage))
     if leverage < 1:
-        raise ValueError(
-            "leverage is a whole number from 1 to {0}, got {1!r}".format(AGENT_MAX_LEVERAGE, leverage)
-        )
+        raise ValueError("leverage is a whole number, 1 or more, got {0!r}".format(leverage))
     return leverage
+
+
+def needs_confirmation(leverage: Any) -> bool:
+    """True above 10x: the server creates the agent only with its name typed
+    as `confirmation_text` after `HIGH_LEVERAGE_WARNING` was shown."""
+    return check_leverage(leverage) > HIGH_LEVERAGE_ABOVE
 
 
 def check_direction(direction: Any) -> str:

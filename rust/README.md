@@ -245,12 +245,15 @@ async fn main() -> Result<(), ponk::Error> {
     let board = ponk.perp_markets(None, Some("volume"), Some(10)).await?;
     println!("{} markets", board.total.unwrap_or_default());
 
-    // Above 10x is Error::InvalidArgument here, in the server's words.
     let trade = PerpTrade::new("ETH", "short", 2, "300", "4").take_profit_pct("8");
     let preview = ponk.preview_perp_agent(&trade).await?;
     if preview.ok != Some(true) {
         println!("{}", preview.sentence.unwrap_or_default());
         return Ok(());
+    }
+    // A crowded side, a thin market, above 10x: warnings, never refusals.
+    for w in &preview.warnings {
+        println!("Warning: {w}");
     }
     let agent = ponk.create_perp_agent(&trade).await?;
     // Authorize and fund it in the app with your wallet; then:
@@ -261,6 +264,38 @@ async fn main() -> Result<(), ponk::Error> {
     Ok(())
 }
 ```
+
+Leverage goes up to the market's own maximum on Hyperliquid (`max_leverage`
+on the board). Above 10x the server asks for the high leverage warning to be
+acknowledged: `perpetuals::needs_confirmation(n)` is true there,
+`perpetuals::HIGH_LEVERAGE_WARNING` is the sentence to show, and the agent's
+name as the user typed it goes in `PerpTrade::confirmation_text`. Without it
+the server answers 422 with the warning and the name to type:
+
+```rust,no_run
+use ponk::perpetuals::{self, PerpTrade};
+
+// `typed` is what the user typed after reading the warning: "BTC 20x".
+async fn high(ponk: &ponk::Client, typed: String) -> Result<(), ponk::Error> {
+    let trade = PerpTrade::new("BTC", "long", 20, "200", "2").name("BTC 20x");
+    let trade = if perpetuals::needs_confirmation(trade.leverage) {
+        println!("{}", perpetuals::HIGH_LEVERAGE_WARNING);
+        trade.confirmation_text(typed)
+    } else {
+        trade
+    };
+    let agent = ponk.create_perp_agent(&trade).await?;
+    println!("{:?}", agent.warnings);
+    Ok(())
+}
+```
+
+A fleet from one sentence: `copilot_perp_plan`, then `copilot_perp_start`,
+which moves no money and returns `sign_url`. A leg above 10x
+(`needs_confirmation`) starts only through `copilot_perp_start_confirmed` with
+its agent's typed name by leg index. `copilot_tighten_agent_stops` answers
+each agent's sentence in `answers`. Funding an agent waits for its
+authorization, which sets the address its withdrawals go to.
 
 `pause_agent` and `resume_agent` work on a Perpetuals agent: paused, it opens
 nothing new and its resting stop and Liquidation Guard keep running.

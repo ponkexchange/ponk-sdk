@@ -5155,8 +5155,9 @@ class PerpMarket(Model):
     0.00125% an hour) and positive funding means longs pay shorts;
     `change_24h_pct` is in percent. `leverage_tiers` is `[from_notional_usd,
     max_leverage]` pairs where leverage falls as size grows, empty when one
-    leverage applies to every size. An agent never runs above 10x whatever
-    `max_leverage` says (`ponk.perpetuals.AGENT_MAX_LEVERAGE`).
+    leverage applies to every size. An agent can run up to `max_leverage`;
+    above 10x the server asks for the high leverage warning to be
+    acknowledged (`ponk.perpetuals.HIGH_LEVERAGE_WARNING`).
     """
 
     _CAMEL: ClassVar[bool] = True
@@ -5488,9 +5489,13 @@ class PerpFeeRates(Model):
 @dataclass
 class PerpPreview(Model):
     """`preview_perp_agent(...)`: every create gate on live prices, creating
-    nothing. `ok` true carries `ticket` and `fees`; `ok` false carries
+    nothing. `ok` true carries `ticket`, `fees` and `warnings`, what the
+    confirm step warns about, never a refusal (a crowded side, a thin market,
+    unknown funding or volume, above 10x); `needs_confirmation` is true above
+    10x, where create needs `confirmation_text`. `ok` false carries
     `sentence`, why the gates refused the ticket. `network` is `testnet`, or
-    `mainnet` for practice (mainnet prices, nothing sent)."""
+    `mainnet` for practice (mainnet prices, nothing sent). An older server
+    sends no `warnings`: the list is empty."""
 
     _CAMEL: ClassVar[bool] = True
 
@@ -5502,6 +5507,7 @@ class PerpPreview(Model):
     ticket: Optional[PerpTicket] = None
     fees: Optional[PerpFeeRates] = None
     needs_confirmation: Optional[bool] = None
+    warnings: List[str] = field(default_factory=list)
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"ticket": PerpTicket, "fees": PerpFeeRates}
 
@@ -5513,7 +5519,8 @@ class PerpCreated(Model):
     `ticket` is the ticket's sentence and `ticket_figures` its numbers.
     `next` says what happens next: a live agent waits for its owner to
     authorize it in the app and fund its Hyperliquid account; a practice
-    agent starts on its next tick.
+    agent starts on its next tick. `warnings` is what the agent opens with a
+    warning about, as the preview said (empty from an older server).
     """
 
     _CAMEL: ClassVar[bool] = True
@@ -5526,6 +5533,7 @@ class PerpCreated(Model):
     stop_price: Optional[float] = None
     ticket_figures: Optional[PerpTicket] = None
     fees: Optional[PerpFeeRates] = None
+    warnings: List[str] = field(default_factory=list)
     next: Optional[str] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"ticket_figures": PerpTicket, "fees": PerpFeeRates}
@@ -6067,9 +6075,10 @@ class PerpFleetStop(CopilotFleetSummary):
     """`copilot_tighten_agent_stops(fleet_id, stop_pct)`: the fleet, and in
     `answers` what each agent said (`agent_id`, `name`, `ok`, `sentence`).
 
-    The server sends each agent's answer under the key `agents`, the same
-    key that carries the fleet's agent count; this model reads the list
-    into `answers` and leaves `agents` as `None`.
+    The server sends the list under `answers`, and `agents` stays the
+    fleet's agent count. An older server sent it under `agents`, the key
+    that also carries the count; this model reads either, `answers` first,
+    and leaves `agents` as `None` when it held the list.
     """
 
     answers: List[Dict[str, Any]] = field(default_factory=list)
@@ -6077,10 +6086,16 @@ class PerpFleetStop(CopilotFleetSummary):
     @classmethod
     def from_dict(cls, data: Any) -> "PerpFleetStop":  # type: ignore[override]
         obj = super().from_dict(data)
-        listed = data.get("agents") if isinstance(data, Mapping) else None
+        if not isinstance(data, Mapping):
+            return obj
+        listed = data.get("agents")
         if isinstance(listed, list):
-            obj.answers = list(listed)
             obj.agents = None
+        answers = data.get("answers")
+        if isinstance(answers, list):
+            obj.answers = list(answers)
+        elif isinstance(listed, list):
+            obj.answers = list(listed)
         return obj
 
 

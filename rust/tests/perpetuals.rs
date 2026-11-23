@@ -6,12 +6,12 @@
 use ponk::perpetuals::{self, PerpTrade};
 use ponk::{
     Client, CopilotFleet, Error, PerpAgent, PerpBoard, PerpExitCard, PerpFleetPlan, PerpFleetStop,
-    PerpLedger,
+    PerpLedger, PerpPreview,
 };
 
 const AGENT: &str = "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b";
 const FLEET: &str = "6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b";
-const CAP: &str = "20x is above the 10x most an agent can use. Above 10x a sudden 4% price jump can pass the liquidation price before any stop fills, so pick 10x or less.";
+const WARNING: &str = "Above 10x a sudden 4% price jump can pass the liquidation price before any stop fills.";
 
 fn decode<T: serde::de::DeserializeOwned>(body: &str) -> T {
     serde_json::from_str(body).unwrap()
@@ -67,11 +67,17 @@ fn body_of(raw: &str) -> serde_json::Value {
 }
 
 #[test]
-fn the_cap_sentence_is_the_servers() {
-    assert_eq!(perpetuals::leverage_refusal(20), CAP);
-    assert!(matches!(perpetuals::check_leverage(20), Err(Error::InvalidArgument(s)) if s == CAP));
-    assert!(perpetuals::check_leverage(0).is_err());
+fn leverage_is_not_capped_and_the_warning_is_the_servers() {
+    assert_eq!(perpetuals::HIGH_LEVERAGE_WARNING, WARNING);
+    assert_eq!(perpetuals::HIGH_LEVERAGE_ABOVE, 10);
+    assert_eq!(perpetuals::check_leverage(20).unwrap(), 20);
+    assert_eq!(perpetuals::check_leverage(50).unwrap(), 50);
     assert_eq!(perpetuals::check_leverage(10).unwrap(), 10);
+    assert!(perpetuals::check_leverage(0).is_err());
+    assert!(!perpetuals::needs_confirmation(10));
+    assert!(perpetuals::needs_confirmation(11));
+    assert!(PerpTrade::new("BTC", "long", 25, "500", "3").check().is_ok());
+    assert!(PerpTrade::new("BTC", "long", 0, "500", "3").check().is_err());
     assert!(matches!(PerpTrade::new("BTC", "up", 2, "500", "3").check(), Err(Error::InvalidArgument(s)) if s == "Say long or short."));
     assert_eq!(perpetuals::market_id("kPEPE"), "perp:hyperliquid:kPEPE");
     assert_eq!(perpetuals::market_id("perp:hyperliquid:ETH"), "perp:hyperliquid:ETH");
@@ -79,15 +85,44 @@ fn the_cap_sentence_is_the_servers() {
 }
 
 #[tokio::test]
-async fn above_10x_is_refused_before_a_request() {
+async fn the_shape_is_checked_before_a_request() {
     // Port 9 is never listened on: a request would fail as transport, not
     // as the argument error.
     let c = Client::new("http://127.0.0.1:9", "ponk_live_k").unwrap();
-    let t = PerpTrade::new("BTC", "long", 20, "500", "3");
-    assert!(matches!(c.create_perp_agent(&t).await, Err(Error::InvalidArgument(s)) if s == CAP));
-    assert!(matches!(c.preview_perp_agent(&t).await, Err(Error::InvalidArgument(s)) if s == CAP));
+    let t = PerpTrade::new("BTC", "long", 0, "500", "3");
+    assert!(matches!(c.create_perp_agent(&t).await, Err(Error::InvalidArgument(_))));
+    assert!(matches!(c.preview_perp_agent(&t).await, Err(Error::InvalidArgument(_))));
     assert!(matches!(c.exit_perp_agent(AGENT, false).await, Err(Error::InvalidArgument(_))));
     assert!(matches!(c.close_perp_agent(AGENT, false).await, Err(Error::InvalidArgument(_))));
+}
+
+#[tokio::test]
+async fn above_10x_is_sent_with_the_typed_name() {
+    let (base, h) = one_shot(
+        r#"{"id":"0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b","network":"testnet","practice":false,"ticket":"Long BTC 20x","liquidationPrice":93000.0,"stopPrice":95000.0,
+        "ticketFigures":{"leverage":20,"highLeverage":true},"fees":null,
+        "warnings":["Above 10x a sudden 4% price jump can pass the liquidation price before any stop fills."],"next":"Authorize the agent, then fund its Hyperliquid account."}"#,
+    );
+    let t = PerpTrade::new("BTC", "long", 20, "500", "2").name("BTC 20x").confirmation_text("BTC 20x");
+    let a = Client::new(&base, "ponk_live_k").unwrap().create_perp_agent(&t).await.unwrap();
+    let body = body_of(&h.join().unwrap());
+    assert_eq!(body["leverage"], 20);
+    assert_eq!(body["confirmationText"], "BTC 20x");
+    assert_eq!(a.warnings, vec![WARNING.to_string()]);
+    assert_eq!(a.ticket_figures.unwrap().high_leverage, Some(true));
+}
+
+#[test]
+fn the_preview_carries_warnings_and_an_older_one_none() {
+    let p: PerpPreview = decode(
+        r#"{"ok":true,"network":"testnet","practice":false,"name":"BTC","ticket":{"leverage":20,"highLeverage":true},"fees":null,
+        "needsConfirmation":true,"warnings":["The long side is crowded.","Above 10x a sudden 4% price jump can pass the liquidation price before any stop fills."]}"#,
+    );
+    assert_eq!(p.needs_confirmation, Some(true));
+    assert_eq!(p.warnings.len(), 2);
+    assert_eq!(p.warnings[1], WARNING);
+    let older: PerpPreview = decode(r#"{"ok":true,"name":"BTC","needsConfirmation":false}"#);
+    assert!(older.warnings.is_empty());
 }
 
 #[test]
@@ -220,10 +255,30 @@ fn a_perp_fleet_and_its_plan() {
     assert_eq!(plan.fees_for.as_deref(), Some("api"));
 }
 
+#[test]
+fn agent_stops_read_answers_beside_the_count() {
+    // The newer server names the list `answers`; `agents` stays the count.
+    let s = PerpFleetStop::from_value(serde_json::json!({
+        "id": FLEET, "kind": "perp", "status": "active", "agents": 2, "stop_drawdown_pct": 10.0,
+        "answers": [{"agent_id": "a", "name": "BTC long", "ok": false, "sentence": "The stop is already tighter."}]
+    }))
+    .unwrap();
+    assert_eq!(s.answers[0].sentence.as_deref(), Some("The stop is already tighter."));
+    assert_eq!(s.fleet.agents, Some(2));
+    // Both lists: `answers` is the one read.
+    let s = PerpFleetStop::from_value(serde_json::json!({
+        "id": FLEET, "agents": [{"agent_id": "old"}], "answers": [{"agent_id": "new"}]
+    }))
+    .unwrap();
+    assert_eq!(s.answers.len(), 1);
+    assert_eq!(s.answers[0].agent_id.as_deref(), Some("new"));
+    assert_eq!(s.fleet.agents, None);
+}
+
 #[tokio::test]
-async fn agent_stops_keep_the_answers_list() {
-    // The fleet summary's `agents` count and the answers list share a key;
-    // the list is written last, and that is the one kept.
+async fn agent_stops_keep_the_older_agents_list() {
+    // An older server: the fleet summary's `agents` count and the answers
+    // list share a key; the list is written last, and that is the one kept.
     let (base, h) = one_shot(
         r#"{"id":"6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b","kind":"perp","intent_text":"x","status":"active","agents":2,"stop_drawdown_pct":10.0,
         "agents":[{"agent_id":"a","name":"BTC long","ok":true,"sentence":"Moving the stop at your word on the next tick."}]}"#,
@@ -249,4 +304,11 @@ async fn fleet_pause_and_plan_start() {
     assert_eq!(request_line(&h.join().unwrap()), "POST /copilot/perp/plans/p/start HTTP/1.1");
     assert_eq!(p.state.as_deref(), Some("started"));
     assert_eq!(p.agents[0]["created"], true);
+
+    let (base, h) = one_shot(r#"{"id":"p","kind":"perp","state":"started","fleet_id":"f","agents":[]}"#);
+    let names = std::collections::BTreeMap::from([(0usize, "BTC long".to_string()), (2, "SOL short".to_string())]);
+    Client::new(&base, "ponk_live_k").unwrap().copilot_perp_start_confirmed("p", &names).await.unwrap();
+    let raw = h.join().unwrap();
+    assert_eq!(request_line(&raw), "POST /copilot/perp/plans/p/start HTTP/1.1");
+    assert_eq!(body_of(&raw), serde_json::json!({"confirmations": {"0": "BTC long", "2": "SOL short"}}));
 }

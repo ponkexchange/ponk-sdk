@@ -40,10 +40,7 @@ FLEET = "6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b"
 PLAN = "7a1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b"
 HL = "0x1111111111111111111111111111111111111111"
 
-CAP_SENTENCE = (
-    "20x is above the 10x most an agent can use. Above 10x a sudden 4% price jump can pass "
-    "the liquidation price before any stop fills, so pick 10x or less."
-)
+WARNING = "Above 10x a sudden 4% price jump can pass the liquidation price before any stop fills."
 
 
 def keyless(payload, status=200):
@@ -57,16 +54,27 @@ class TestVersion(unittest.TestCase):
 
 
 class TestHelpers(unittest.TestCase):
-    def test_the_cap_sentence_is_the_servers(self):
-        self.assertEqual(perpetuals.leverage_refusal(20), CAP_SENTENCE)
-        with self.assertRaises(ValueError) as ctx:
-            perpetuals.check_leverage(20)
-        self.assertEqual(str(ctx.exception), CAP_SENTENCE)
+    def test_leverage_is_not_capped_and_the_warning_is_the_servers(self):
+        self.assertEqual(perpetuals.HIGH_LEVERAGE_WARNING, WARNING)
+        self.assertEqual(ponk.HIGH_LEVERAGE_WARNING, WARNING)
+        self.assertEqual(perpetuals.HIGH_LEVERAGE_ABOVE, 10)
+        self.assertFalse(hasattr(perpetuals, "AGENT_MAX_LEVERAGE"))
+        self.assertFalse(hasattr(perpetuals, "leverage_refusal"))
+        self.assertEqual(perpetuals.check_leverage(20), 20)
+        self.assertEqual(perpetuals.check_leverage(50), 50)
         self.assertEqual(perpetuals.check_leverage(10), 10)
         self.assertEqual(perpetuals.check_leverage(3.0), 3)
         for bad in (0, -1, 2.5, "3", True, None):
             with self.assertRaises(ValueError):
                 perpetuals.check_leverage(bad)
+
+    def test_needs_confirmation_above_10x(self):
+        self.assertFalse(perpetuals.needs_confirmation(1))
+        self.assertFalse(perpetuals.needs_confirmation(10))
+        self.assertTrue(perpetuals.needs_confirmation(11))
+        self.assertTrue(perpetuals.needs_confirmation(40))
+        with self.assertRaises(ValueError):
+            perpetuals.needs_confirmation(0)
 
     def test_market_ids(self):
         self.assertEqual(perpetuals.market_id("BTC"), "perp:hyperliquid:BTC")
@@ -219,15 +227,38 @@ class TestCreate(unittest.TestCase):
         self.assertIsNone(a.ticket_figures.take_profit_price)
         self.assertEqual(a.fees.exit_bps, 100)
 
-    def test_above_10x_is_refused_before_sending(self):
+    def test_above_10x_is_sent_with_the_typed_name(self):
+        created = dict(CREATED, warnings=[WARNING + " At 20x the liquidation is 4.6% away."])
+        c, opener = client(created)
+        a = c.create_perp_agent(coin="BTC", direction="long", leverage=20, capital_usd=500, stop_loss_pct=3,
+                                name="BTC 20x", confirmation_text="BTC 20x")
+        self.assertEqual(opener.calls[0]["body"]["leverage"], 20)
+        self.assertEqual(opener.calls[0]["body"]["confirmationText"], "BTC 20x")
+        self.assertTrue(a.warnings[0].startswith(WARNING))
+        c, opener = client({"ok": True, "network": "testnet", "practice": False, "name": "BTC",
+                            "ticket": dict(TICKET, leverage=20, highLeverage=True), "fees": None,
+                            "needsConfirmation": True, "warnings": [WARNING, "The long side is crowded."]})
+        p = c.preview_perp_agent(coin="BTC", direction="long", leverage=20, capital_usd=500, stop_loss_pct=3)
+        self.assertNotIn("confirmationText", opener.calls[0]["body"])
+        self.assertTrue(p.needs_confirmation)
+        self.assertEqual(p.warnings, [WARNING, "The long side is crowded."])
+        self.assertTrue(p.ticket.high_leverage)
+
+    def test_the_shape_is_still_checked_before_sending(self):
         c, opener = client(CREATED)
-        for call in (c.create_perp_agent, c.preview_perp_agent):
-            with self.assertRaises(ValueError) as ctx:
-                call(coin="BTC", direction="long", leverage=20, capital_usd=500, stop_loss_pct=3)
-            self.assertEqual(str(ctx.exception), CAP_SENTENCE)
+        for bad in (0, -3, 2.5):
+            with self.assertRaises(ValueError):
+                c.create_perp_agent(coin="BTC", direction="long", leverage=bad, capital_usd=500, stop_loss_pct=3)
         with self.assertRaises(ValueError):
             c.create_perp_agent(coin="BTC", direction="sideways", leverage=2, capital_usd=500, stop_loss_pct=3)
         self.assertEqual(opener.calls, [])
+
+    def test_an_unacknowledged_high_leverage_is_the_servers_sentence(self):
+        msg = WARNING + " To go ahead at 25x, type the agent's name (BTC) to confirm."
+        c, _ = client({"error": {"code": "unprocessable", "request_id": "r", "message": msg}}, status=422)
+        with self.assertRaises(PonkUnprocessableError) as ctx:
+            c.create_perp_agent(coin="BTC", direction="long", leverage=25, capital_usd=500, stop_loss_pct=3)
+        self.assertIn("type the agent's name (BTC)", str(ctx.exception))
 
     def test_a_refused_ticket_is_the_servers_sentence(self):
         body = {"error": {"code": "unprocessable", "request_id": "r",
@@ -247,6 +278,8 @@ class TestCreate(unittest.TestCase):
         self.assertTrue(p.ok)
         self.assertIsNone(p.fees)
         self.assertEqual(p.ticket.size, 0.01546)
+        # An older server sends no warnings: the list is empty.
+        self.assertEqual(p.warnings, [])
         c, _ = client({"ok": False, "sentence": "The liquidation sits too close to the stop."})
         p = c.preview_perp_agent(coin="BTC", direction="long", leverage=3, capital_usd=500, stop_loss_pct=3)
         self.assertFalse(p.ok)
@@ -442,6 +475,11 @@ class TestCopilot(unittest.TestCase):
         self.assertEqual((p.state, p.fleet_id), ("started", FLEET))
         self.assertTrue(p.agents[0]["created"])
 
+    def test_start_sends_the_typed_names_by_leg_index(self):
+        c, opener = client(dict(PERP_PLAN, state="started", fleet_id=FLEET))
+        c.copilot_perp_start(PLAN, confirmations={0: "BTC long", "1": "SOL short"})
+        self.assertEqual(opener.calls[0]["body"], {"confirmations": {"0": "BTC long", "1": "SOL short"}})
+
     def test_perp_fleet_live(self):
         fleet = {
             "kind": "perp",
@@ -469,10 +507,30 @@ class TestCopilot(unittest.TestCase):
         self.assertIsNone(f.perp.totals.value_usd)
         self.assertEqual(f.perp.funding.to_authorize, 1)
 
-    def test_agent_stops_read_the_answers_list(self):
-        # StopRuleView flattens the fleet summary, whose `agents` is a count,
-        # beside the answers list under the same key: the list is written
-        # last, so a JSON reader keeps the list.
+    def test_agent_stops_read_answers_beside_the_count(self):
+        # The newer server names the list `answers`; `agents` stays the count.
+        payload = {"id": FLEET, "kind": "perp", "intent_text": "x", "status": "active", "agents": 2,
+                   "stop_drawdown_pct": 10.0,
+                   "answers": [{"agent_id": AGENT, "name": "BTC long", "ok": False,
+                                "sentence": "The stop is already tighter."}]}
+        c, _ = client(payload)
+        s = c.copilot_tighten_agent_stops(FLEET, 2.0)
+        self.assertEqual(s.answers[0]["sentence"], "The stop is already tighter.")
+        self.assertEqual(s.agents, 2)
+
+    def test_agent_stops_prefer_answers_when_both_lists_arrive(self):
+        payload = {"id": FLEET, "kind": "perp", "status": "active",
+                   "agents": [{"agent_id": "old", "ok": True}],
+                   "answers": [{"agent_id": "new", "ok": True}]}
+        c, _ = client(payload)
+        s = c.copilot_tighten_agent_stops(FLEET, 2.0)
+        self.assertEqual([a["agent_id"] for a in s.answers], ["new"])
+        self.assertIsNone(s.agents)
+
+    def test_agent_stops_read_the_older_agents_list(self):
+        # An older StopRuleView flattens the fleet summary, whose `agents` is
+        # a count, beside the answers list under the same key: the list is
+        # written last, so a JSON reader keeps the list.
         raw = ('{"id":"%s","kind":"perp","intent_text":"x","status":"active","agents":2,'
                '"stop_drawdown_pct":10.0,"agents":[{"agent_id":"%s","name":"BTC long","ok":true,'
                '"sentence":"Moving the stop at your word on the next tick."}]}' % (FLEET, AGENT))

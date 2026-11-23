@@ -18,25 +18,49 @@ Both clients and the `ponk-cli` crate. Perpetuals agents on Hyperliquid.
   funding, fee transfers, withdrawals), `perp_agent_decisions` and
   `perp_agent_exit_card`.
 - **Typed trades.** `preview_perp_agent` (every gate, creating nothing) and
-  `create_perp_agent`; Rust takes a `perpetuals::PerpTrade`. **No agent runs
-  above 10x**: both clients and the CLI refuse more before sending, with the
-  server's own sentence (`perpetuals.leverage_refusal`,
-  `AGENT_MAX_LEVERAGE`); the server stays authoritative.
+  `create_perp_agent`; Rust takes a `perpetuals::PerpTrade`. Leverage goes up
+  to the market's own maximum on Hyperliquid; the clients check only that it
+  is a whole number, 1 or more, and the server keeps every other gate.
+  **Above 10x the high leverage warning is acknowledged, never refused:**
+  `perpetuals.HIGH_LEVERAGE_WARNING` ("Above 10x a sudden 4% price jump can
+  pass the liquidation price before any stop fills.", also `ponk.HIGH_LEVERAGE_WARNING`
+  in Python), `perpetuals.HIGH_LEVERAGE_ABOVE` (10) and
+  `perpetuals.needs_confirmation(leverage)`; the agent's name, typed by the
+  user after the warning, goes in `confirmation_text` (Python keyword, Rust
+  `PerpTrade::confirmation_text`, sent as `confirmationText`). Without it the
+  server answers 422 with the warning and the name to type.
+- **Warnings.** `PerpPreview.warnings` and `PerpCreated.warnings` (and
+  `PerpSaid` in Python): what the confirm step warns about, never a refusal
+  (a crowded side, a thin market, unknown funding or volume, above 10x).
+  Empty from a server that sends none. `PerpPreview.needs_confirmation` is
+  true above 10x.
 - **Owner actions.** `perp_say` (one sentence: open, close, tighten),
   `close_perp_agent` and `exit_perp_agent` (both need confirm, refused
-  before sending without it), `tighten_perp_stop` (closer only).
+  before sending without it), `tighten_perp_stop` (closer only). An open
+  above 10x through `perp_say` answers the warning first; the same sentence
+  with confirm acknowledges it.
   `pause_agent` and `resume_agent` work on a Perpetuals agent.
 - **Fleets.** `copilot_perp_plan`, `copilot_perp_get_plan`,
-  `copilot_perp_start`; `copilot_tighten_agent_stops` (every agent's own
-  stop), `copilot_pause_fleet` and `copilot_resume_fleet`.
+  `copilot_perp_start` (Python `confirmations={leg_index: typed_name}`, Rust
+  `copilot_perp_start_confirmed(plan_id, &confirmations)`, one per leg above
+  10x); `copilot_tighten_agent_stops` (every agent's own stop, each agent's
+  sentence in `answers`: read from the `answers` key, or from the older
+  `agents` list, `answers` first), `copilot_pause_fleet` and
+  `copilot_resume_fleet`.
   `CopilotFleetSummary.kind`, `CopilotFleet.kind` and `CopilotFleet.perp`
   (every agent's side, leverage, value, PnL, margin usage, liquidation
   distance and close state, with the totals).
 - **CLI.** `ponk perpetuals` (`markets`, `agents`, `agent`, `decisions`,
   `ledger`, `card`, `preview`, `create`, `say`, `close`, `stop`, `exit`,
   `plan`, `start-plan`, `fleet-stop`, `fleet-pause`, `fleet-resume`).
+  `create --confirm-name NAME` and `start-plan --confirm-name INDEX=NAME`
+  acknowledge the warning above 10x; `create` without it prints the warning
+  and the flag and sends nothing. `preview`, `create`, `say` and `plan` print
+  the warnings before the result.
 - Authorizing a Perpetuals agent and funding its Hyperliquid account are
   wallet signatures in the app; neither client nor the CLI offers them.
+  Funding waits for the authorization, which sets the address withdrawals
+  go to.
 
 ## 0.17.0
 

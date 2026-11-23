@@ -3,7 +3,7 @@
 //! and Perpetuals agents on Hyperliquid, read their live positions, PnL and
 //! fees, and move funds home. The EVM chains, venues, CAIP ids and the
 //! fund-and-sign link are in [`evm`]; the Perpetuals vocabulary, the typed
-//! trade and the 10x agent cap are in [`perpetuals`].
+//! trade and the high leverage warning are in [`perpetuals`].
 //!
 //! One method per endpoint, typed results, and no behaviour of its own. It
 //! builds the request, sends it, maps the shared error envelope to
@@ -96,9 +96,11 @@
 //! [`Client::create_perp_agent`] with a [`perpetuals::PerpTrade`] (coin,
 //! `long` or `short`, leverage, the USDC it trades with, a stop that is always
 //! set). The server builds the ticket from live prices and refuses one its
-//! gates refuse, with a sentence. No agent runs above 10x
-//! ([`perpetuals::AGENT_MAX_LEVERAGE`]); this crate refuses more before
-//! sending, in the server's own words. A key creates the agent and can
+//! gates refuse, with a sentence. Leverage goes up to the market's own
+//! maximum; above 10x the server asks for the agent's name, typed after
+//! [`perpetuals::HIGH_LEVERAGE_WARNING`], in
+//! [`perpetuals::PerpTrade::confirmation_text`], and the preview and the new
+//! agent carry what the confirm step warns about in `warnings`. A key creates the agent and can
 //! preview, close, tighten the stop, pause, resume and exit it, but the agent
 //! trades nothing until its owner authorizes it in the app with their wallet
 //! and funds its Hyperliquid account: both are wallet signatures, which a key

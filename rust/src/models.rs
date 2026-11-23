@@ -5294,8 +5294,9 @@ where
 /// funding means longs pay shorts; `change24h_pct` is in percent.
 /// `leverage_tiers` is `[from_notional_usd, max_leverage]` pairs where
 /// leverage falls as size grows, empty when one leverage applies to every
-/// size. An agent never runs above 10x whatever `max_leverage` says
-/// ([`crate::perpetuals::AGENT_MAX_LEVERAGE`]).
+/// size. An agent can run up to `max_leverage`; above 10x the server asks for
+/// the high leverage warning to be acknowledged
+/// ([`crate::perpetuals::HIGH_LEVERAGE_WARNING`]).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PerpMarket {
@@ -5567,7 +5568,11 @@ pub struct PerpFeeRates {
 }
 
 /// Every create gate on live prices, creating nothing. `ok` true carries
-/// `ticket` and `fees`; `ok` false carries `sentence`.
+/// `ticket`, `fees` and `warnings`, what the confirm step warns about, never a
+/// refusal (a crowded side, a thin market, unknown funding or volume, above
+/// 10x); `needs_confirmation` is true above 10x, where create needs
+/// [`crate::perpetuals::PerpTrade::confirmation_text`]. `ok` false carries
+/// `sentence`. An older server sends no `warnings`: the list is empty.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PerpPreview {
@@ -5579,6 +5584,7 @@ pub struct PerpPreview {
     pub ticket: Option<PerpTicket>,
     pub fees: Option<PerpFeeRates>,
     pub needs_confirmation: Option<bool>,
+    pub warnings: Vec<String>,
 }
 
 /// The new agent and its ticket; or, from
@@ -5587,7 +5593,9 @@ pub struct PerpPreview {
 ///
 /// `ticket` is the ticket's sentence and `ticket_figures` its numbers.
 /// `next` says what happens next: a live agent waits for its owner to
-/// authorize it in the app and fund its Hyperliquid account.
+/// authorize it in the app and fund its Hyperliquid account. `warnings` is
+/// what the agent opens with a warning about, as the preview said (empty from
+/// an older server).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PerpCreated {
@@ -5599,6 +5607,7 @@ pub struct PerpCreated {
     pub stop_price: Option<f64>,
     pub ticket_figures: Option<PerpTicket>,
     pub fees: Option<PerpFeeRates>,
+    pub warnings: Vec<String>,
     pub next: Option<String>,
     pub agent_id: Option<String>,
     pub request: Option<String>,
@@ -6081,9 +6090,10 @@ pub struct PerpStopAnswer {
 /// [`Client::copilot_tighten_agent_stops`](crate::Client::copilot_tighten_agent_stops):
 /// the fleet, and what each agent said.
 ///
-/// The server sends each agent's answer under the key `agents`, the same key
-/// that carries the fleet's agent count. This type is decoded from the
-/// answer's JSON object, where the list (written last) is the one kept.
+/// The server sends the list under `answers`, and `agents` stays the fleet's
+/// agent count. An older server sent it under `agents`, the key that also
+/// carries the count (the list, written last, is the one a JSON reader keeps).
+/// Either is read, `answers` first.
 #[derive(Debug, Clone, Default)]
 pub struct PerpFleetStop {
     pub fleet: CopilotFleetSummary,
@@ -6093,18 +6103,27 @@ pub struct PerpFleetStop {
 impl PerpFleetStop {
     /// Read the answer from its decoded JSON.
     pub fn from_value(mut value: serde_json::Value) -> Result<Self, serde_json::Error> {
-        let answers = match value.as_object_mut().and_then(|m| m.remove("agents")) {
-            Some(serde_json::Value::Array(items)) => items
-                .into_iter()
-                .map(serde_json::from_value)
-                .collect::<Result<Vec<PerpStopAnswer>, _>>()?,
-            Some(other) => {
-                if let Some(m) = value.as_object_mut() {
-                    m.insert("agents".into(), other);
-                }
-                Vec::new()
+        let decode = |items: Vec<serde_json::Value>| {
+            items.into_iter().map(serde_json::from_value).collect::<Result<Vec<PerpStopAnswer>, _>>()
+        };
+        let Some(m) = value.as_object_mut() else {
+            return Ok(Self { fleet: serde_json::from_value(value)?, answers: Vec::new() });
+        };
+        let newer = match m.remove("answers") {
+            Some(serde_json::Value::Array(items)) => Some(items),
+            _ => None,
+        };
+        let older = match m.remove("agents") {
+            Some(serde_json::Value::Array(items)) => Some(items),
+            Some(count) => {
+                m.insert("agents".into(), count);
+                None
             }
-            None => Vec::new(),
+            None => None,
+        };
+        let answers = match (newer, older) {
+            (Some(items), _) | (None, Some(items)) => decode(items)?,
+            (None, None) => Vec::new(),
         };
         Ok(Self { fleet: serde_json::from_value(value)?, answers })
     }

@@ -58,7 +58,7 @@ from .evm import (
     wei_to_native,
 )
 from . import perpetuals
-from .perpetuals import AGENT_MAX_LEVERAGE
+from .perpetuals import HIGH_LEVERAGE_WARNING
 from .models import (  # 0.18.0, Perpetuals
     PerpAccount,
     PerpAgent,
@@ -390,7 +390,7 @@ __all__ = [
     "EXIT_FEE_HOLDER_BPS",
     "FARM_REWARD_FEE_BPS",
     "FARM_REWARD_FEE_HOLDER_BPS",
-    "AGENT_MAX_LEVERAGE",
+    "HIGH_LEVERAGE_WARNING",
     "perpetuals",
     "PerpAccount",
     "PerpAgent",

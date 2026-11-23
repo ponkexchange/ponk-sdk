@@ -3109,8 +3109,9 @@ impl Client {
     /// `POST /v1/perp-agents/preview`. Every create gate on live prices,
     /// creating nothing. `ok` true carries the ticket and the rates the
     /// authorization will state; `ok` false the sentence the gates refused
-    /// it with. Leverage above 10 is [`Error::InvalidArgument`] here with the
-    /// server's sentence, before anything is sent.
+    /// it with. `warnings` is what the confirm step warns about and
+    /// `needs_confirmation` is true above 10x, where create needs
+    /// [`crate::perpetuals::PerpTrade::confirmation_text`].
     pub async fn preview_perp_agent(&self, trade: &crate::perpetuals::PerpTrade) -> Result<PerpPreview> {
         trade.check()?;
         self.post("/v1/perp-agents/preview", Some(trade), self.timeout).await
@@ -3119,15 +3120,18 @@ impl Client {
     /// `POST /v1/perp-agents`. Create a typed trade as a Perpetuals agent.
     ///
     /// Build the body with [`crate::perpetuals::PerpTrade`]: the coin, `long`
-    /// or `short` (the agent never reverses it), isolated leverage 1 to 10,
-    /// the USDC it trades with (at least 10) and the stop in percent from
-    /// the entry (required). The ticket is built from live prices first; a
-    /// ticket the gates refuse creates nothing and answers 422 with the
-    /// sentence. Leverage above 10 is [`Error::InvalidArgument`] here with
-    /// the server's own sentence, before anything is sent; a market whose
-    /// Hyperliquid maximum is lower is refused by the server with its own
-    /// figure. Needs a `trade` key; an agent created with a key is on the API
-    /// rates, which `fees` states.
+    /// or `short` (the agent never reverses it), isolated leverage from 1 up
+    /// to the market's own maximum, the USDC it trades with (at least 10) and
+    /// the stop in percent from the entry (required). The ticket is built
+    /// from live prices first; a ticket the gates refuse creates nothing and
+    /// answers 422 with the sentence, as does leverage above the market's
+    /// maximum. ABOVE 10X the warning must be acknowledged: show the user
+    /// [`crate::perpetuals::HIGH_LEVERAGE_WARNING`], have them type the
+    /// agent's name and set it with
+    /// [`crate::perpetuals::PerpTrade::confirmation_text`]; without it the
+    /// server answers 422 with the warning and the name to type. `warnings`
+    /// says what the agent opens with a warning about. Needs a `trade` key;
+    /// an agent created with a key is on the API rates, which `fees` states.
     ///
     /// NOTHING IS SIGNED OR FUNDED BY THIS CALL. The agent trades only once
     /// its owner authorizes it in the app with their wallet and funds its
@@ -3141,7 +3145,9 @@ impl Client {
     /// web, Telegram and the MCP. An open creates an agent (`id` set); a
     /// close (needs `confirm`) or a stop tightening goes to your one running
     /// agent on that market (`request` set). More than one that fits is
-    /// refused with a sentence naming them. Needs a `trade` key.
+    /// refused with a sentence naming them. An open above 10x answers the
+    /// high leverage warning first; the same sentence again with `confirm`
+    /// acknowledges it. Needs a `trade` key.
     pub async fn perp_say(&self, text: &str, confirm: bool) -> Result<PerpCreated> {
         let body = if confirm {
             serde_json::json!({ "text": text, "confirm": true })
@@ -3229,16 +3235,31 @@ impl Client {
     /// MOVES NO MONEY. One agent per planned leg, every gate run again on
     /// fresh prices; the plan comes back `started` with `fleet_id`, `agents`
     /// and `sign_url`, the fleet page where each agent is authorized with its
-    /// own signature and funded with its own transfer. A plan with a leg
-    /// above 10x starts nothing and answers 422 naming the leg. Starts at
-    /// most once. Needs a `trade` key. Takes the fund timeout.
+    /// own signature and funded with its own transfer. Starts at most once.
+    /// A leg above 10x (`needs_confirmation`) needs its agent's name typed by
+    /// the user: use [`Client::copilot_perp_start_confirmed`]; without it the
+    /// start answers 422 naming the leg and nothing is made. Needs a `trade`
+    /// key. Takes the fund timeout.
     pub async fn copilot_perp_start(&self, plan_id: &str) -> Result<PerpFleetPlan> {
-        self.post(
-            &format!("/copilot/perp/plans/{}/start", seg(plan_id)),
-            None::<&()>,
-            self.fund_timeout,
-        )
-        .await
+        self.copilot_perp_start_confirmed(plan_id, &std::collections::BTreeMap::new()).await
+    }
+
+    /// [`Client::copilot_perp_start`] with `confirmations`, leg index to the
+    /// agent's name as the user typed it after
+    /// [`crate::perpetuals::HIGH_LEVERAGE_WARNING`], one per leg above 10x.
+    pub async fn copilot_perp_start_confirmed(
+        &self,
+        plan_id: &str,
+        confirmations: &std::collections::BTreeMap<usize, String>,
+    ) -> Result<PerpFleetPlan> {
+        let path = format!("/copilot/perp/plans/{}/start", seg(plan_id));
+        if confirmations.is_empty() {
+            return self.post(&path, None::<&()>, self.fund_timeout).await;
+        }
+        let by_leg: std::collections::BTreeMap<String, &String> =
+            confirmations.iter().map(|(i, name)| (i.to_string(), name)).collect();
+        let body = serde_json::json!({ "confirmations": by_leg });
+        self.post(&path, Some(&body), self.fund_timeout).await
     }
 
     // -- agents: exit with to-SOL, mandates, copy (0.9.0/0.10.0) -------------

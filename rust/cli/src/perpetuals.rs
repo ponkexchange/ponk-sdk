@@ -42,7 +42,8 @@ pub enum PerpCmd {
     /// "tighten btc stop to 2%".
     Say {
         text: String,
-        /// Required for a close.
+        /// Required for a close, and to acknowledge the high leverage warning
+        /// on an open above 10x.
         #[arg(long)]
         confirm: bool,
     },
@@ -70,7 +71,13 @@ pub enum PerpCmd {
     },
     /// Start a plan as one fleet. Moves no money; prints the page where each
     /// agent is authorized and funded.
-    StartPlan { id: String },
+    StartPlan {
+        id: String,
+        /// Above 10x, a leg's agent name typed after the high leverage
+        /// warning, as INDEX=NAME (e.g. 0="BTC long"). Once per leg above 10x.
+        #[arg(long = "confirm-name", value_name = "INDEX=NAME")]
+        confirm_names: Vec<String>,
+    },
     /// Move every open agent's own stop in a fleet, percent from the price.
     FleetStop { fleet_id: String, pct: f64 },
     /// Pause every agent of a fleet (stops and Liquidation Guard keep running).
@@ -87,7 +94,8 @@ pub struct TradeArgs {
     /// long or short.
     #[arg(long)]
     side: String,
-    /// Isolated leverage, 1 to 10.
+    /// Isolated leverage, 1 up to the market's own maximum. Above 10x the
+    /// high leverage warning is acknowledged with --confirm-name.
     #[arg(long)]
     leverage: u32,
     /// USDC the agent trades with, at least 10.
@@ -104,6 +112,10 @@ pub struct TradeArgs {
     /// Live mainnet prices, a practice balance, nothing sent.
     #[arg(long)]
     practice: bool,
+    /// Above 10x: the agent's name (--name, or the coin), typed after the
+    /// high leverage warning, to acknowledge it.
+    #[arg(long = "confirm-name", value_name = "NAME")]
+    confirm_name: Option<String>,
 }
 
 impl TradeArgs {
@@ -115,7 +127,11 @@ impl TradeArgs {
         if let Some(n) = &self.name {
             t = t.name(n);
         }
-        // The 10x cap in the server's own words, before anything is sent.
+        if let Some(c) = &self.confirm_name {
+            t = t.confirmation_text(c);
+        }
+        // The shape only; every gate, the market's maximum leverage included,
+        // is the server's.
         t.check()?;
         Ok(t)
     }
@@ -136,7 +152,7 @@ pub async fn run(cli: &Cli, cmd: &PerpCmd) -> Result<()> {
         PerpCmd::Stop { id, pct } => stop(cli, id, pct).await,
         PerpCmd::Exit { id, confirm } => exit(cli, id, *confirm).await,
         PerpCmd::Plan { text, practice } => plan(cli, text, *practice).await,
-        PerpCmd::StartPlan { id } => start_plan(cli, id).await,
+        PerpCmd::StartPlan { id, confirm_names } => start_plan(cli, id, confirm_names).await,
         PerpCmd::FleetStop { fleet_id, pct } => fleet_stop(cli, fleet_id, *pct).await,
         PerpCmd::FleetPause { fleet_id } => fleet_batch(cli, fleet_id, true).await,
         PerpCmd::FleetResume { fleet_id } => fleet_batch(cli, fleet_id, false).await,
@@ -198,7 +214,11 @@ async fn markets(cli: &Cli, search: Option<&str>, sort: Option<&str>, limit: u32
             &rows,
         )
     );
-    println!("Agents run at {}x or less, whatever a market allows.", ponk::perpetuals::AGENT_MAX_LEVERAGE);
+    println!(
+        "Agents run up to a market's MAX LEV. Above {}x: {}",
+        ponk::perpetuals::HIGH_LEVERAGE_ABOVE,
+        ponk::perpetuals::HIGH_LEVERAGE_WARNING
+    );
     Ok(())
 }
 
@@ -360,6 +380,29 @@ fn print_ticket(t: &ponk::PerpTicket) {
     println!("loss at stop  {}", usd(t.loss_at_stop_usd));
 }
 
+/// What the confirm step warns about, printed before the result.
+fn print_warnings(warnings: &[String]) {
+    for w in warnings {
+        println!("Warning: {w}");
+    }
+    if !warnings.is_empty() {
+        println!();
+    }
+}
+
+/// Above 10x the leverage needs the typed name; say how, in one line.
+fn confirm_hint(t: &PerpTrade) -> Option<String> {
+    if !ponk::perpetuals::needs_confirmation(t.leverage) || t.confirmation_text.is_some() {
+        return None;
+    }
+    let name = t.name.clone().unwrap_or_else(|| t.coin.trim().to_ascii_uppercase());
+    Some(format!(
+        "{} To go ahead at {}x, type the agent's name: --confirm-name \"{name}\"",
+        ponk::perpetuals::HIGH_LEVERAGE_WARNING,
+        t.leverage
+    ))
+}
+
 fn print_fees(f: Option<&ponk::PerpFeeRates>) {
     if let Some(f) = f {
         let bps = |b: Option<i64>| b.map(|b| format!("{}%", b as f64 / 100.0)).unwrap_or_else(|| DASH.into());
@@ -382,21 +425,33 @@ async fn preview(cli: &Cli, args: &TradeArgs) -> Result<()> {
     if p.ok != Some(true) {
         bail!("{}", dash(p.sentence.as_deref()));
     }
+    print_warnings(&p.warnings);
     if let Some(ticket) = &p.ticket {
         print_ticket(ticket);
     }
     print_fees(p.fees.as_ref());
     println!("\nNothing was created. Create it with ponk perpetuals create and the same flags.");
+    if p.needs_confirmation == Some(true) {
+        if let Some(hint) = confirm_hint(&t) {
+            println!("{hint}");
+        }
+    }
     Ok(())
 }
 
 async fn create(cli: &Cli, args: &TradeArgs) -> Result<()> {
     let t = args.trade()?;
+    // Above 10x without the typed name the server refuses with the warning;
+    // say it here, with the flag, before sending anything.
+    if let Some(hint) = confirm_hint(&t) {
+        bail!("{hint}");
+    }
     let client = client(cli, true)?;
     if cli.json {
         return print_json(&client.post_json("/v1/perp-agents", Some(&serde_json::to_value(&t)?), None).await?);
     }
     let a = client.create_perp_agent(&t).await?;
+    print_warnings(&a.warnings);
     match &a.ticket_figures {
         Some(ticket) => print_ticket(ticket),
         None => println!("{}", dash(a.ticket.as_deref())),
@@ -415,6 +470,7 @@ async fn say(cli: &Cli, text: &str, confirm: bool) -> Result<()> {
     }
     let s = client.perp_say(text, confirm).await?;
     if s.created() {
+        print_warnings(&s.warnings);
         println!("{}", dash(s.ticket.as_deref()));
         print_fees(s.fees.as_ref());
         println!("agent         {}", dash(s.id.as_deref()));
@@ -477,6 +533,12 @@ fn print_plan(p: &ponk::PerpFleetPlan) {
         return;
     }
     println!("{}", dash(p.echo.as_deref()));
+    // What each leg's confirm step warns about, before the plan itself.
+    for l in p.legs.iter().filter(|l| l.refusal.is_none()) {
+        if let Some(n) = l.note.as_deref().filter(|n| !n.is_empty()) {
+            println!("Warning, {}: {n}", dash(l.name.as_deref()));
+        }
+    }
     let rows: Vec<Vec<String>> = p
         .legs
         .iter()
@@ -487,7 +549,11 @@ fn print_plan(p: &ponk::PerpFleetPlan) {
                 l.leverage.map(|v| format!("{v}x")).unwrap_or_else(|| DASH.into()),
                 usd_str(l.capital_usd.as_deref()),
                 pct(l.stop_pct, 1),
-                l.refusal.clone().unwrap_or_else(|| "ready".into()),
+                match (&l.refusal, l.needs_confirmation) {
+                    (Some(r), _) => r.clone(),
+                    (None, Some(true)) => "ready, type the name".into(),
+                    (None, _) => "ready".into(),
+                },
             ]
         })
         .collect();
@@ -520,22 +586,52 @@ async fn plan(cli: &Cli, text: &str, practice: bool) -> Result<()> {
     print_plan(&p);
     if p.can_start == Some(true) {
         if let Some(id) = &p.id {
-            println!("\nNothing was created. Start it with: ponk perpetuals start-plan {id}");
+            let typed: Vec<String> = p
+                .legs
+                .iter()
+                .filter(|l| l.refusal.is_none() && l.needs_confirmation == Some(true))
+                .map(|l| format!(" --confirm-name {}=\"{}\"", opt(l.index), dash(l.name.as_deref())))
+                .collect();
+            if !typed.is_empty() {
+                println!("\n{}", ponk::perpetuals::HIGH_LEVERAGE_WARNING);
+                println!("Above 10x, type each agent's name to confirm.");
+            }
+            println!("\nNothing was created. Start it with: ponk perpetuals start-plan {id}{}", typed.concat());
         }
     }
     Ok(())
 }
 
-async fn start_plan(cli: &Cli, id: &str) -> Result<()> {
+/// `--confirm-name 0="BTC long"` pairs, leg index to the typed name.
+fn confirmations(pairs: &[String]) -> Result<std::collections::BTreeMap<usize, String>> {
+    let mut out = std::collections::BTreeMap::new();
+    for p in pairs {
+        let Some((i, name)) = p.split_once('=') else {
+            bail!("--confirm-name takes INDEX=NAME, like 0=\"BTC long\", got {p:?}");
+        };
+        let Ok(i) = i.trim().parse::<usize>() else {
+            bail!("--confirm-name takes a leg index before the =, like 0=\"BTC long\", got {p:?}");
+        };
+        out.insert(i, name.to_string());
+    }
+    Ok(out)
+}
+
+async fn start_plan(cli: &Cli, id: &str, confirm_names: &[String]) -> Result<()> {
+    let names = confirmations(confirm_names)?;
     let client = client(cli, true)?;
     if cli.json {
+        let body = (!names.is_empty()).then(|| {
+            let by_leg: std::collections::BTreeMap<String, &String> = names.iter().map(|(i, n)| (i.to_string(), n)).collect();
+            serde_json::json!({ "confirmations": by_leg })
+        });
         return print_json(
             &client
-                .post_json(&format!("/copilot/perp/plans/{id}/start"), None, Some(client.fund_timeout()))
+                .post_json(&format!("/copilot/perp/plans/{id}/start"), body.as_ref(), Some(client.fund_timeout()))
                 .await?,
         );
     }
-    print_plan(&client.copilot_perp_start(id).await?);
+    print_plan(&client.copilot_perp_start_confirmed(id, &names).await?);
     Ok(())
 }
 

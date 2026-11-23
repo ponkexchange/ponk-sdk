@@ -94,18 +94,26 @@ Perpetuals agents on Hyperliquid (`ponk perpetuals ...`; `markets` and
 ponk perpetuals markets [--search bt] [--sort volume|oi|change|funding|leverage] [--limit 25]
 ponk perpetuals preview --coin BTC --side long --leverage 3 --capital 500 --stop 3 [--tp 10] [--practice]
 ponk perpetuals create  --coin BTC --side long --leverage 3 --capital 500 --stop 3 [--tp 10] [--name n] [--practice]
+ponk perpetuals create  --coin BTC --side long --leverage 20 --capital 200 --stop 2 --name "BTC 20x" --confirm-name "BTC 20x"
 ponk perpetuals agents / agent <id> / decisions <id> / ledger <id> / card <id>
 ponk perpetuals say "long btc 3x 500 stop 3" | "close my sol short" --confirm | "tighten btc stop to 2%"
 ponk perpetuals close <id> --confirm   close the position; funds stay on the agent's account
 ponk perpetuals stop <id> 2            move the stop to 2% from the price, closer only
 ponk perpetuals exit <id> --confirm    close, settle, withdraw to the proven address
 ponk perpetuals plan "put $1,000 across 2 Perpetuals agents, long BTC, short SOL" [--practice]
-ponk perpetuals start-plan <plan id>   one agent per leg; moves no money
+ponk perpetuals start-plan <plan id> [--confirm-name 0="BTC long"]   one agent per leg; moves no money
 ponk perpetuals fleet-stop <fleet id> 2 / fleet-pause <fleet id> / fleet-resume <fleet id>
 ```
 
-No agent runs above 10x: `--leverage` above 10 is refused before anything is
-sent, with the server's sentence. `ponk pause` and `ponk resume` work on a
+`--leverage` goes up to the market's own maximum (`MAX LEV` on `ponk
+perpetuals markets`). Above 10x the high leverage warning ("Above 10x a sudden
+4% price jump can pass the liquidation price before any stop fills.") is
+acknowledged by typing the agent's name with `--confirm-name` (the `--name`
+given, or the coin); without it `create` prints the warning and the flag to
+add, and sends nothing. On a fleet, `start-plan` takes one
+`--confirm-name INDEX=NAME` per leg above 10x, as `plan` prints. `preview`,
+`create`, `say` and `plan` print what the confirm step warns about (a crowded
+side, a thin market, above 10x) before the result. `ponk pause` and `ponk resume` work on a
 Perpetuals agent too. Authorizing the agent and funding its Hyperliquid
 account are wallet signatures in the app; the CLI never signs.
 
