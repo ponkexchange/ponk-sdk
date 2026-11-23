@@ -699,11 +699,11 @@ class PonkPerks(Model):
     managed_agent_fee: Optional[FeeRates] = None
     api_agent_fee: Optional[FeeRates] = None
     non_custodial_agent_fee: Optional[FeeRates] = None
-    #: The one-time activation fee on an agent's first open: 1%, or 0.5% for
-    #: a wallet holding 1,000,000 $PONK.
+    #: The one-time activation fee on an agent's first open, lower for a
+    #: wallet holding $PONK.
     activation_fee: Optional[FeeRates] = None
     #: The exit fee on what an agent that has opened a position sends its
-    #: owner, of the amount withdrawn: 1%, or 0.5% for a holder. An agent that
+    #: owner, of the amount withdrawn, lower for a holder. An agent that
     #: never opened a position pays none.
     exit_fee: Optional[FeeRates] = None
 
@@ -755,11 +755,11 @@ class Agent(Model):
     app). `origin` is `web` or `api`, and it prices the agent:
     `managed_fee_bps` is the performance fee this agent's managed skim
     actually charges, before any $PONK holder discount, and
-    `activation_fee_bps` the one-time fee on its first open: 1500 and 150 for
-    an agent a key created. `exit_fee_bps` is the exit fee on what the agent
-    sends you once it has opened a position, in basis points of the amount
-    withdrawn, before the $PONK holder rate: 100 (1%; 50 for a wallet holding
-    1,000,000 PONK), on agents created in the app and through the API alike.
+    `activation_fee_bps` the one-time fee on its first open; an agent a key
+    created carries the API rates. `exit_fee_bps` is the exit fee on what the
+    agent sends you once it has opened a position, in basis points of the
+    amount withdrawn, before the $PONK holder rate, on agents created in the
+    app and through the API alike.
     It is 0 for a non-managed agent, and an agent that never opened a
     position pays nothing whatever this says.
 
@@ -1364,7 +1364,7 @@ class ExitSwapLeg(Model):
     """One leftover token of an exit-to-SOL liquidation.
 
     `outcome` is `swapped` (sold to SOL; `signature`, `sol_out_lamports` and
-    `fee_lamports` are set, the fee being ponk's 0.2%), `kept` (sent as it is;
+    `fee_lamports` are set, the fee being ponk's swap fee), `kept` (sent as it is;
     `reason` says why) or `outcome_unknown` (sent but not confirmed in time;
     never retried, `signature` names it).
     """
@@ -1415,8 +1415,8 @@ class Withdrawal(Model):
     in plain words. `lamports` is 0.
 
     THE EXIT FEE. A withdrawal or an exit from an agent that has opened a
-    position pays 1% of what leaves (0.5% for a wallet holding 1,000,000
-    PONK), taken in kind and sent to the treasury in the same run. On an EVM
+    position pays an exit fee on what leaves (lower for a wallet holding
+    $PONK), taken in kind and sent to the treasury in the same run. On an EVM
     agent `exit_fees` lists what the fee took, one entry per asset in base
     units (what you did NOT receive; empty when none was taken), and
     `exit_fee_bps` the rate the call ran under, `None` when it took none.
@@ -1452,7 +1452,7 @@ class ExitToSol(Model):
 
     `exit_to_sol` true (the default): the agent's exits, the ones you start
     and the ones its own stops trigger, swap leftover tokens to SOL with
-    ponk's 0.2% swap fee. False: tokens are kept as they are. `fee_line` is
+    ponk's swap fee. False: tokens are kept as they are. `fee_line` is
     the sentence every exit confirm shows.
     """
 
@@ -1727,9 +1727,8 @@ class Referral(Model):
     signature that did not verify) are three different facts. Never add them.
 
     `share_bps` is your share of ponk's platform fee on the agent yield of
-    the people you referred: a flat 1000 (10%), paid inside the fee
-    transaction itself, plus 0.25% of the capital on an agent's first open
-    out of the activation fee. Swaps and Telegram trades earn no referral
+    the people you referred, paid inside the fee transaction itself, plus a
+    share of the activation fee on an agent's first open. Swaps and Telegram trades earn no referral
     share. `tier` and `programme` are no longer sent (the ladder ended with
     the flat rate) and read `None`.
     """
@@ -1929,7 +1928,7 @@ class AgentsActivity(Model):
 @dataclass
 class WeekPrize(Model):
     """A weekly prize: the agent fee rate for the following week (`fee_rate_pct`,
-    2.0 means 2%) plus points."""
+    in percent) plus points."""
 
     rank: Optional[int] = None
     fee_rate_pct: Optional[float] = None
@@ -4587,12 +4586,12 @@ class EvmOpenCost(Model):
     not be read, never an estimate.
 
     The fee rates are in basis points and are the ones an agent THIS CALLER
-    creates pays: with an API key 150 (1.5% of the first open, once) and 1500
-    (15% of fees earned); the keyless public route states the rates of an
-    agent created on ponk.exchange, 100 and 800. `exit_fee_bps` is the exit
-    fee on what an agent that has opened a position sends its owner: 100
-    (1% of the amount withdrawn, taken in kind), 50 for a wallet holding
-    1,000,000 PONK when it withdraws, 0 while the fee is switched off.
+    creates pays: with an API key the API activation rate (on the first open,
+    once) and performance rate (on fees earned); the keyless public route
+    states the rates of an agent created on ponk.exchange. `exit_fee_bps` is
+    the exit fee on what an agent that has opened a position sends its owner,
+    of the amount withdrawn, taken in kind, lower for a wallet holding $PONK
+    when it withdraws, 0 while the fee is switched off.
     `exit_yield_fee_bps` is the rate an exit takes on unclaimed yield (the
     performance rate when that switch is on, else 0) and `exit_swap_fee_bps`
     the swap fee on an exit's swaps.

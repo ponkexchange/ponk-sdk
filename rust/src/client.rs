@@ -2609,8 +2609,8 @@ impl Client {
     ///
     /// The measured gas of the first open at the live fee, the reserve kept
     /// back for the exit, the least the agent wallet must hold, and ponk's
-    /// two fee rates as an API key pays them: 1.5% of the first open, once,
-    /// and 15% of fees earned. `stake` defaults to true on the server where
+    /// two fee rates as an API key pays them: the activation fee on the first
+    /// open, once, and the performance fee on fees earned. `stake` defaults to true on the server where
     /// the venue has a farm, because a staked open costs more gas. A venue
     /// that does not run on `chain` answers 422. Needs a key; see
     /// [`Client::evm_open_cost_public`] for the keyless quote.
@@ -2625,8 +2625,8 @@ impl Client {
     }
 
     /// `GET /public/evm/{chain}/open-cost`. The same quote with no key. Its
-    /// two fee rates are those of an agent created on ponk.exchange (1% and
-    /// 8%), not of one this crate creates.
+    /// two fee rates are those of an agent created on ponk.exchange, not of one
+    /// this crate creates.
     pub async fn evm_open_cost_public(
         &self,
         chain: &str,
@@ -2664,9 +2664,9 @@ impl Client {
     /// agent opens its own position, so `position_address` is refused here
     /// before anything is sent.
     ///
-    /// An agent created here pays the API rates for its whole life: 1.5% of
-    /// its first open, once, and 15% of the fees it earns
-    /// ([`Agent::activation_fee_bps`], [`Agent::managed_fee_bps`]).
+    /// An agent created here pays the API rates for its whole life: an
+    /// activation fee on its first open, once, and a performance fee on the
+    /// fees it earns ([`Agent::activation_fee_bps`], [`Agent::managed_fee_bps`]).
     ///
     /// NOTHING IS FUNDED OR SIGNED BY THIS CALL. The agent acts only after
     /// you sign its mandate with your own wallets on ponk.exchange (two
@@ -3321,7 +3321,7 @@ impl Client {
     /// `POST /v1/agents/{id}/exit`. The full stop, with the exit-to-SOL choice.
     ///
     /// Like [`exit`], but `to_sol` sets whether the closed position's leftover
-    /// tokens are swapped to SOL before the sweep (ponk fee 0.2% of the swapped
+    /// tokens are swapped to SOL before the sweep (a ponk fee on the swapped
     /// amount). `Some(false)` sends them as they are, no swap, no fee; `None`
     /// lets the agent's own `exit_to_sol` setting decide (default true). Read
     /// the result like [`exit`]: a mandate denial is a 200 with a failed status

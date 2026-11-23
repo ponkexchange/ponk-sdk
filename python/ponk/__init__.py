@@ -12,22 +12,22 @@ list. Standard library only.
 from ._version import __version__
 
 #: The one-time activation fee on an agent's first open, in basis points of
-#: the capital it opens with: 1%, or 0.5% for a wallet holding 1,000,000 $PONK.
+#: the capital it opens with, lower for a wallet holding $PONK.
 #: Read the live rate for a wallet with `PonkClient.ponk_perks(...).activation_fee`.
 ACTIVATION_FEE_BPS = 100
 ACTIVATION_FEE_HOLDER_BPS = 50
-#: The referrer's share of an activation: 0.25% of the capital, paid in the
+#: The referrer's share of an activation, in basis points of the capital, paid in the
 #: opening transaction out of the fee (the user pays the same either way).
 ACTIVATION_REFERRER_BPS = 25
 #: The same two rates for an agent created with an API key (this client, the
-#: Rust crate, the CLI, an MCP connector): 1.5%, or 0.75% for a holder. Such
-#: an agent pays 15% of the fees it earns, against 8% for one created on
-#: ponk.exchange. `Agent.activation_fee_bps` and `Agent.managed_fee_bps` state
+#: Rust crate, the CLI, an MCP connector), lower for a holder. Such an agent
+#: also pays the API performance fee on the fees it earns, not the rate of one
+#: created on ponk.exchange. `Agent.activation_fee_bps` and `Agent.managed_fee_bps` state
 #: the rates of one agent; `PonkClient.evm_open_cost` states them before a create.
 ACTIVATION_FEE_API_BPS = 150
 ACTIVATION_FEE_API_HOLDER_BPS = 75
 #: The exit fee, in basis points of what leaves an agent that has opened a
-#: position: 1%, or 0.5% for a wallet holding 1,000,000 $PONK, taken in kind
+#: position, lower for a wallet holding $PONK, taken in kind
 #: on every withdrawal and exit, on every chain, for agents created in the
 #: app and through the API alike. An agent that never opened a position pays
 #: none. `Agent.exit_fee_bps` and `PonkClient.ponk_perks(...).exit_fee` state
@@ -36,8 +36,8 @@ EXIT_FEE_BPS = 100
 EXIT_FEE_HOLDER_BPS = 50
 #: The farming reward fee, in basis points of a farm emission an agent
 #: harvests or claims (CAKE, AERO, Meteora DAMM v2 pool rewards, and Orca and
-#: Raydium emissions paid in a mint that is not a pool leg): 10%, or 9% for a
-#: wallet holding 1,000,000 $PONK. Swap-fee yield keeps its own rate.
+#: Raydium emissions paid in a mint that is not a pool leg), lower for a
+#: wallet holding $PONK. Swap-fee yield keeps its own rate.
 FARM_REWARD_FEE_BPS = 1000
 FARM_REWARD_FEE_HOLDER_BPS = 900
 from . import evm

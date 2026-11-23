@@ -337,7 +337,7 @@ class PonkClient:
             copilot methods use it when present, otherwise the API key: a
             read-scope key can parse, plan, replay and read fleets, a
             trade-scope key can also start and stop them. Fleets started with
-            a key pay the API fee (15%); a wallet session pays the web fee.
+            a key pay the API fee; a wallet session pays the web fee.
         base_url: defaults to production. Point it elsewhere to test.
         timeout: seconds for read and control calls.
         fund_timeout: seconds for compound, withdraw and exit.
@@ -1264,7 +1264,7 @@ class PonkClient:
 
         Earned, owed and unproven are separate facts; never add them.
         `share_bps` is your share of ponk's platform fee on the people you
-        referred: a flat 10%, paid in the fee transaction itself.
+        referred, paid in the fee transaction itself.
         """
         return Referral.from_dict(self._request("GET", "/v1/referral"))
 
@@ -1771,7 +1771,7 @@ class PonkClient:
         than double-sending.
 
         `to_sol=True` swaps the closed position's leftover tokens to SOL before
-        the sweep (ponk fee 0.2% of the swapped amount); `to_sol=False` sends
+        the sweep (a ponk fee on the swapped amount); `to_sol=False` sends
         them as they are, no swap, no fee. Omitted, the agent's own
         `exit_to_sol` setting decides, and it defaults to True. A token that
         cannot be swapped is sent as it is; `Withdrawal.exit_notes` says why.
@@ -2144,18 +2144,18 @@ class PonkClient:
         The measured gas of the first open at the live fee, the reserve kept
         back for the exit, the least the agent wallet must hold, and ponk's
         two fee rates. With an API key this reads the `/v1` route, which
-        states the rates an agent YOU create pays (1.5% of the first open,
-        once, and 15% of fees earned). Without a key, or with `public=True`,
-        it reads `GET /public/evm/{chain}/open-cost`, which states the rates
-        of an agent created on ponk.exchange (1% and 8%).
+        states the rates an agent YOU create pays (an activation fee on the
+        first open, once, and a performance fee on fees earned). Without a
+        key, or with `public=True`, it reads `GET /public/evm/{chain}/open-cost`,
+        which states the rates of an agent created on ponk.exchange.
 
         `stake` defaults to true on the server where the venue has a farm,
         because a staked open costs more gas. A venue that does not run on
         `chain` raises `PonkUnprocessableError`.
 
-        `exit_fee_bps` is the exit fee: 100 (1% of what an agent that has
-        opened a position sends you, taken in kind), 50 for a wallet holding
-        1,000,000 PONK, 0 while the fee is switched off.
+        `exit_fee_bps` is the exit fee on what an agent that has opened a
+        position sends you, taken in kind, lower for a wallet holding $PONK,
+        0 while the fee is switched off.
 
         A SHAPE QUOTE: `shape` (one of `ponk.evm.SHAPES`), with `ranges`
         (`"auto"` or 1 to 7), `amount_usd` (the deposit), `range_pct`
@@ -2260,9 +2260,9 @@ class PonkClient:
         binds it.
 
         `dry_run` is required, as on `create_agent`. An agent created here
-        pays the API rates for its whole life: 1.5% of its first open, once,
-        and 15% of the fees it earns (`Agent.activation_fee_bps`,
-        `Agent.managed_fee_bps`).
+        pays the API rates for its whole life: an activation fee on its first
+        open, once, and a performance fee on the fees it earns
+        (`Agent.activation_fee_bps`, `Agent.managed_fee_bps`).
 
         NOTHING IS FUNDED OR SIGNED BY THIS CALL. The agent acts only after
         you sign its mandate with your own wallets on ponk.exchange (two

@@ -284,9 +284,10 @@ ponk.exchange. `fund_link(agent_id, chain=...)` and `fund_links([...])` build
 that page's link, 40 agents to a link; this client reads the mandate's status
 and never signs. Revoking a mandate and the exit card are on ponk.exchange too.
 
-An agent created with a key pays 1.5% of its first open, once, and 15% of the
-fees it earns (0.75% and 13.5% for a wallet holding 1,000,000 $PONK), and 1%
-of what it sends you once it has opened a position (0.5% for a holder).
+An agent created with a key pays the API rates: a one-time activation fee on
+its first open, a performance fee on the fees it earns, and an exit fee on what
+it sends you once it has opened a position, each lower for a wallet holding
+$PONK. The exact figures are shown at the confirm step;
 `agent.activation_fee_bps`, `agent.managed_fee_bps`, `agent.exit_fee_bps` and
 `evm_open_cost` state the rates for you; `withdraw` and `exit_agent` list what
 the exit fee took in `exit_fees`.
@@ -702,17 +703,17 @@ confirmation, so they can take a minute. They get their own timeout,
 ## Fees
 
 Autonomous agents charge a performance fee on realized yield, and a one-time
-activation fee of 1% of the capital of an agent's first open (0.5% for a wallet
-holding 1,000,000 $PONK), paid inside the transaction that opens it: a failed
-open pays nothing, and recenters, re-opens, compounds and top-ups never pay it
-again. A referrer earns 0.25% of that capital out of the fee. A withdrawal or
-an exit from an agent that has opened a position pays an exit fee of 1% of
-what leaves (0.5% for a wallet holding 1,000,000 $PONK), taken in kind in the
-same run, on every chain, for agents created in the app and through the API
+activation fee on the capital of an agent's first open (lower for a wallet
+holding $PONK), paid inside the transaction that opens it: a failed open pays
+nothing, and recenters, re-opens, compounds and top-ups never pay it again. A
+referrer earns a share of it out of the fee. A withdrawal or an exit from an
+agent that has opened a position pays an exit fee on what leaves (lower for a
+wallet holding $PONK), taken in kind in the same run, on every chain, for agents created in the app and through the API
 alike; an agent that never opened a position pays none
 (`ponk.EXIT_FEE_BPS`, `ponk.EXIT_FEE_HOLDER_BPS`, `agent.exit_fee_bps`,
 `perks.exit_fee`). There is no charge for a key, for a call or for
-depositing.
+depositing. The exact rates are shown at the confirm step and returned by the
+fields above; read them there rather than from this page.
 
 **An agent created through this API pays the API rate, not the app rate.** The
 rate is fixed when the agent is created and follows that agent for its whole
@@ -881,7 +882,7 @@ one past window beside holding, not a forecast.
   `FollowState.following_count` and `viewer`; `LeaderboardRow.spark_from`
   and `spark_until`; the copilot's risk words (`steady`, `balanced`,
   `aggressive`) and the `skipped` pools on a refusal;
-  `Referral.share_bps` (a flat 10%).
+  `Referral.share_bps`.
 
 ## Changes in 0.11.0
 
@@ -998,8 +999,9 @@ cannot produce a wallet signature, so these stay behind a wallet sign-in.
   `wallets_status`, and `wallet_activity(address)` for any wallet.
 * **Referral tiers:** `referral()` now carries `tier` (`current`,
   `share_bps`, `referred_fees_usd`, `window_days`, `next`) and `programme`
-  (`ladder`, `window_days`). One level only: 20%, 25% from $1,000 and 30% from
-  $5,000 of referred platform fees over 30 days.
+  (`ladder`, `window_days`). One level only: the share steps up with the
+  referred platform fees over 30 days, and `programme.ladder` states each
+  step.
 * The tracker and weekly race responses are camelCase on the wire; the models
   expose snake_case attributes (`accounts_1h` reads `accounts1h`).
 * `PublicLink.path` is documented as `/ponkillionaires/<slug>`, the path the

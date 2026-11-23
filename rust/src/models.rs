@@ -144,10 +144,10 @@ pub struct PonkPerks {
     pub managed_agent_fee: Option<FeeRates>,
     pub api_agent_fee: Option<FeeRates>,
     pub non_custodial_agent_fee: Option<FeeRates>,
-    /// The one-time fee on an agent's first open: 1%, 0.5% for a holder.
+    /// The one-time fee on an agent's first open, lower for a holder.
     pub activation_fee: Option<FeeRates>,
     /// The exit fee on what an agent that has opened a position sends its
-    /// owner, of the amount withdrawn: 1%, 0.5% for a holder. An agent that
+    /// owner, of the amount withdrawn, lower for a holder. An agent that
     /// never opened a position pays none.
     pub exit_fee: Option<FeeRates>,
 }
@@ -206,15 +206,14 @@ pub struct Agent {
     /// non-managed agent, which pays a per-action platform fee instead.
     pub managed_fee_bps: Option<u16>,
     /// The one-time activation fee the agent's FIRST open pays, in basis
-    /// points of that open's capital. Zero for a non-managed agent. 150 (and
-    /// `managed_fee_bps` 1500) for an agent a key created.
+    /// points of that open's capital. Zero for a non-managed agent. An agent a
+    /// key created carries the API rates here and in `managed_fee_bps`.
     pub activation_fee_bps: Option<u16>,
     /// The exit fee on what the agent sends its owner once it has opened a
     /// position, in basis points of the amount withdrawn, before the $PONK
-    /// holder rate: 100 (1%; 50 for a wallet holding 1,000,000 PONK), on
-    /// agents created in the app and through the API alike. Zero for a
-    /// non-managed agent. An agent that never opened a position pays nothing
-    /// whatever this says.
+    /// holder rate, on agents created in the app and through the API alike.
+    /// Zero for a non-managed agent. An agent that never opened a position
+    /// pays nothing whatever this says.
     pub exit_fee_bps: Option<u16>,
     /// What the agent is WAITING on (funds, or an authorization), when an
     /// action was refused for a reason only an external event can change.
@@ -1361,15 +1360,15 @@ pub struct EvmOpenCost {
     /// The gas coin's price in USD, a decimal string.
     pub native_usd: Option<String>,
     /// Basis points of the first open, once. The rate an agent THIS CALLER
-    /// creates pays: 150 with an API key; the keyless public route states
-    /// 100, the rate of an agent created on ponk.exchange.
+    /// creates pays: the API rate with an API key; the keyless public route
+    /// states the rate of an agent created on ponk.exchange.
     pub activation_fee_bps: Option<u16>,
-    /// Basis points of the fees the agent earns: 1500 with an API key, 800
-    /// on the public route.
+    /// Basis points of the fees the agent earns: the API rate with an API
+    /// key, the ponk.exchange rate on the public route.
     pub performance_fee_bps: Option<u16>,
     /// The exit fee on what an agent that has opened a position sends its
-    /// owner: 100 (1% of the amount withdrawn, taken in kind), 50 for a
-    /// wallet holding 1,000,000 PONK when it withdraws, 0 while the fee is
+    /// owner, in basis points of the amount withdrawn, taken in kind, lower
+    /// for a wallet holding $PONK when it withdraws, 0 while the fee is
     /// switched off.
     pub exit_fee_bps: Option<u16>,
     /// The rate an exit takes on unclaimed yield: the performance rate when
@@ -2085,7 +2084,7 @@ pub struct Referral {
     pub accrued_unpaid_events: Option<i64>,
     pub operator: Option<bool>,
     /// Your share of ponk's platform fee on the agent yield of the people you
-    /// referred, bps: a flat 1000 (10%), paid inside the fee transaction.
+    /// referred, in bps, paid inside the fee transaction.
     pub share_bps: Option<u16>,
     /// No longer sent since the flat rate; reads `None`.
     pub tier: Option<ReferralTier>,
@@ -2222,7 +2221,7 @@ pub struct AgentsActivity {
 // -- weekly Ponkillionaires --------------------------------------------------
 
 /// A weekly prize: the agent fee rate for the following week
-/// (`fee_rate_pct`, 2.0 means 2%) plus points.
+/// (`fee_rate_pct`, in percent) plus points.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WeekPrize {
@@ -3987,7 +3986,7 @@ pub struct Mandates {
 ///
 /// `exit_to_sol` true (the default): the agent's exits, the ones you start and
 /// the ones its own stops trigger, swap leftover tokens to SOL with ponk's
-/// 0.2% swap fee. False: tokens are kept as they are. `fee_line` is the
+/// swap fee. False: tokens are kept as they are. `fee_line` is the
 /// sentence every exit confirm shows.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]

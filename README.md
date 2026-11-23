@@ -289,16 +289,17 @@ copilot fleet, so `copilot_fleet`, `copilot_stop_fleet` and
 
 ### Fees for an agent created with a key
 
-An agent created through these clients, the CLI or any API key pays **1.5% of
-its first open, once, and 15% of the fees it earns**, taken as fees are
-claimed, compounded or recentered. A wallet holding 1,000,000 $PONK pays 0.75%
-and 13.5%. (An agent created on ponk.exchange pays 1% and 8%.) A withdrawal or
-an exit from an agent that has opened a position pays an exit fee of 1% of
-what leaves, 0.5% for a wallet holding 1,000,000 $PONK, taken in kind on every
-chain; an agent that never opened a position pays none. Every answer states
-the rate it applies: `Agent.activation_fee_bps`, `Agent.managed_fee_bps` and
-`Agent.exit_fee_bps` on a create, `evm_open_cost` before one, `fees` on a
-plan, and `exit_fees` with `exit_fee_bps` on an EVM withdrawal or exit. Gas is
+An agent created through these clients, the CLI or any API key pays **a
+one-time activation fee on its first open and a performance fee on the fees it
+earns**, taken as fees are claimed, compounded or recentered. It pays the API
+rate, which is not the rate of an agent created on ponk.exchange, and a wallet
+holding $PONK pays less on both. A withdrawal or an exit from an agent that has
+opened a position pays an exit fee on what leaves, taken in kind on every
+chain; an agent that never opened a position pays none. The exact figures are
+shown at the confirm step and returned by the API, never hardcode them:
+`Agent.activation_fee_bps`, `Agent.managed_fee_bps` and `Agent.exit_fee_bps`
+on a create, `evm_open_cost` before one, `fees` on a plan, and `exit_fees`
+with `exit_fee_bps` on an EVM withdrawal or exit. Gas is
 paid from the agent's own wallet.
 
 ### Done on ponk.exchange
@@ -430,9 +431,9 @@ signed in the app, or off. It cannot create a mandate. `agent_mandate` reads
 that mandate's expiry, which is the thing to watch: a lapsed mandate stops the
 agent signing without any error.
 
-`referral()` carries your referral share: `share_bps`, a flat 10% of ponk's
-platform fee on the agent yield of the people you referred, plus 0.25% of the
-capital on each of their agents' first open, both paid inside the fee
+`referral()` carries your referral share: `share_bps`, your share of ponk's
+platform fee on the agent yield of the people you referred, plus a share of the
+activation fee on each of their agents' first open, both paid inside the fee
 transaction itself and never added to what they pay.
 
 ## Run a fleet

@@ -221,9 +221,10 @@ let q = OpenCostQuery { shape: Some("curve".into()), amount_usd: Some(1000.0), .
 let cost = ponk.evm_open_cost_with("arbitrum", &q).await?;
 ```
 
-An agent created with a key pays 1.5% of its first open, once, and 15% of the
-fees it earns (0.75% and 13.5% for a wallet holding 1,000,000 $PONK), and 1%
-of what it sends you once it has opened a position (0.5% for a holder).
+An agent created with a key pays the API rates: a one-time activation fee on
+its first open, a performance fee on the fees it earns, and an exit fee on what
+it sends you once it has opened a position, each lower for a wallet holding
+$PONK. The exact figures are shown at the confirm step;
 `Agent::activation_fee_bps`, `Agent::managed_fee_bps`, `Agent::exit_fee_bps`
 and `evm_open_cost` state the rates for you; `withdraw` and `exit_agent` list
 what the exit fee took in `exit_fees`.
@@ -715,11 +716,12 @@ let ponk = ponk::Client::builder(ponk::DEFAULT_BASE_URL)
 Autonomous agents charge a performance fee on realized yield; no fee is taken
 on an unrealized gain. An agent's first open pays a one-time activation fee,
 and a withdrawal or an exit from an agent that has opened a position pays an
-exit fee of 1% of what leaves (0.5% for a wallet holding 1,000,000 $PONK),
-taken in kind on every chain; an agent that never opened a position pays
+exit fee on what leaves (lower for a wallet holding $PONK), taken in kind on
+every chain; an agent that never opened a position pays
 none. `Agent::exit_fee_bps`, `PonkPerks::exit_fee` and, on an EVM withdrawal
 or exit, `Withdrawal::exit_fees` state it. There is no charge for a key, for
-a call or for depositing.
+a call or for depositing. The exact rates are shown at the confirm step and
+returned by those fields; read them there rather than from this page.
 
 **An agent created through this API pays the API rate, not the app rate.** The
 rate is fixed when the agent is created and follows that agent for its whole
