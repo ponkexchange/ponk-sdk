@@ -60,6 +60,15 @@ pub enum PerpCmd {
     },
     /// Move the stop closer, in percent from the price (never wider).
     Stop { id: String, pct: String },
+    /// An entry waiting on a warning its trade raises now that was not
+    /// acknowledged at setup (perp_entry_needs_acknowledgement). Without
+    /// --confirm-name it prints the warnings and changes nothing.
+    Acknowledge {
+        id: String,
+        /// The agent's name, typed by the user after reading the warnings.
+        #[arg(long = "confirm-name", value_name = "NAME")]
+        confirm_name: Option<String>,
+    },
     /// Close, settle and withdraw to the address proven in the authorization.
     Exit {
         id: String,
@@ -158,6 +167,7 @@ pub async fn run(cli: &Cli, cmd: &PerpCmd) -> Result<()> {
         PerpCmd::Say { text, confirm, confirm_name } => say(cli, text, *confirm, confirm_name.as_deref()).await,
         PerpCmd::Close { id, confirm } => close(cli, id, *confirm).await,
         PerpCmd::Stop { id, pct } => stop(cli, id, pct).await,
+        PerpCmd::Acknowledge { id, confirm_name } => acknowledge(cli, id, confirm_name.as_deref()).await,
         PerpCmd::Exit { id, confirm } => exit(cli, id, *confirm).await,
         PerpCmd::Plan { text, practice } => plan(cli, text, *practice).await,
         PerpCmd::StartPlan { id, confirm_names } => start_plan(cli, id, confirm_names).await,
@@ -439,6 +449,16 @@ fn preview_confirm_hint(p: &ponk::PerpPreview, t: &PerpTrade) -> Option<String> 
     Some(out.join("\n"))
 }
 
+/// What a typed name acknowledges on create: the preview's confirmation
+/// warnings, one line each, then a blank line. Nothing when there are none.
+fn acknowledging_lines(p: &ponk::PerpPreview) -> Vec<String> {
+    let mut out: Vec<String> = p.confirmation_warnings.iter().map(|w| format!("Acknowledging: {w}")).collect();
+    if !out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
 /// A refusal that asks for the typed name, with the flag that gives it.
 fn with_flag_hint(e: ponk::Error) -> anyhow::Error {
     let msg = e.to_string();
@@ -493,6 +513,18 @@ async fn create(cli: &Cli, args: &TradeArgs) -> Result<()> {
     let client = client(cli, true)?;
     if cli.json {
         return print_json(&client.post_json("/v1/perp-agents", Some(&serde_json::to_value(&t)?), None).await?);
+    }
+    // A typed name acknowledges the warnings the ticket raises: the preview
+    // is read first and they are printed, so what the name stood for is on
+    // screen with the result.
+    if t.confirmation_text.is_some() {
+        let p = client.preview_perp_agent(&t).await?;
+        if p.ok != Some(true) {
+            bail!("{}", dash(p.sentence.as_deref()));
+        }
+        for l in acknowledging_lines(&p) {
+            println!("{l}");
+        }
     }
     let a = client.create_perp_agent(&t).await.map_err(with_flag_hint)?;
     print_warnings(&a.warnings);
@@ -554,6 +586,43 @@ async fn stop(cli: &Cli, id: &str, pct: &str) -> Result<()> {
         return print_json(&client.post_json(&format!("/v1/perp-agents/{id}/stop"), Some(&body), None).await?);
     }
     println!("{}", dash(client.tighten_perp_stop(id, pct).await?.sentence.as_deref()));
+    Ok(())
+}
+
+/// The acknowledge answer as lines: the warnings and how to type the name
+/// when one is still needed, else the server's sentence and what it
+/// acknowledged.
+fn acknowledge_lines(a: &ponk::PerpAcknowledged, id: &str, typed: bool) -> Vec<String> {
+    if a.needs_confirmation == Some(true) {
+        let mut out = Vec::new();
+        if typed {
+            out.push("That is not the agent's name. Nothing changed.".to_string());
+        }
+        out.extend(a.confirmation_warnings.iter().map(|w| format!("To acknowledge: {w}")));
+        out.push(format!(
+            "To go ahead, type the agent's name: ponk perpetuals acknowledge {id} --confirm-name \"{}\"",
+            dash(a.name.as_deref())
+        ));
+        return out;
+    }
+    let mut out = vec![dash(a.sentence.as_deref()).to_string()];
+    out.extend(a.acknowledged_warnings.iter().map(|w| format!("Acknowledged: {w}")));
+    out
+}
+
+async fn acknowledge(cli: &Cli, id: &str, confirm_name: Option<&str>) -> Result<()> {
+    let client = client(cli, true)?;
+    if cli.json {
+        let body = match confirm_name {
+            Some(n) => serde_json::json!({ "confirmationText": n }),
+            None => serde_json::json!({}),
+        };
+        return print_json(&client.post_json(&format!("/v1/perp-agents/{id}/acknowledge"), Some(&body), None).await?);
+    }
+    let a = client.perp_acknowledge(id, confirm_name).await?;
+    for l in acknowledge_lines(&a, id, confirm_name.is_some()) {
+        println!("{l}");
+    }
     Ok(())
 }
 
@@ -757,6 +826,31 @@ mod tests {
         assert!(preview_confirm_hint(&p, &t.clone().confirmation_text("BTC")).is_none());
         let plain = preview(r#"{"ok":true,"name":"BTC","needsConfirmation":false}"#);
         assert!(preview_confirm_hint(&plain, &t).is_none());
+    }
+
+    #[test]
+    fn acknowledge_prints_the_warnings_and_the_flag_until_the_name_matches() {
+        let ask: ponk::PerpAcknowledged = serde_json::from_str(&format!(
+            r#"{{"ok":false,"needsConfirmation":true,"name":"kPEPE","confirmationWarnings":["{STOP_ROOM}"],"sentence":"x"}}"#
+        ))
+        .unwrap();
+        assert_eq!(
+            acknowledge_lines(&ask, "a1", false),
+            vec![format!("To acknowledge: {STOP_ROOM}"), "To go ahead, type the agent's name: ponk perpetuals acknowledge a1 --confirm-name \"kPEPE\"".to_string()]
+        );
+        assert_eq!(acknowledge_lines(&ask, "a1", true)[0], "That is not the agent's name. Nothing changed.");
+        let done: ponk::PerpAcknowledged = serde_json::from_str(&format!(
+            r#"{{"ok":true,"needsConfirmation":false,"acknowledged":["stop_room"],"acknowledgedWarnings":["{STOP_ROOM}"],"sentence":"Acknowledged."}}"#
+        ))
+        .unwrap();
+        assert_eq!(acknowledge_lines(&done, "a1", true), vec!["Acknowledged.".to_string(), format!("Acknowledged: {STOP_ROOM}")]);
+    }
+
+    #[test]
+    fn create_with_a_typed_name_says_what_it_acknowledges() {
+        let p = preview(&format!(r#"{{"ok":true,"name":"BTC","needsConfirmation":true,"confirmationWarnings":["{STOP_ROOM}"]}}"#));
+        assert_eq!(acknowledging_lines(&p), vec![format!("Acknowledging: {STOP_ROOM}"), String::new()]);
+        assert!(acknowledging_lines(&preview(r#"{"ok":true}"#)).is_empty());
     }
 
     #[test]

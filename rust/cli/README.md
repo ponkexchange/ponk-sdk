@@ -99,6 +99,7 @@ ponk perpetuals agents / agent <id> / decisions <id> / ledger <id> / card <id>
 ponk perpetuals say "long btc 3x 500 stop 3" | "close my sol short" --confirm | "tighten btc stop to 2%"
 ponk perpetuals close <id> --confirm   close the position; funds stay on the agent's account
 ponk perpetuals stop <id> 2            move the stop to 2% from the price, closer only
+ponk perpetuals acknowledge <id> [--confirm-name NAME]   a warning the entry waits on; the name typed by the user
 ponk perpetuals exit <id> --confirm    close, settle, withdraw to the proven address
 ponk perpetuals plan "put $1,000 across 2 Perpetuals agents, long BTC, short SOL" [--practice]
 ponk perpetuals start-plan <plan id> [--confirm-name 0="BTC Long 20x"]   one agent per leg; moves no money

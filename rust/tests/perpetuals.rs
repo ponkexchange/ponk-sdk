@@ -447,3 +447,39 @@ fn agent_config_warnings_and_plan_leg_confirmation_warnings() {
     assert!(!perpetuals::needs_confirmation(&plan.legs[1]));
     assert!(plan.legs[1].confirmation_warnings.is_empty());
 }
+
+#[tokio::test]
+async fn acknowledge_lists_the_warnings_then_sends_the_typed_name() {
+    let ask = serde_json::json!({
+        "ok": false, "needsConfirmation": true, "name": "kPEPE",
+        "confirmationWarnings": [STOP_ROOM],
+        "sentence": format!("{STOP_ROOM} To go ahead, type the agent's name (kPEPE) to confirm."),
+    });
+    let (base, h) = one_shot_status("200 OK", ask.to_string());
+    let a = Client::new(&base, "ponk_live_k").unwrap().perp_acknowledge(AGENT, None).await.unwrap();
+    let raw = h.join().unwrap();
+    assert_eq!(request_line(&raw), format!("POST /v1/perp-agents/{AGENT}/acknowledge HTTP/1.1"));
+    assert_eq!(body_of(&raw), serde_json::json!({}));
+    assert_eq!((a.ok, a.needs_confirmation, a.name.as_deref()), (Some(false), Some(true), Some("kPEPE")));
+    assert_eq!(a.confirmation_warnings, vec![STOP_ROOM.to_string()]);
+
+    let done = serde_json::json!({
+        "ok": true, "needsConfirmation": false, "acknowledged": ["stop_room"],
+        "acknowledgedWarnings": [STOP_ROOM],
+        "sentence": "Acknowledged. The agent opens its trade on its next check, with the stop you chose.",
+    });
+    let (base, h) = one_shot_status("200 OK", done.to_string());
+    let a = Client::new(&base, "ponk_live_k").unwrap().perp_acknowledge(AGENT, Some("KPEPE")).await.unwrap();
+    // The typed name goes exactly as typed: the server compares it.
+    assert_eq!(body_of(&h.join().unwrap()), serde_json::json!({"confirmationText":"KPEPE"}));
+    assert_eq!(a.acknowledged, vec!["stop_room".to_string()]);
+    assert_eq!(a.acknowledged_warnings.len(), 1);
+}
+
+#[test]
+fn the_agent_config_carries_what_was_acknowledged() {
+    let a: PerpAgent = decode(r#"{"id":"a","config":{"coin":"BTC","acknowledged":["high_leverage","stop_room"]}}"#);
+    assert_eq!(a.config.unwrap().acknowledged, vec!["high_leverage".to_string(), "stop_room".to_string()]);
+    let older: PerpAgent = decode(r#"{"id":"a","config":{"coin":"BTC"}}"#);
+    assert!(older.config.unwrap().acknowledged.is_empty());
+}

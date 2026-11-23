@@ -160,7 +160,7 @@ pub use models::{
     PerpDecisionCode, PerpExit, PerpExitCard, PerpExitState, PerpFeeLeg, PerpFeeRates, PerpFill,
     PerpFleet, PerpFleetFunding, PerpFleetPlan, PerpFleetPosition, PerpFleetRow, PerpFleetStop,
     PerpFleetTotals, PerpFundingHistory, PerpFundingPayment, PerpFundingRecord, PerpLedger,
-    PerpMarket, PerpMarketRead, PerpOrder, PerpOwnerAnswer, PerpParse, PerpPlanLeg,
+    PerpMarket, PerpMarketRead, PerpOrder, PerpOwnerAnswer, PerpAcknowledged, PerpParse, PerpPlanLeg,
     PerpPlanTotals, PerpPnlLine, PerpPosition, PerpPositionNow, PerpPreview, PerpRealized,
     PerpStopAnswer, PerpTicket, PerpWallet, PerpWalletPnl, PerpWithdrawal,
 };

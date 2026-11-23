@@ -684,3 +684,36 @@ class TestStopRoomAcknowledgement(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAcknowledge(unittest.TestCase):
+    def test_without_a_name_it_lists_the_warnings_and_sends_none(self):
+        c, opener = client({"ok": False, "needsConfirmation": True, "name": "kPEPE",
+                            "confirmationWarnings": [STOP_ROOM],
+                            "sentence": STOP_ROOM + " To go ahead, type the agent's name (kPEPE) to confirm."})
+        a = c.perp_acknowledge(AGENT)
+        self.assertEqual(opener.calls[0]["method"], "POST")
+        self.assertEqual(opener.calls[0]["url"], BASE + "/v1/perp-agents/{0}/acknowledge".format(AGENT))
+        self.assertEqual(opener.calls[0]["body"], {})
+        self.assertTrue(a.needs_confirmation)
+        self.assertFalse(a.ok)
+        self.assertEqual(a.name, "kPEPE")
+        self.assertEqual(a.confirmation_warnings, [STOP_ROOM])
+
+    def test_the_typed_name_goes_as_typed(self):
+        c, opener = client({"ok": True, "needsConfirmation": False, "acknowledged": ["stop_room"],
+                            "acknowledgedWarnings": [STOP_ROOM],
+                            "sentence": "Acknowledged. The agent opens its trade on its next check, with the stop you chose."})
+        a = c.perp_acknowledge(AGENT, confirmation_text="KPEPE")
+        self.assertEqual(opener.calls[0]["body"], {"confirmationText": "KPEPE"})
+        self.assertTrue(a.ok)
+        self.assertEqual(a.acknowledged, ["stop_room"])
+        self.assertEqual(a.acknowledged_warnings, [STOP_ROOM])
+        self.assertIsInstance(a, ponk.PerpAcknowledged)
+
+    def test_the_agent_config_carries_what_was_acknowledged(self):
+        c, _ = client({"id": AGENT, "status": "running",
+                       "config": {"coin": "BTC", "acknowledged": ["high_leverage", "stop_room"]}})
+        self.assertEqual(c.perp_agent(AGENT).config.acknowledged, ["high_leverage", "stop_room"])
+        c, _ = client({"id": AGENT, "status": "running", "config": {"coin": "BTC"}})
+        self.assertEqual(c.perp_agent(AGENT).config.acknowledged, [])

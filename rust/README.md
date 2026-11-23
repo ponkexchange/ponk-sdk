@@ -278,8 +278,14 @@ reads its `needs_confirmation`, and `preview.confirmation_warnings` is what
 to show. `perpetuals::needs_confirmation(n)` with a leverage answers only the
 above-10x half. Without the name the server answers 422 with the warnings
 and "To go ahead, type the agent's name (NAME) to confirm." A stop at or past
-the liquidation price is refused, naming a stop that would work; stops are
-never adjusted automatically.
+the liquidation price is refused, naming a stop that would work. The stop the
+user chose is never moved for them: Liquidation Guard judges it against the
+real liquidation price, places a stop of its own only when the user's would
+fire at or past liquidation (or none rests), and if it must re-place one it
+moves its own. With two stops resting, the one that fires first is the
+position's stop. Preview first is how a client shows the user the warnings:
+never set a typed name the user has not been shown the preview's
+`confirmation_warnings` for.
 
 ```rust,no_run
 use ponk::perpetuals::{self, PerpTrade};
@@ -307,6 +313,32 @@ carries `needs_confirmation`, `stop_room_warning` and `atr_warning`, and
 `perp_agent(id).config.warnings` is what the agent was warned about when it
 was created. `perp_say_confirmed(text, name)` sends the typed name at any
 leverage.
+
+Prices move. When an agent's decision feed says
+`perp_entry_needs_acknowledgement` ("Not opened yet: ..."), its trade now
+raises a warning (liquidation less than twice the stop away) that was not
+acknowledged when it was set up, and nothing opens until it is.
+`perp_acknowledge(id, None)` answers the warnings to show the user
+(`confirmation_warnings`) and the `name` they type, changing nothing; the same
+call with `Some(typed)`, the name exactly as the user typed it (never filled in
+for them), acknowledges them, and the agent opens on its next check with the
+stop the user chose. `perp_agent(id).config.acknowledged` lists the kinds
+acknowledged (`high_leverage`, `stop_room`).
+
+```rust,no_run
+// `typed` is what the user typed after reading the warnings.
+async fn acknowledge(ponk: &ponk::Client, id: &str, typed: &str) -> Result<(), ponk::Error> {
+    let ask = ponk.perp_acknowledge(id, None).await?;
+    if ask.needs_confirmation == Some(true) {
+        for w in &ask.confirmation_warnings {
+            println!("{w}");
+        }
+        let done = ponk.perp_acknowledge(id, Some(typed)).await?;
+        println!("{}", done.sentence.unwrap_or_default());
+    }
+    Ok(())
+}
+```
 
 A fleet from one sentence: `copilot_perp_plan`, then `copilot_perp_start`,
 which moves no money and returns `sign_url`. A leg with `needs_confirmation`
@@ -425,6 +457,7 @@ key can move your funds home. It cannot move them anywhere else.
 | `create_perp_agent(&PerpTrade)` | `POST /v1/perp-agents` | `trade` |
 | `perp_say(text, confirm)`, `perp_say_confirmed(text, name)` | `POST /v1/perp-agents/say` | `trade` |
 | `close_perp_agent(id, true)` / `tighten_perp_stop(id, pct)` / `exit_perp_agent(id, true)` | `POST /v1/perp-agents/{id}/close`, `/stop`, `/exit` | `trade` |
+| `perp_acknowledge(id, confirmation_text)` | `POST /v1/perp-agents/{id}/acknowledge` | `trade` |
 | `copilot_perp_plan(text, practice)` / `copilot_perp_get_plan(id)` | `POST /copilot/perp/plans`, `GET /copilot/perp/plans/{id}` | nothing (a key to start it later) |
 | `copilot_perp_start(id)` | `POST /copilot/perp/plans/{id}/start` | `trade` |
 | `copilot_tighten_agent_stops(fleet_id, pct)` | `POST /copilot/fleets/{id}/stop-rule` | `trade` |

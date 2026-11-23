@@ -5641,6 +5641,25 @@ impl PerpCreated {
     }
 }
 
+/// [`Client::perp_acknowledge`](crate::Client::perp_acknowledge).
+/// `needs_confirmation` true (`ok` false): nothing changed; show the user
+/// every line of `confirmation_warnings`, have them type `name`, and call
+/// again with what they typed. `ok` true: nothing needed acknowledging, or
+/// the typed name matched and `acknowledged_warnings` were recorded; the
+/// agent opens on its next check with the stop the user chose.
+/// `acknowledged` is the kinds acknowledged (`high_leverage`, `stop_room`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpAcknowledged {
+    pub ok: Option<bool>,
+    pub needs_confirmation: Option<bool>,
+    pub name: Option<String>,
+    pub confirmation_warnings: Vec<String>,
+    pub acknowledged: Vec<String>,
+    pub acknowledged_warnings: Vec<String>,
+    pub sentence: Option<String>,
+}
+
 /// A close or a stop tightening recorded: `request` is `close` or
 /// `tighten_stop`, carried out by the agent on its next ticks.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -5760,6 +5779,12 @@ pub struct PerpAgentConfig {
     /// What the agent was warned about when it was created (empty for an
     /// older agent).
     pub warnings: Vec<String>,
+    /// The warnings the typed name acknowledged, by kind (`high_leverage`,
+    /// `stop_room`): at create only those that ticket raised, and any
+    /// acknowledged later with
+    /// [`Client::perp_acknowledge`](crate::Client::perp_acknowledge). Empty
+    /// from an older server.
+    pub acknowledged: Vec<String>,
 }
 
 /// One decision: its reason `codes` and `sentences`, and `sent`, the

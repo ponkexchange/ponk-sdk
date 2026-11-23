@@ -3138,7 +3138,14 @@ impl Client {
     /// set it with [`crate::perpetuals::PerpTrade::confirmation_text`]. One
     /// name acknowledges every such warning. Without it the server answers
     /// 422 with the warnings and "To go ahead, type the agent's name (NAME)
-    /// to confirm." Stops are never adjusted automatically. `warnings` says
+    /// to confirm." Preview first is how a client shows the user the
+    /// warnings: never set a typed name the user has not been shown the
+    /// preview's `confirmation_warnings` for. The name acknowledges only the
+    /// warnings this ticket raises; one raised later is acknowledged with
+    /// [`Client::perp_acknowledge`]. The stop the user chose is never moved
+    /// for them: Liquidation Guard places a stop of its own only when the
+    /// user's would fire at or past liquidation, and moves only its own.
+    /// `warnings` says
     /// what the agent opens with a warning about. Needs a `trade` key;
     /// an agent created with a key is on the API rates, which `fees` states.
     ///
@@ -3194,6 +3201,27 @@ impl Client {
             self.timeout,
         )
         .await
+    }
+
+    /// `POST /v1/perp-agents/{id}/acknowledge`. Acknowledge a warning the
+    /// agent's entry is waiting on.
+    ///
+    /// When the decision feed says `perp_entry_needs_acknowledgement` ("Not
+    /// opened yet: ..."), prices moved since the agent was set up and its
+    /// trade now raises a warning (liquidation less than twice the stop away)
+    /// that was not acknowledged then; nothing opens until it is. Call this
+    /// first with `None`: `confirmation_warnings` are the warnings to show
+    /// the user and `name` the name they type; nothing changes. Then call it
+    /// with `Some(typed)`, the name exactly as the user typed it, never
+    /// filled in for them. A name that does not match changes nothing. A
+    /// match records the warnings and the agent opens on its next check with
+    /// the stop the user chose. Moves no funds. Needs a `trade` key.
+    pub async fn perp_acknowledge(&self, agent_id: &str, confirmation_text: Option<&str>) -> Result<PerpAcknowledged> {
+        let body = match confirmation_text {
+            Some(t) => serde_json::json!({ "confirmationText": t }),
+            None => serde_json::json!({}),
+        };
+        self.post(&format!("/v1/perp-agents/{}/acknowledge", seg(agent_id)), Some(&body), self.timeout).await
     }
 
     /// `POST /v1/perp-agents/{id}/stop`. Move the stop closer, never wider.

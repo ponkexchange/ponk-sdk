@@ -5571,6 +5571,29 @@ class PerpOwnerAnswer(Model):
 
 
 @dataclass
+class PerpAcknowledged(Model):
+    """`perp_acknowledge(agent_id, confirmation_text=None)`.
+
+    `needs_confirmation` true (with `ok` false): nothing changed; show the
+    user every line of `confirmation_warnings`, have them type `name`, and
+    call again with what they typed. `ok` true: nothing needed
+    acknowledging, or the typed name matched and `acknowledged_warnings`
+    were recorded; the agent opens on its next check with the stop the user
+    chose. `acknowledged` is the kinds acknowledged (`high_leverage`,
+    `stop_room`). `sentence` says which, in words."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    ok: Optional[bool] = None
+    needs_confirmation: Optional[bool] = None
+    name: Optional[str] = None
+    confirmation_warnings: List[str] = field(default_factory=list)
+    acknowledged: List[str] = field(default_factory=list)
+    acknowledged_warnings: List[str] = field(default_factory=list)
+    sentence: Optional[str] = None
+
+
+@dataclass
 class PerpSaid(PerpCreated):
     """`perp_say(text)`: an open answers as `create_perp_agent` does (`id`
     set); a close or a stop tightening answers as `PerpOwnerAnswer` does
@@ -5676,7 +5699,11 @@ class PerpAccount(Model):
 class PerpAgentConfig(Model):
     """The trade: market, side, leverage, capital, stop and take-profit
     percents (decimal strings) and practice. `warnings` is what the agent
-    was warned about when it was created (empty for an older agent)."""
+    was warned about when it was created (empty for an older agent).
+    `acknowledged` is the warnings the typed name acknowledged, by kind
+    (`high_leverage`, `stop_room`): at create only those that ticket raised,
+    and any acknowledged later with `perp_acknowledge` (empty from an older
+    server)."""
 
     _CAMEL: ClassVar[bool] = True
 
@@ -5689,6 +5716,7 @@ class PerpAgentConfig(Model):
     take_profit_pct: Optional[str] = None
     practice: Optional[bool] = None
     warnings: List[str] = field(default_factory=list)
+    acknowledged: List[str] = field(default_factory=list)
 
 
 @dataclass

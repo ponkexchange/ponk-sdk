@@ -360,7 +360,7 @@ trimming, except its market ticker, which compares in any case (`btc`
 matches the default name `BTC`; `KPEPE Long 20x` matches `kPEPE Long 20x`).
 A stop at or past the liquidation price (with the safety margin Liquidation
 Guard keeps) is refused, with a sentence naming a stop that would work.
-Stops are never adjusted automatically. The ticket (`p.ticket`,
+The stop the user chose is never moved for them: Liquidation Guard judges it against the real liquidation price, places a stop of its own only when the user's would fire at or past liquidation (or none rests), and if it must re-place one it moves its own. With two stops resting, the one that fires first is the position's stop. The ticket (`p.ticket`,
 `agent.ticket_figures`) carries `needs_confirmation`, `stop_room_warning`
 and `atr_warning`, and `perp_agent(id).config.warnings` is what the agent
 was warned about when it was created.
@@ -376,6 +376,21 @@ room) answers 422 with the warnings and creates nothing, and
 `perp_say(text, confirmation_text="BTC")`, the agent's name (its market)
 typed by the user, acknowledges them. `confirmation_text` is sent at any
 leverage. `confirm=True` is for a close and never acknowledges a warning.
+Preview first is how a client shows the user the warnings: never send a
+`confirmation_text` the user typed without having shown them the preview's
+`confirmation_warnings`. The typed name acknowledges only the warnings that
+ticket raised.
+
+Prices move. When an agent's decision feed says `perp_entry_needs_acknowledgement` ("Not opened yet: ..."), its trade now raises a warning (liquidation less than twice the stop away) that was not acknowledged when it was set up, and nothing opens until it is. Call `perp_acknowledge(agent_id)` without a name: its `confirmation_warnings` are what to show the user and `name` what they type; nothing changes. Then call it again with the name exactly as the user typed it (`confirmation_text`, `--confirm-name`), never filled in for them. The agent then opens on its next check with the stop the user chose. `perp_agent(id).config.acknowledged` lists the kinds acknowledged (`high_leverage`, `stop_room`).
+
+```python
+ask = ponk.perp_acknowledge(agent.id)
+if ask.needs_confirmation:
+    for w in ask.confirmation_warnings:
+        print(w)
+    typed = input("Type the agent's name ({0}) to acknowledge: ".format(ask.name))
+    print(ponk.perp_acknowledge(agent.id, confirmation_text=typed).sentence)
+```
 
 A fleet from one sentence: `copilot_perp_plan("put $2,000 across 4 Perpetuals
 agents, long BTC and ETH, short SOL and HYPE, 3x")`, then
@@ -530,6 +545,7 @@ if m is not None:
 | `create_perp_agent(...)` | `POST /v1/perp-agents` | `trade` |
 | `perp_say(text, confirm=False, confirmation_text=None)` | `POST /v1/perp-agents/say` | `trade` |
 | `close_perp_agent(id, confirm=True)` / `tighten_perp_stop(id, stop_pct)` / `exit_perp_agent(id, confirm=True)` | `POST /v1/perp-agents/{id}/close`, `/stop`, `/exit` | `trade` |
+| `perp_acknowledge(id, confirmation_text=None)` | `POST /v1/perp-agents/{id}/acknowledge` | `trade` |
 | `copilot_perp_plan(text, practice=False)` / `copilot_perp_get_plan(id)` | `POST /copilot/perp/plans`, `GET /copilot/perp/plans/{id}` | nothing (a key to start it later) |
 | `copilot_perp_start(id)` | `POST /copilot/perp/plans/{id}/start` | `trade` |
 | `copilot_tighten_agent_stops(fleet_id, stop_pct)` | `POST /copilot/fleets/{id}/stop-rule` | `trade` |

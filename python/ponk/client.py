@@ -89,7 +89,10 @@ both. The preview is the authority on whether it is needed
 (`needs_confirmation`, `confirmation_warnings`), and the preview and the new
 agent carry everything the confirm step warns about in `warnings`. A stop
 at or past the liquidation price is refused, naming a stop that would work;
-stops are never adjusted automatically. A key
+the stop the user chose is never moved for them (Liquidation Guard places a
+stop of its own only when the user's would fire at or past liquidation, and
+moves only its own). An entry held by `perp_entry_needs_acknowledgement` is
+acknowledged with `perp_acknowledge`, the name typed by the user. A key
 creates the agent and can preview, close, tighten the stop, pause, resume and
 exit it, but the agent trades nothing until its owner authorizes it in the
 app with their wallet and funds its Hyperliquid account: that authorization
@@ -128,6 +131,7 @@ from .models import (  # 0.18.0, Perpetuals
     PerpLedger,
     PerpMarketRead,
     PerpOwnerAnswer,
+    PerpAcknowledged,
     PerpParse,
     PerpPreview,
     PerpSaid,
@@ -2871,7 +2875,14 @@ class PonkClient:
         with the warnings and "To go ahead, type the agent's name (NAME) to
         confirm." The name compares exactly after trimming, except its
         market ticker, which compares in any case ("btc" matches "BTC").
-        Stops are never adjusted automatically. `warnings` says what the
+        PREVIEW FIRST is how a client shows the user the warnings: never
+        send a `confirmation_text` the user typed without having shown them
+        that preview's `confirmation_warnings`. The name acknowledges only
+        the warnings this ticket raises (`config.acknowledged`); one raised
+        later is acknowledged with `perp_acknowledge`. The stop the user
+        chose is never moved for them: Liquidation Guard adds a stop of its
+        own only when that stop would fire at or past liquidation, and moves
+        only its own. `warnings` says what the
         agent opens with a warning about. Needs a `trade` key; an
         agent created with a key is on the API rates, which `fees` states.
 
@@ -2937,6 +2948,34 @@ class PonkClient:
         return PerpOwnerAnswer.from_dict(
             self._request(
                 "POST", "/v1/perp-agents/{0}/close".format(_seg(agent_id)), body={"confirm": True}
+            )
+        )
+
+    def perp_acknowledge(self, agent_id: str, confirmation_text: Optional[str] = None) -> PerpAcknowledged:
+        """`POST /v1/perp-agents/{id}/acknowledge`. Acknowledge a warning the
+        agent's entry is waiting on.
+
+        When the decision feed says `perp_entry_needs_acknowledgement`
+        ("Not opened yet: ..."), prices moved since the agent was set up and
+        its trade now raises a warning (liquidation less than twice the stop
+        away) that was not acknowledged then; nothing opens until it is.
+        Call this first WITHOUT `confirmation_text`: the answer's
+        `confirmation_warnings` are the warnings to show the user and
+        `name` the name they type; nothing changes. Then call again with
+        `confirmation_text`, the name exactly as the user typed it, never
+        filled in for them. A name that does not match changes nothing
+        (`ok` false again). A match records the warnings and the agent opens
+        on its next check with the stop the user chose; the stop and every
+        other setting stay as they are. Moves no funds. Needs a `trade` key.
+        """
+        body: Dict[str, Any] = {}
+        if confirmation_text is not None:
+            body["confirmationText"] = confirmation_text
+        return PerpAcknowledged.from_dict(
+            self._request(
+                "POST",
+                "/v1/perp-agents/{0}/acknowledge".format(_seg(agent_id)),
+                body=body,
             )
         )
 

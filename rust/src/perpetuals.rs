@@ -16,7 +16,10 @@
 //! user after reading the warnings, goes in [`PerpTrade::confirmation_text`].
 //! A stop at or past the liquidation price (with the safety margin
 //! Liquidation Guard keeps) is still refused, with a sentence naming a stop
-//! that would work. Stops are never adjusted automatically.
+//! that would work. The stop the user chose is never moved for them:
+//! Liquidation Guard places a stop of its own only when the user's would fire
+//! at or past the real liquidation price (or none rests), and moves only its
+//! own.
 //!
 //! Only the server knows the stop-room warning, because it reads the live
 //! price, so the preview is the authority: [`needs_confirmation`] given a
