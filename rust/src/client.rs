@@ -717,6 +717,8 @@ impl Client {
     /// `POST /v1/agents/{id}/pause`. Stop the loop.
     ///
     /// The position stays open and keeps earning. Nothing is closed or swept.
+    /// On a Perpetuals agent the same call pauses it: it opens nothing new,
+    /// and its resting stop and Liquidation Guard keep running.
     pub async fn pause_agent(&self, agent_id: &str) -> Result<Agent> {
         self.post(
             &format!("/v1/agents/{}/pause", seg(agent_id)),
@@ -2956,6 +2958,285 @@ impl Client {
             &format!("/copilot/fleets/{}/stop-rule", seg(fleet_id)),
             Some(&serde_json::json!({ "drawdown_pct": drawdown_pct })),
             self.timeout,
+        )
+        .await
+    }
+
+    /// `POST /copilot/fleets/{id}/stop-rule` with `stop_pct`. Every open
+    /// Perpetuals agent of the fleet moves its own stop to `stop_pct` percent
+    /// from the price, closer only.
+    ///
+    /// Each agent says what it did in [`PerpFleetStop::answers`] (a stop that
+    /// is not tighter is left where it is). Only on an active Perpetuals
+    /// fleet; an LP fleet answers 422. `stop_pct` is more than 0 and under 90.
+    /// Needs a `trade` key.
+    pub async fn copilot_tighten_agent_stops(&self, fleet_id: &str, stop_pct: f64) -> Result<PerpFleetStop> {
+        let path = format!("/copilot/fleets/{}/stop-rule", seg(fleet_id));
+        let value: serde_json::Value = self
+            .post(&path, Some(&serde_json::json!({ "stop_pct": stop_pct })), self.timeout)
+            .await?;
+        PerpFleetStop::from_value(value).map_err(|e| Error::Decode { path, message: e.to_string() })
+    }
+
+    /// `POST /copilot/fleets/{id}/pause`. Pause every agent of an active
+    /// fleet, one batch item per agent. A paused Perpetuals agent opens
+    /// nothing new and keeps its resting stop and Liquidation Guard. A fleet
+    /// that is closing or closed answers 409. Needs a `trade` key.
+    pub async fn copilot_pause_fleet(&self, fleet_id: &str) -> Result<FleetBatch> {
+        self.post(&format!("/copilot/fleets/{}/pause", seg(fleet_id)), None::<&()>, self.timeout)
+            .await
+    }
+
+    /// `POST /copilot/fleets/{id}/resume`. Resume every agent of an active fleet.
+    pub async fn copilot_resume_fleet(&self, fleet_id: &str) -> Result<FleetBatch> {
+        self.post(&format!("/copilot/fleets/{}/resume", seg(fleet_id)), None::<&()>, self.timeout)
+            .await
+    }
+
+    // -- Perpetuals on Hyperliquid (0.18.0) ----------------------------------
+
+    /// `GET /public/perp/markets`. Every Hyperliquid Perpetuals market.
+    ///
+    /// No key needed. `q` keeps coins starting with that text (an exact coin
+    /// leads); `sort` is one of [`crate::perpetuals::MARKET_SORTS`] (`volume`
+    /// by default), largest first, a market whose figure is unknown last.
+    /// From one server read of Hyperliquid refreshed every 5 seconds; `stale`
+    /// and `last_error` say when the read is older. A server with Perpetuals
+    /// reads switched off answers 503 (`perp_reads_off`).
+    pub async fn perp_markets(&self, q: Option<&str>, sort: Option<&str>, limit: Option<u32>) -> Result<PerpBoard> {
+        self.get(&with_query(
+            "/public/perp/markets",
+            &[
+                ("q", q.map(str::to_string)),
+                ("sort", sort.map(str::to_string)),
+                ("limit", limit.map(|l| l.to_string())),
+            ],
+        ))
+        .await
+    }
+
+    /// `GET /public/perp/markets/{id}`. One market, by `perp:hyperliquid:BTC`
+    /// or the bare coin (`BTC`). An unlisted one is a 404.
+    pub async fn perp_market(&self, market: &str) -> Result<PerpMarketRead> {
+        self.get(&format!("/public/perp/markets/{}", seg(market))).await
+    }
+
+    /// `GET /public/perp/markets/{id}/candles`. Price candles, oldest first.
+    /// `interval` is one of [`crate::perpetuals::CANDLE_INTERVALS`] (`1h` by
+    /// default), `bars` 1 to 5000 (200 by default). No key needed.
+    pub async fn perp_candles(&self, market: &str, interval: Option<&str>, bars: Option<u32>) -> Result<PerpCandles> {
+        self.get(&with_query(
+            &format!("/public/perp/markets/{}/candles", seg(market)),
+            &[("interval", interval.map(str::to_string)), ("bars", bars.map(|b| b.to_string()))],
+        ))
+        .await
+    }
+
+    /// `GET /public/perp/markets/{id}/funding`. Applied hourly funding over
+    /// `days` (1 to 30, 7 by default), oldest first. No key needed.
+    pub async fn perp_funding_history(&self, market: &str, days: Option<u32>) -> Result<PerpFundingHistory> {
+        self.get(&with_query(
+            &format!("/public/perp/markets/{}/funding", seg(market)),
+            &[("days", days.map(|d| d.to_string()))],
+        ))
+        .await
+    }
+
+    /// `GET /public/wallets/{address}/perp`. A 0x wallet's Hyperliquid account
+    /// and open positions, read now (cached 5 seconds). No key needed.
+    pub async fn perp_wallet(&self, address: &str) -> Result<PerpWallet> {
+        self.get(&format!("/public/wallets/{}/perp", seg(address))).await
+    }
+
+    /// `GET /public/wallets/{address}/perp/pnl`. A 0x wallet's Perpetuals PnL
+    /// over 30 days from its own fills. Funding is not in these figures.
+    pub async fn perp_wallet_pnl(&self, address: &str) -> Result<PerpWalletPnl> {
+        self.get(&format!("/public/wallets/{}/perp/pnl", seg(address))).await
+    }
+
+    /// `GET /public/wallets/perp/book`. Who is long and who is short among
+    /// the curated wallets, optionally on one market (a coin or a market id).
+    pub async fn perp_book(&self, market: Option<&str>) -> Result<PerpBook> {
+        self.get(&with_query("/public/wallets/perp/book", &[("market", market.map(str::to_string))]))
+            .await
+    }
+
+    /// `POST /public/perp/parse`. Read one Perpetuals sentence, touching no
+    /// account: an open (`long btc 3x 500 stop 3 tp 10`), a close (`close my
+    /// sol short`) or a stop tightening (`tighten btc stop to 2%`).
+    pub async fn perp_parse(&self, text: &str) -> Result<PerpParse> {
+        self.post("/public/perp/parse", Some(&serde_json::json!({ "text": text })), self.timeout)
+            .await
+    }
+
+    /// `GET /v1/perp-agents`. Your Perpetuals agents, newest first.
+    pub async fn perp_agents(&self) -> Result<Vec<PerpAgentRow>> {
+        self.get("/v1/perp-agents").await
+    }
+
+    /// `GET /v1/perp-agents/{id}`. The agent as it stands: its trade, its
+    /// Hyperliquid account and position, the newest decision with its
+    /// reason, realized net against the high-water mark, and any exit in
+    /// progress. Another account's agent, or an LP agent, is a 404.
+    pub async fn perp_agent(&self, agent_id: &str) -> Result<PerpAgent> {
+        self.get(&format!("/v1/perp-agents/{}", seg(agent_id))).await
+    }
+
+    /// `GET /v1/perp-agents/{id}/balances`. The agent's Hyperliquid account
+    /// now; `unavailable` says why when it is not read.
+    pub async fn perp_agent_balances(&self, agent_id: &str) -> Result<PerpAccount> {
+        self.get(&format!("/v1/perp-agents/{}/balances", seg(agent_id))).await
+    }
+
+    /// `GET /v1/perp-agents/{id}/ledger`. Orders, fills, funding payments,
+    /// Ponk fee transfers and withdrawals, newest first.
+    pub async fn perp_agent_ledger(&self, agent_id: &str) -> Result<PerpLedger> {
+        self.get(&format!("/v1/perp-agents/{}/ledger", seg(agent_id))).await
+    }
+
+    /// `GET /v1/perp-agents/{id}/decisions`. Why the agent did or did not
+    /// act, newest first: one row per change of decision. At most 200.
+    pub async fn perp_agent_decisions(&self, agent_id: &str) -> Result<Vec<PerpDecision>> {
+        self.get(&format!("/v1/perp-agents/{}/decisions", seg(agent_id))).await
+    }
+
+    /// `GET /v1/perp-agents/{id}/exit-card`. The closing card. A 404 until
+    /// something has closed.
+    pub async fn perp_agent_exit_card(&self, agent_id: &str) -> Result<PerpExitCard> {
+        self.get(&format!("/v1/perp-agents/{}/exit-card", seg(agent_id))).await
+    }
+
+    /// `POST /v1/perp-agents/preview`. Every create gate on live prices,
+    /// creating nothing. `ok` true carries the ticket and the rates the
+    /// authorization will state; `ok` false the sentence the gates refused
+    /// it with. Leverage above 10 is [`Error::InvalidArgument`] here with the
+    /// server's sentence, before anything is sent.
+    pub async fn preview_perp_agent(&self, trade: &crate::perpetuals::PerpTrade) -> Result<PerpPreview> {
+        trade.check()?;
+        self.post("/v1/perp-agents/preview", Some(trade), self.timeout).await
+    }
+
+    /// `POST /v1/perp-agents`. Create a typed trade as a Perpetuals agent.
+    ///
+    /// Build the body with [`crate::perpetuals::PerpTrade`]: the coin, `long`
+    /// or `short` (the agent never reverses it), isolated leverage 1 to 10,
+    /// the USDC it trades with (at least 10) and the stop in percent from
+    /// the entry (required). The ticket is built from live prices first; a
+    /// ticket the gates refuse creates nothing and answers 422 with the
+    /// sentence. Leverage above 10 is [`Error::InvalidArgument`] here with
+    /// the server's own sentence, before anything is sent; a market whose
+    /// Hyperliquid maximum is lower is refused by the server with its own
+    /// figure. Needs a `trade` key; an agent created with a key is on the API
+    /// rates, which `fees` states.
+    ///
+    /// NOTHING IS SIGNED OR FUNDED BY THIS CALL. The agent trades only once
+    /// its owner authorizes it in the app with their wallet and funds its
+    /// Hyperliquid account. A practice trade needs neither.
+    pub async fn create_perp_agent(&self, trade: &crate::perpetuals::PerpTrade) -> Result<PerpCreated> {
+        trade.check()?;
+        self.post("/v1/perp-agents", Some(trade), self.timeout).await
+    }
+
+    /// `POST /v1/perp-agents/say`. One sentence, the same answer as on the
+    /// web, Telegram and the MCP. An open creates an agent (`id` set); a
+    /// close (needs `confirm`) or a stop tightening goes to your one running
+    /// agent on that market (`request` set). More than one that fits is
+    /// refused with a sentence naming them. Needs a `trade` key.
+    pub async fn perp_say(&self, text: &str, confirm: bool) -> Result<PerpCreated> {
+        let body = if confirm {
+            serde_json::json!({ "text": text, "confirm": true })
+        } else {
+            serde_json::json!({ "text": text })
+        };
+        self.post("/v1/perp-agents/say", Some(&body), self.timeout).await
+    }
+
+    /// `POST /v1/perp-agents/{id}/close`. Close the position; the funds stay
+    /// on the agent's Hyperliquid account and it opens nothing new.
+    /// `confirm` must be true, or [`Error::InvalidArgument`] and nothing is
+    /// sent. Needs a `trade` key.
+    pub async fn close_perp_agent(&self, agent_id: &str, confirm: bool) -> Result<PerpOwnerAnswer> {
+        if !confirm {
+            return Err(Error::InvalidArgument("confirm must be true to close the position. Nothing was sent.".into()));
+        }
+        self.post(
+            &format!("/v1/perp-agents/{}/close", seg(agent_id)),
+            Some(&serde_json::json!({ "confirm": true })),
+            self.timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/perp-agents/{id}/stop`. Move the stop closer, never wider.
+    /// `stop_pct` is a percent from the mark, more than 0 and under 90, as a
+    /// decimal string (`"2"` for 2%). Needs a `trade` key.
+    pub async fn tighten_perp_stop(&self, agent_id: &str, stop_pct: &str) -> Result<PerpOwnerAnswer> {
+        self.post(
+            &format!("/v1/perp-agents/{}/stop", seg(agent_id)),
+            Some(&serde_json::json!({ "stopPct": stop_pct })),
+            self.timeout,
+        )
+        .await
+    }
+
+    /// `POST /v1/perp-agents/{id}/exit`. Close, settle and withdraw.
+    ///
+    /// MOVES REAL FUNDS. `confirm` must be true, or [`Error::InvalidArgument`]
+    /// and nothing is sent. The agent is paused first (its stop and
+    /// Liquidation Guard keep running), then over its next ticks it closes
+    /// what is open, settles, takes the exit fee only if it ever traded, and
+    /// withdraws the rest to the withdrawal address proven in its
+    /// authorization; no other address can be named. Returns at once: read
+    /// [`Client::perp_agent`]. Needs a `trade` key. Takes the fund timeout.
+    pub async fn exit_perp_agent(&self, agent_id: &str, confirm: bool) -> Result<PerpExit> {
+        if !confirm {
+            return Err(Error::InvalidArgument("confirm must be true to close and withdraw. Nothing was sent.".into()));
+        }
+        self.post(
+            &format!("/v1/perp-agents/{}/exit", seg(agent_id)),
+            Some(&serde_json::json!({ "confirm": true })),
+            self.fund_timeout,
+        )
+        .await
+    }
+
+    /// `POST /copilot/perp/plans`. Plan a fleet of Perpetuals agents from one
+    /// sentence, for example `"put $2,000 across 4 Perpetuals agents, long
+    /// BTC and ETH, short SOL and HYPE, 3x"`.
+    ///
+    /// A closed deterministic grammar, no language model. Missing fields take
+    /// stated defaults, named in `echo`; anything ambiguous is refused with
+    /// one sentence in `refusal`. Every leg goes through the preview's gates
+    /// on live prices; a leg that fails says why and the rest can still
+    /// start. Creates nothing. Plans last 15 minutes. Planning needs no key,
+    /// but only a plan made with one can be started.
+    pub async fn copilot_perp_plan(&self, text: &str, practice: bool) -> Result<PerpFleetPlan> {
+        let body = if practice {
+            serde_json::json!({ "text": text, "practice": true })
+        } else {
+            serde_json::json!({ "text": text })
+        };
+        self.post("/copilot/perp/plans", Some(&body), self.timeout).await
+    }
+
+    /// `GET /copilot/perp/plans/{id}`. The same plan again (15 minutes).
+    pub async fn copilot_perp_get_plan(&self, plan_id: &str) -> Result<PerpFleetPlan> {
+        self.get(&format!("/copilot/perp/plans/{}", seg(plan_id))).await
+    }
+
+    /// `POST /copilot/perp/plans/{id}/start`. Start the plan as one fleet.
+    ///
+    /// MOVES NO MONEY. One agent per planned leg, every gate run again on
+    /// fresh prices; the plan comes back `started` with `fleet_id`, `agents`
+    /// and `sign_url`, the fleet page where each agent is authorized with its
+    /// own signature and funded with its own transfer. A plan with a leg
+    /// above 10x starts nothing and answers 422 naming the leg. Starts at
+    /// most once. Needs a `trade` key. Takes the fund timeout.
+    pub async fn copilot_perp_start(&self, plan_id: &str) -> Result<PerpFleetPlan> {
+        self.post(
+            &format!("/copilot/perp/plans/{}/start", seg(plan_id)),
+            None::<&()>,
+            self.fund_timeout,
         )
         .await
     }

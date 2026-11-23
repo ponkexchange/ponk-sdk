@@ -87,6 +87,28 @@ shape other than Spot opens as several ranges managed as one position
 range. The mandate is signed by your own wallets
 on ponk.exchange; the CLI prints the link and never signs.
 
+Perpetuals agents on Hyperliquid (`ponk perpetuals ...`; `markets` and
+`plan` need no key):
+
+```
+ponk perpetuals markets [--search bt] [--sort volume|oi|change|funding|leverage] [--limit 25]
+ponk perpetuals preview --coin BTC --side long --leverage 3 --capital 500 --stop 3 [--tp 10] [--practice]
+ponk perpetuals create  --coin BTC --side long --leverage 3 --capital 500 --stop 3 [--tp 10] [--name n] [--practice]
+ponk perpetuals agents / agent <id> / decisions <id> / ledger <id> / card <id>
+ponk perpetuals say "long btc 3x 500 stop 3" | "close my sol short" --confirm | "tighten btc stop to 2%"
+ponk perpetuals close <id> --confirm   close the position; funds stay on the agent's account
+ponk perpetuals stop <id> 2            move the stop to 2% from the price, closer only
+ponk perpetuals exit <id> --confirm    close, settle, withdraw to the proven address
+ponk perpetuals plan "put $1,000 across 2 Perpetuals agents, long BTC, short SOL" [--practice]
+ponk perpetuals start-plan <plan id>   one agent per leg; moves no money
+ponk perpetuals fleet-stop <fleet id> 2 / fleet-pause <fleet id> / fleet-resume <fleet id>
+```
+
+No agent runs above 10x: `--leverage` above 10 is refused before anything is
+sent, with the server's sentence. `ponk pause` and `ponk resume` work on a
+Perpetuals agent too. Authorizing the agent and funding its Hyperliquid
+account are wallet signatures in the app; the CLI never signs.
+
 Two rules it keeps from the product: a figure the server did not send renders
 as `-`, never zero and never a guess, and a create on a pool the deploy gate
 dislikes prints the gate's sentence while still creating the agent, because

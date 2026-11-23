@@ -49,8 +49,8 @@ def keyless(payload, status=200):
 
 
 class TestVersion(unittest.TestCase):
-    def test_version_is_0_17_1(self):
-        self.assertEqual(ponk.__version__, "0.17.1")
+    def test_version_is_at_least_0_17_1(self):
+        self.assertGreaterEqual(tuple(int(p) for p in ponk.__version__.split(".")), (0, 17, 1))
 
 
 CLAIM_BATCH = {

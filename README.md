@@ -19,9 +19,9 @@
 ---
 
 Official clients for the **ponk public API**. Create and drive liquidity
-agents on **Solana, Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain**,
-read their live positions, PnL and fees, and move funds home, from Python,
-Rust or the command line.
+agents on **Solana, Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain**
+and **Perpetuals agents on Hyperliquid**, read their live positions, PnL and
+fees, and move funds home, from Python, Rust or the command line.
 
 An agent opens a concentrated position, collects the fees, compounds them, and
 moves the range when the price does. Where a venue pays farm rewards it
@@ -308,7 +308,66 @@ agent's mandate, renewing it, revoking it (which exits the position first), and
 the shareable exit card. `fund_link(agent_id)` opens the page for the first
 two.
 
-## What the clients deliberately do not do
+## Perpetuals agents on Hyperliquid
+
+A Perpetuals agent is one typed trade: a market, a direction, isolated
+leverage, the USDC it trades with and a stop that is always set. The server
+builds the ticket from Hyperliquid's live prices (size, liquidation price,
+stop price, loss at the stop) and refuses a trade its gates refuse, with one
+sentence. Then the agent manages it: the stop rests on Hyperliquid, and
+Liquidation Guard runs every tick, paused or not.
+
+**No agent runs above 10x.** Above 10x a sudden 4% price jump can pass the
+liquidation price before any stop fills. Both clients and the CLI refuse more
+before sending, in the server's own words; the server stays authoritative,
+and a market whose Hyperliquid maximum is lower keeps its own lower maximum.
+
+```python
+from ponk import PonkClient
+
+ponk = PonkClient(api_key="ponk_live_...")
+
+# The board needs no key: mark, 24h change, volume, open interest, funding.
+for m in ponk.perp_markets(limit=5).markets:
+    print(m.coin, m.mark_px, m.funding_hourly)
+
+# Check the ticket on live prices, creating nothing.
+ticket = ponk.preview_perp_agent(coin="BTC", direction="long", leverage=3,
+                                 capital_usd="500", stop_loss_pct="3")
+print(ticket.ticket.sentence if ticket.ok else ticket.sentence)
+
+# Create it. Nothing is signed or funded by this call.
+agent = ponk.create_perp_agent(coin="BTC", direction="long", leverage=3,
+                               capital_usd="500", stop_loss_pct="3")
+print(agent.next)   # authorize it in the app, then fund its Hyperliquid account
+```
+
+```rust
+use ponk::perpetuals::PerpTrade;
+
+let trade = PerpTrade::new("BTC", "long", 3, "500", "3").take_profit_pct("10");
+let agent = ponk.create_perp_agent(&trade).await?;
+let now = ponk.perp_agent(agent.id.as_deref().unwrap_or_default()).await?;
+```
+
+```sh
+ponk perpetuals markets --limit 10
+ponk perpetuals preview --coin BTC --side long --leverage 3 --capital 500 --stop 3
+ponk perpetuals create  --coin BTC --side long --leverage 3 --capital 500 --stop 3
+ponk perpetuals say "tighten btc stop to 2%"
+ponk perpetuals exit <id> --confirm
+```
+
+A key creates the agent and can preview, close, move the stop closer, pause,
+resume and exit it, read its account, ledger, decision feed and closing card,
+and plan and start a fleet from one sentence (`copilot_perp_plan`,
+`copilot_perp_start`). Two steps are wallet signatures in the app and have no
+method here: authorizing the agent (which proves the address withdrawals go
+to) and funding its Hyperliquid account. An exit always withdraws to that
+proven address. `practice=True` runs the same trade on live mainnet prices
+with a practice balance and sends nothing. `network` on every answer names
+the Hyperliquid network the agent trades on.
+
 
 **They never compute a number the server did not send.** Every USD field
 crosses the wire as a string or null, and null means *could not be priced*, not

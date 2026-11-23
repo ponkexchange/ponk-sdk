@@ -14,12 +14,15 @@
 //! * `PONK_API_KEY`  the `ponk_live_...` key from Settings, API keys. Needed
 //!   by `agents`, `agent <uuid>`, `create-agent`, `create-evm-agent`,
 //!   `wallet`, `pause`, `resume`, `withdraw`, `exit`, `open-cost`, `plan`,
-//!   `start-plan`, `evm-fleet`, `feed-prefs` and `whoami`. The pool, chain
-//!   and leaderboard reads and `fund-link` need none.
+//!   `start-plan`, `evm-fleet`, `feed-prefs`, `whoami` and every
+//!   `perpetuals` command but `perpetuals markets` and `perpetuals plan`. The
+//!   pool, chain, Perpetuals markets and leaderboard reads and `fund-link`
+//!   need none.
 //! * `PONK_API_URL`  the API base, default `https://ponk.exchange/api`.
 //! * `PONK_WEB_URL`  the web origin for the two app-served boards, only when
 //!   it is not the API base minus `/api` (local development).
 
+mod perpetuals;
 mod table;
 
 use anyhow::{bail, Context, Result};
@@ -30,7 +33,7 @@ use table::{age, dash, pct, price, render, sol, usd, usd_str, Align, DASH};
 #[command(
     name = "ponk",
     version,
-    about = "Ponk from the terminal: LP pools and agents on Solana (Meteora DLMM, Meteora DAMM v2, Orca, Raydium) and on Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain (Uniswap, PancakeSwap, Aerodrome), the leaderboard."
+    about = "Ponk from the terminal: LP pools and agents on Solana (Meteora DLMM, Meteora DAMM v2, Orca, Raydium) and on Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain (Uniswap, PancakeSwap, Aerodrome), Perpetuals agents on Hyperliquid, the leaderboard."
 )]
 struct Cli {
     /// API base URL.
@@ -319,6 +322,11 @@ enum Cmd {
         #[arg(long)]
         confirm: bool,
     },
+    /// Perpetuals agents on Hyperliquid: markets, typed trades, closes,
+    /// stops, exits and fleets. `ponk pause` and `ponk resume` work on a
+    /// Perpetuals agent too.
+    #[command(subcommand, alias = "perp")]
+    Perpetuals(perpetuals::PerpCmd),
 }
 
 fn main() -> Result<()> {
@@ -441,6 +449,7 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Plan { text, shape, one_sided } => plan(&cli, text, shape.as_deref(), one_sided.as_deref()).await,
         Cmd::StartPlan { id } => start_plan(&cli, id).await,
         Cmd::Exit { id, confirm } => exit(&cli, id, *confirm).await,
+        Cmd::Perpetuals(cmd) => perpetuals::run(&cli, cmd).await,
     }
 }
 

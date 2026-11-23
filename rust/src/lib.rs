@@ -1,7 +1,9 @@
 //! A thin Rust client for the ponk public API: create and drive liquidity
 //! agents on Solana, Ethereum, Arbitrum, Base, BNB Chain and Robinhood Chain,
-//! read their live positions, PnL and fees, and move funds home. The EVM
-//! chains, venues, CAIP ids and the fund-and-sign link are in [`evm`].
+//! and Perpetuals agents on Hyperliquid, read their live positions, PnL and
+//! fees, and move funds home. The EVM chains, venues, CAIP ids and the
+//! fund-and-sign link are in [`evm`]; the Perpetuals vocabulary, the typed
+//! trade and the 10x agent cap are in [`perpetuals`].
 //!
 //! One method per endpoint, typed results, and no behaviour of its own. It
 //! builds the request, sends it, maps the shared error envelope to
@@ -88,6 +90,22 @@
 //!   so both keep working after it expires. Renewing it needs a fresh wallet
 //!   signature in the app.
 //!
+//! # Perpetuals
+//!
+//! A Perpetuals agent is one typed trade on Hyperliquid:
+//! [`Client::create_perp_agent`] with a [`perpetuals::PerpTrade`] (coin,
+//! `long` or `short`, leverage, the USDC it trades with, a stop that is always
+//! set). The server builds the ticket from live prices and refuses one its
+//! gates refuse, with a sentence. No agent runs above 10x
+//! ([`perpetuals::AGENT_MAX_LEVERAGE`]); this crate refuses more before
+//! sending, in the server's own words. A key creates the agent and can
+//! preview, close, tighten the stop, pause, resume and exit it, but the agent
+//! trades nothing until its owner authorizes it in the app with their wallet
+//! and funds its Hyperliquid account: both are wallet signatures, which a key
+//! never makes. Practice mode runs on live mainnet prices and sends nothing.
+//! The markets board, candles, funding history and any 0x wallet's
+//! Hyperliquid positions and PnL are public reads that need no key.
+//!
 //! # Scope
 //!
 //! This crate covers the key-authenticated `/v1` API (agents, their value
@@ -121,6 +139,7 @@ mod client;
 mod error;
 pub mod evm;
 mod models;
+pub mod perpetuals;
 #[cfg(feature = "webhooks")]
 pub mod webhooks;
 
@@ -129,6 +148,16 @@ pub use client::{
     XFeedQuery, DEFAULT_BASE_URL, DEFAULT_FUND_TIMEOUT, DEFAULT_TIMEOUT, JUPITER_SESSION_HEADER,
 };
 pub use error::{ApiError, Error, ErrorKind};
+pub use models::{
+    PerpAccount, PerpAgent, PerpAgentConfig, PerpAgentRow, PerpBalances, PerpBoard, PerpBook,
+    PerpBookMarket, PerpBookRow, PerpCandle, PerpCandles, PerpCreated, PerpDecision,
+    PerpDecisionCode, PerpExit, PerpExitCard, PerpExitState, PerpFeeLeg, PerpFeeRates, PerpFill,
+    PerpFleet, PerpFleetFunding, PerpFleetPlan, PerpFleetPosition, PerpFleetRow, PerpFleetStop,
+    PerpFleetTotals, PerpFundingHistory, PerpFundingPayment, PerpFundingRecord, PerpLedger,
+    PerpMarket, PerpMarketRead, PerpOrder, PerpOwnerAnswer, PerpParse, PerpPlanLeg,
+    PerpPlanTotals, PerpPnlLine, PerpPosition, PerpPositionNow, PerpPreview, PerpRealized,
+    PerpStopAnswer, PerpTicket, PerpWallet, PerpWalletPnl, PerpWithdrawal,
+};
 pub use models::{
     Absence, AgentPositions, FarmRewardMint, Observed, PositionDetail, PositionEnvelope,
     PositionSummary, Registry, RegistryChain, RegistryVenue, RewardLine, TokenLabel, ViewerCounts,

@@ -1,0 +1,252 @@
+//! 0.18.0: Perpetuals on Hyperliquid. Bodies are written field for field
+//! from the API's own answers (`routes/perp.rs`, `routes/perp_agents.rs`,
+//! `routes/perp_copilot.rs` and `routes/copilot.rs`); the request tests
+//! answer from a one-request local server.
+
+use ponk::perpetuals::{self, PerpTrade};
+use ponk::{
+    Client, CopilotFleet, Error, PerpAgent, PerpBoard, PerpExitCard, PerpFleetPlan, PerpFleetStop,
+    PerpLedger,
+};
+
+const AGENT: &str = "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b";
+const FLEET: &str = "6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b";
+const CAP: &str = "20x is above the 10x most an agent can use. Above 10x a sudden 4% price jump can pass the liquidation price before any stop fills, so pick 10x or less.";
+
+fn decode<T: serde::de::DeserializeOwned>(body: &str) -> T {
+    serde_json::from_str(body).unwrap()
+}
+
+fn one_shot(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().unwrap();
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            let n = sock.read(&mut chunk).unwrap();
+            buf.extend_from_slice(&chunk[..n]);
+            let text = String::from_utf8_lossy(&buf).to_string();
+            if let Some(h) = text.find("\r\n\r\n") {
+                let len = text[..h]
+                    .lines()
+                    .find_map(|l| {
+                        let l = l.to_ascii_lowercase();
+                        l.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                if buf.len() >= h + 4 + len {
+                    break;
+                }
+            }
+            if n == 0 {
+                break;
+            }
+        }
+        write!(
+            sock,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+        String::from_utf8(buf).unwrap()
+    });
+    (format!("http://{addr}"), handle)
+}
+
+fn request_line(raw: &str) -> &str {
+    raw.lines().next().unwrap_or("")
+}
+
+fn body_of(raw: &str) -> serde_json::Value {
+    let at = raw.find("\r\n\r\n").expect("a request has a header block");
+    serde_json::from_str(&raw[at + 4..]).unwrap()
+}
+
+#[test]
+fn the_cap_sentence_is_the_servers() {
+    assert_eq!(perpetuals::leverage_refusal(20), CAP);
+    assert!(matches!(perpetuals::check_leverage(20), Err(Error::InvalidArgument(s)) if s == CAP));
+    assert!(perpetuals::check_leverage(0).is_err());
+    assert_eq!(perpetuals::check_leverage(10).unwrap(), 10);
+    assert!(matches!(PerpTrade::new("BTC", "up", 2, "500", "3").check(), Err(Error::InvalidArgument(s)) if s == "Say long or short."));
+    assert_eq!(perpetuals::market_id("kPEPE"), "perp:hyperliquid:kPEPE");
+    assert_eq!(perpetuals::market_id("perp:hyperliquid:ETH"), "perp:hyperliquid:ETH");
+    assert_eq!(perpetuals::coin_of("perp:hyperliquid:SOL"), "SOL");
+}
+
+#[tokio::test]
+async fn above_10x_is_refused_before_a_request() {
+    // Port 9 is never listened on: a request would fail as transport, not
+    // as the argument error.
+    let c = Client::new("http://127.0.0.1:9", "ponk_live_k").unwrap();
+    let t = PerpTrade::new("BTC", "long", 20, "500", "3");
+    assert!(matches!(c.create_perp_agent(&t).await, Err(Error::InvalidArgument(s)) if s == CAP));
+    assert!(matches!(c.preview_perp_agent(&t).await, Err(Error::InvalidArgument(s)) if s == CAP));
+    assert!(matches!(c.exit_perp_agent(AGENT, false).await, Err(Error::InvalidArgument(_))));
+    assert!(matches!(c.close_perp_agent(AGENT, false).await, Err(Error::InvalidArgument(_))));
+}
+
+#[test]
+fn the_board_reads_camel_case() {
+    let b: PerpBoard = decode(
+        r#"{"venue":"hyperliquid","asOf":1,"servedAt":2,"stale":false,"lastError":null,"fundingIntervalHours":1,"nextFundingTime":3,"total":180,
+        "markets":[{"id":"perp:hyperliquid:BTC","venue":"hyperliquid","coin":"BTC","symbol":"BTC-USD","szDecimals":5,"priceDecimals":1,"maxLeverage":40,
+        "leverageTiers":[[0,40],[150000000,20]],"isolatedOnly":false,"markPx":97000.5,"oraclePx":null,"midPx":null,"prevDayPx":95000.0,"change24hPct":2.1,
+        "volume24hUsd":2500000000.0,"openInterest":30000.1,"openInterestUsd":null,"fundingRate":0.0000125,"fundingIntervalHours":1,"nextFundingTime":3,
+        "fundingHourly":0.0000125,"fundingAnnualized":0.1095,"premium":null,"tradeUrl":"https://app.hyperliquid.xyz/trade/BTC"}]}"#,
+    );
+    let m = &b.markets[0];
+    assert_eq!((m.max_leverage, m.sz_decimals, m.change24h_pct), (Some(40), Some(5), Some(2.1)));
+    assert_eq!(m.leverage_tiers[1], (150000000.0, 20));
+    assert_eq!(m.oracle_px, None);
+    assert_eq!(b.total, Some(180));
+}
+
+#[tokio::test]
+async fn markets_are_public_and_take_their_query() {
+    let (base, h) = one_shot(r#"{"venue":"hyperliquid","total":0,"markets":[]}"#);
+    Client::public(&base).unwrap().perp_markets(Some("bt"), Some("oi"), Some(5)).await.unwrap();
+    let raw = h.join().unwrap();
+    assert_eq!(request_line(&raw), "GET /public/perp/markets?q=bt&sort=oi&limit=5 HTTP/1.1");
+    assert!(!raw.to_ascii_lowercase().contains("authorization:"));
+
+    let (base, h) = one_shot(r#"{"id":"perp:hyperliquid:BTC","coin":"BTC","interval":"4h","asOf":1,"stale":false,"historyLimit":5000,"oldestAvailable":0,"candles":[{"t":1,"o":1.0,"h":2.0,"l":0.5,"c":1.5,"v":null,"n":3}]}"#);
+    let c = Client::public(&base).unwrap().perp_candles("perp:hyperliquid:BTC", Some("4h"), Some(2)).await.unwrap();
+    assert_eq!(request_line(&h.join().unwrap()), "GET /public/perp/markets/perp%3Ahyperliquid%3ABTC/candles?interval=4h&bars=2 HTTP/1.1");
+    assert_eq!((c.candles[0].l, c.candles[0].v), (Some(0.5), None));
+}
+
+#[tokio::test]
+async fn create_posts_the_typed_trade() {
+    let (base, h) = one_shot(
+        r#"{"id":"0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b","network":"testnet","practice":false,"ticket":"Long BTC 3x with $500, stop 3%.","liquidationPrice":65000.0,"stopPrice":94090.0,
+        "ticketFigures":{"sentence":"Long BTC 3x","side":"long","coin":"BTC","leverage":3,"marginUsd":500.0,"notionalUsd":1500.0,"size":0.01546,"liquidationPrice":65000.0,
+        "liquidationMove":0.33,"stopPrice":94090.0,"stopFraction":0.03,"stopDefaulted":false,"lossAtStopUsd":45.0,"takeProfitPrice":null,"highLeverage":false},
+        "fees":{"activationBps":150,"performanceBps":1500,"exitBps":100},"next":"Authorize the agent, then fund its Hyperliquid account."}"#,
+    );
+    let t = PerpTrade::new("BTC", "long", 3, "500", "3").take_profit_pct("10").name("btc runner");
+    let a = Client::new(&base, "ponk_live_k").unwrap().create_perp_agent(&t).await.unwrap();
+    let raw = h.join().unwrap();
+    assert_eq!(request_line(&raw), "POST /v1/perp-agents HTTP/1.1");
+    assert_eq!(
+        body_of(&raw),
+        serde_json::json!({"coin":"BTC","direction":"long","leverage":3,"capitalUsd":"500","stopLossPct":"3","takeProfitPct":"10","name":"btc runner","practice":false})
+    );
+    assert!(a.created());
+    assert_eq!(a.ticket_figures.as_ref().unwrap().loss_at_stop_usd, Some(45.0));
+    assert_eq!(a.fees.as_ref().unwrap().exit_bps, Some(100));
+}
+
+#[tokio::test]
+async fn say_close_and_stop() {
+    let (base, h) = one_shot(r#"{"agentId":"0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b","request":"close","sentence":"Closing at your word."}"#);
+    let s = Client::new(&base, "ponk_live_k").unwrap().perp_say("close my btc long", true).await.unwrap();
+    let raw = h.join().unwrap();
+    assert_eq!(request_line(&raw), "POST /v1/perp-agents/say HTTP/1.1");
+    assert_eq!(body_of(&raw), serde_json::json!({"text":"close my btc long","confirm":true}));
+    assert!(!s.created());
+    assert_eq!(s.request.as_deref(), Some("close"));
+
+    let (base, h) = one_shot(r#"{"agentId":"a","request":"tighten_stop","sentence":"Moving the stop."}"#);
+    Client::new(&base, "ponk_live_k").unwrap().tighten_perp_stop(AGENT, "2").await.unwrap();
+    let raw = h.join().unwrap();
+    assert_eq!(request_line(&raw), format!("POST /v1/perp-agents/{AGENT}/stop HTTP/1.1"));
+    assert_eq!(body_of(&raw), serde_json::json!({"stopPct":"2"}));
+
+    let (base, h) = one_shot(r#"{"status":"requested","destination":"0x11","exitFeeBps":100,"sentence":"Closing."}"#);
+    let e = Client::new(&base, "ponk_live_k").unwrap().exit_perp_agent(AGENT, true).await.unwrap();
+    let raw = h.join().unwrap();
+    assert_eq!(request_line(&raw), format!("POST /v1/perp-agents/{AGENT}/exit HTTP/1.1"));
+    assert_eq!(body_of(&raw), serde_json::json!({"confirm":true}));
+    assert_eq!(e.exit_fee_bps, Some(100));
+}
+
+#[test]
+fn the_agent_reads_strings_and_nulls() {
+    let a: PerpAgent = decode(
+        r#"{"account":{"network":"testnet","practice":false,"coin":"BTC","readAtMs":10,"ageMs":2000,"stale":false,"bookingPending":false,
+        "balances":{"perpsValueUsd":"512.4","withdrawableUsd":"12.1","spotUsdc":null,"accountMode":"standard"},
+        "position":{"side":"long","size":"0.01546","entryPrice":"97000","markPrice":null,"notionalUsd":"1501.1","unrealizedPnlUsd":"1.5","marginUsd":"501.5","marginUsage":0.06,"liquidationPrice":65000.0,"stopPrice":"94090"}},
+        "exitFeeBps":100,"id":"x","status":"running","agentAccount":"0x11",
+        "config":{"network":"testnet","coin":"BTC","direction":"long","leverage":3,"capitalUsd":"500","stopLossPct":"3","takeProfitPct":null,"practice":false},
+        "decision":{"codes":["HOLD"],"sentences":["Holding."],"sent":[],"at":"t"},"realized":null,"exit":null}"#,
+    );
+    let acct = a.account.unwrap();
+    assert_eq!(acct.balances.as_ref().unwrap().perps_value_usd.as_deref(), Some("512.4"));
+    assert_eq!(acct.balances.as_ref().unwrap().spot_usdc, None);
+    assert_eq!(acct.position.as_ref().unwrap().mark_price, None);
+    assert_eq!(a.config.unwrap().stop_loss_pct.as_deref(), Some("3"));
+    assert!(a.realized.is_none());
+
+    let l: PerpLedger = decode(
+        r#"{"orders":[{"purpose":"stop","side":"sell","type":"trigger","size":"0.01546","reduceOnly":true,"status":"resting","sentence":null,"at":"t"}],
+        "fills":[{"coin":"BTC","side":"buy","px":"97000","sz":"0.01546","dir":"Open Long","closedPnl":"0","fee":"0.52","liquidation":false,"timeMs":1}],
+        "funding":[{"coin":"BTC","usdc":"-0.01","fundingRate":"0.0000125","timeMs":2}],"fees":[],"withdrawals":[]}"#,
+    );
+    assert_eq!(l.orders[0].order_type.as_deref(), Some("trigger"));
+    assert_eq!(l.funding[0].usdc.as_deref(), Some("-0.01"));
+
+    let card: PerpExitCard = decode(
+        r#"{"kind":"perp","agent_id":"x","venue":"hyperliquid","market":"BTC-USD","side":"long","leverage":3,"pnl_usd":null,"pnl_unavailable":"A transfer is still settling.","fees_lifetime_usd":null,"il_usd":null,"exit_signature":null,"liquidated":false}"#,
+    );
+    assert_eq!(card.pnl_usd, None);
+    assert_eq!(card.pnl_unavailable.as_deref(), Some("A transfer is still settling."));
+}
+
+#[test]
+fn a_perp_fleet_and_its_plan() {
+    let f: CopilotFleet = decode(
+        r#"{"kind":"perp","fleet":{"id":"f","kind":"perp","intent_text":"x","status":"active","agents":2},"stop_now":{},"totals":{},"rows":[],"missing_agents":[],
+        "perp":{"network":"testnet","practice":false,"exit_fee_bps":100,"rows":[{"agent_id":"a","name":"BTC long","pnl_usd":null,"pnl_reason":"Closed, settling.","booking_pending":true,"needs":"nothing","close":{"state":"open","sentence":null}}],
+        "totals":{"value_usd":null,"notional_usd":0.0,"margin_usd":0.0,"open_positions":0,"reason":"An agent is settling."},"funding":{"to_authorize":1,"to_fund":1,"sign_url":null,"sentence":null}}}"#,
+    );
+    let p = f.perp.unwrap();
+    assert_eq!(f.kind.as_deref(), Some("perp"));
+    assert_eq!(p.rows[0].pnl_reason.as_deref(), Some("Closed, settling."));
+    assert_eq!(p.totals.unwrap().value_usd, None);
+
+    let plan: PerpFleetPlan = decode(
+        r#"{"id":"p","kind":"perp","state":"ready","text":"x","echo":"y","refusal":null,"network":"testnet","practice":false,
+        "legs":[{"index":0,"name":"BTC long","coin":"BTC","direction":"long","leverage":2,"leverage_defaulted":true,"capital_usd":"500","stop_pct":3.0,"stop_defaulted":true,
+        "take_profit_pct":null,"ticket":{"lossAtStopUsd":30.0},"high_leverage":false,"needs_confirmation":false,"note":null,"refusal":null}],
+        "totals":{"agents":1,"capital_usd":"500","notional_usd":1000.0,"loss_at_stops_usd":30.0},"fleet_stop_pct":10.0,"fees":null,"fees_for":"api",
+        "signatures":null,"notes":[],"can_start":true,"fleet_id":null,"agents":[],"sign_url":null}"#,
+    );
+    assert_eq!(plan.legs[0].ticket.as_ref().unwrap().loss_at_stop_usd, Some(30.0));
+    assert_eq!(plan.fees_for.as_deref(), Some("api"));
+}
+
+#[tokio::test]
+async fn agent_stops_keep_the_answers_list() {
+    // The fleet summary's `agents` count and the answers list share a key;
+    // the list is written last, and that is the one kept.
+    let (base, h) = one_shot(
+        r#"{"id":"6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b","kind":"perp","intent_text":"x","status":"active","agents":2,"stop_drawdown_pct":10.0,
+        "agents":[{"agent_id":"a","name":"BTC long","ok":true,"sentence":"Moving the stop at your word on the next tick."}]}"#,
+    );
+    let s: PerpFleetStop = Client::new(&base, "ponk_live_k").unwrap().copilot_tighten_agent_stops(FLEET, 2.0).await.unwrap();
+    let raw = h.join().unwrap();
+    assert_eq!(request_line(&raw), format!("POST /copilot/fleets/{FLEET}/stop-rule HTTP/1.1"));
+    assert_eq!(body_of(&raw), serde_json::json!({"stop_pct":2.0}));
+    assert_eq!(s.answers[0].ok, Some(true));
+    assert_eq!(s.fleet.kind.as_deref(), Some("perp"));
+    assert_eq!(s.fleet.agents, None);
+}
+
+#[tokio::test]
+async fn fleet_pause_and_plan_start() {
+    let (base, h) = one_shot(r#"{"batch_id":"b","kind":"pause","total":1,"done":1,"failed":0,"running":0,"unknown":0,"skipped":0,"items":[]}"#);
+    let b = Client::new(&base, "ponk_live_k").unwrap().copilot_pause_fleet(FLEET).await.unwrap();
+    assert_eq!(request_line(&h.join().unwrap()), format!("POST /copilot/fleets/{FLEET}/pause HTTP/1.1"));
+    assert_eq!(b.kind.as_deref(), Some("pause"));
+
+    let (base, h) = one_shot(r#"{"id":"p","kind":"perp","state":"started","fleet_id":"f","agents":[{"index":0,"agent_id":"a","created":true}],"sign_url":"https://ponk.exchange/x"}"#);
+    let p = Client::new(&base, "ponk_live_k").unwrap().copilot_perp_start("p").await.unwrap();
+    assert_eq!(request_line(&h.join().unwrap()), "POST /copilot/perp/plans/p/start HTTP/1.1");
+    assert_eq!(p.state.as_deref(), Some("started"));
+    assert_eq!(p.agents[0]["created"], true);
+}

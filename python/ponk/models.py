@@ -24,6 +24,55 @@ from decimal import Decimal
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Type, TypeVar
 
 __all__ = [
+    # 0.18.0, Perpetuals
+    "PerpAccount",
+    "PerpAgent",
+    "PerpAgentConfig",
+    "PerpAgentRow",
+    "PerpBalances",
+    "PerpBoard",
+    "PerpBook",
+    "PerpBookMarket",
+    "PerpBookRow",
+    "PerpCandle",
+    "PerpCandles",
+    "PerpCreated",
+    "PerpDecision",
+    "PerpExit",
+    "PerpExitCard",
+    "PerpExitState",
+    "PerpFeeLeg",
+    "PerpFeeRates",
+    "PerpFill",
+    "PerpFleet",
+    "PerpFleetFunding",
+    "PerpFleetPlan",
+    "PerpFleetPosition",
+    "PerpFleetRow",
+    "PerpFleetStop",
+    "PerpFleetTotals",
+    "PerpFundingHistory",
+    "PerpFundingPayment",
+    "PerpFundingRecord",
+    "PerpLedger",
+    "PerpMarket",
+    "PerpMarketRead",
+    "PerpOrder",
+    "PerpOwnerAnswer",
+    "PerpParse",
+    "PerpPlanLeg",
+    "PerpPlanTotals",
+    "PerpPnlMarket",
+    "PerpPnlSummary",
+    "PerpPosition",
+    "PerpPositionNow",
+    "PerpPreview",
+    "PerpRealized",
+    "PerpSaid",
+    "PerpTicket",
+    "PerpWallet",
+    "PerpWalletPnl",
+    "PerpWithdrawal",
     # 0.17.0
     "Absence",
     "AgentPositions",
@@ -2813,9 +2862,12 @@ class CopilotStart(Model):
 
 @dataclass
 class CopilotFleetSummary(Model):
-    """One fleet. `status` is `active`, `stopping` or `stopped`."""
+    """One fleet. `status` is `active`, `stopping` or `stopped`. `kind` is
+    `lp`, or `perp` for a fleet of Perpetuals agents: a fleet is one kind,
+    never both."""
 
     id: Optional[str] = None
+    kind: Optional[str] = None
     intent_text: Optional[str] = None
     status: Optional[str] = None
     agents: Optional[int] = None
@@ -2843,6 +2895,11 @@ class CopilotFleet(Model):
     `failed_agents` by name. `funding` is what the fleet still needs from
     your wallet, as on `CopilotStart.funding_state`. `missing_agents` lists
     agents whose row could not be read.
+
+    `kind` is `lp` or `perp`. On a Perpetuals fleet `rows` is empty and
+    `perp` (`PerpFleet`) carries every agent: side, leverage, value,
+    realized and unrealized PnL, margin usage, liquidation distance, what it
+    still needs and its close state, with the totals.
     """
 
     fleet: Optional[CopilotFleetSummary] = None
@@ -2854,7 +2911,11 @@ class CopilotFleet(Model):
     poll_after_ms: Optional[int] = None
     exit: Optional[Dict[str, Any]] = None
     funding: Optional[Dict[str, Any]] = None
+    kind: Optional[str] = None
+    perp: Optional["PerpFleet"] = None
 
+    # `perp` (a `PerpFleet`) is added to this map at the end of the module,
+    # where that class is defined.
     _NESTED: ClassVar[Mapping[str, Any]] = {"fleet": CopilotFleetSummary, "rows": (FleetRow,)}
 
 
@@ -5074,3 +5135,953 @@ class WalletHistory(Model):
     first_record_at: Optional[str] = None
 
     _NESTED: ClassVar[Mapping[str, Any]] = {"points": (WalletHistoryPoint,)}
+
+
+# --------------------------------------------------------------------------
+# Perpetuals on Hyperliquid (0.18.0)
+#
+# The market and agent routes answer in camelCase; the copilot's fleet plan,
+# the fleet body and the closing card in snake_case, as the server writes
+# them. Decimal figures the server keeps exactly arrive as strings, figures
+# computed from live prices as numbers. `None` is unknown, never zero.
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class PerpMarket(Model):
+    """One Hyperliquid Perpetuals market.
+
+    `id` is `perp:hyperliquid:<COIN>`. Rates are fractions (0.0000125 is
+    0.00125% an hour) and positive funding means longs pay shorts;
+    `change_24h_pct` is in percent. `leverage_tiers` is `[from_notional_usd,
+    max_leverage]` pairs where leverage falls as size grows, empty when one
+    leverage applies to every size. An agent never runs above 10x whatever
+    `max_leverage` says (`ponk.perpetuals.AGENT_MAX_LEVERAGE`).
+    """
+
+    _CAMEL: ClassVar[bool] = True
+
+    id: Optional[str] = None
+    venue: Optional[str] = None
+    coin: Optional[str] = None
+    symbol: Optional[str] = None
+    sz_decimals: Optional[int] = None
+    price_decimals: Optional[int] = None
+    max_leverage: Optional[int] = None
+    leverage_tiers: List[Any] = field(default_factory=list)
+    isolated_only: Optional[bool] = None
+    mark_px: Optional[float] = None
+    oracle_px: Optional[float] = None
+    mid_px: Optional[float] = None
+    prev_day_px: Optional[float] = None
+    change_24h_pct: Optional[float] = None
+    volume_24h_usd: Optional[float] = None
+    open_interest: Optional[float] = None
+    open_interest_usd: Optional[float] = None
+    funding_rate: Optional[float] = None
+    funding_interval_hours: Optional[float] = None
+    next_funding_time: Optional[int] = None
+    funding_hourly: Optional[float] = None
+    funding_annualized: Optional[float] = None
+    premium: Optional[float] = None
+    trade_url: Optional[str] = None
+
+
+@dataclass
+class PerpBoard(Model):
+    """`perp_markets()`: every listed market from one server read of
+    Hyperliquid, refreshed every 5 seconds. `stale` is true when the read
+    served is older than 30 seconds, with `last_error` saying why. `total` is
+    every listed market before `q` and `limit`. Times are ms since the epoch."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    venue: Optional[str] = None
+    as_of: Optional[int] = None
+    served_at: Optional[int] = None
+    stale: Optional[bool] = None
+    last_error: Optional[str] = None
+    funding_interval_hours: Optional[int] = None
+    next_funding_time: Optional[int] = None
+    total: Optional[int] = None
+    markets: List[PerpMarket] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"markets": (PerpMarket,)}
+
+
+@dataclass
+class PerpMarketRead(Model):
+    """`perp_market(market)`: one market from the same snapshot as the board."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    venue: Optional[str] = None
+    as_of: Optional[int] = None
+    served_at: Optional[int] = None
+    stale: Optional[bool] = None
+    last_error: Optional[str] = None
+    funding_interval_hours: Optional[int] = None
+    next_funding_time: Optional[int] = None
+    market: Optional[PerpMarket] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"market": PerpMarket}
+
+
+@dataclass
+class PerpCandle(Model):
+    """One candle: open time `t` (ms), `o h l c`, volume `v` in the coin and
+    the trade count `n`."""
+
+    t: Optional[int] = None
+    o: Optional[float] = None
+    h: Optional[float] = None
+    l: Optional[float] = None  # noqa: E741
+    c: Optional[float] = None
+    v: Optional[float] = None
+    n: Optional[int] = None
+
+
+@dataclass
+class PerpCandles(Model):
+    """`perp_candles(market)`: oldest first. Hyperliquid keeps the most recent
+    5000 candles of an interval; `oldest_available` is the earliest open time
+    reachable at this one."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    id: Optional[str] = None
+    coin: Optional[str] = None
+    interval: Optional[str] = None
+    as_of: Optional[int] = None
+    stale: Optional[bool] = None
+    history_limit: Optional[int] = None
+    oldest_available: Optional[int] = None
+    candles: List[PerpCandle] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"candles": (PerpCandle,)}
+
+
+@dataclass
+class PerpFundingRecord(Model):
+    """One applied hourly funding: `rate` (a fraction), `annualized`
+    (rate x 24 x 365) and `premium`, at `time` (ms)."""
+
+    time: Optional[int] = None
+    rate: Optional[float] = None
+    annualized: Optional[float] = None
+    premium: Optional[float] = None
+
+
+@dataclass
+class PerpFundingHistory(Model):
+    """`perp_funding_history(market)`: oldest first. Funding is paid every
+    hour on Hyperliquid; a positive rate means longs pay shorts."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    id: Optional[str] = None
+    coin: Optional[str] = None
+    days: Optional[int] = None
+    as_of: Optional[int] = None
+    stale: Optional[bool] = None
+    funding_interval_hours: Optional[int] = None
+    next_funding_time: Optional[int] = None
+    current_rate: Optional[float] = None
+    records: List[PerpFundingRecord] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"records": (PerpFundingRecord,)}
+
+
+@dataclass
+class PerpPosition(Model):
+    """One open position on Hyperliquid, as a 0x wallet holds it. `size` is
+    in contracts. `liquidation_px` is `None` where Hyperliquid gives none (a
+    cross margin position the account's other margin keeps far from
+    liquidation)."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    market: Optional[str] = None
+    coin: Optional[str] = None
+    side: Optional[str] = None
+    size: Optional[float] = None
+    entry_px: Optional[float] = None
+    mark_px: Optional[float] = None
+    position_value: Optional[float] = None
+    unrealized_pnl: Optional[float] = None
+    return_on_equity: Optional[float] = None
+    liquidation_px: Optional[float] = None
+    margin_used: Optional[float] = None
+    margin_mode: Optional[str] = None
+    leverage: Optional[int] = None
+    cum_funding_since_open: Optional[float] = None
+
+
+@dataclass
+class PerpWallet(Model):
+    """`perp_wallet(address)`: a 0x wallet's Hyperliquid account and open
+    positions, largest first. `account` has `accountValue`, `totalNotional`,
+    `marginUsed` and `withdrawable`, each `None` when Hyperliquid gave none.
+    `stale` is the last good read after a failed refresh."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    address: Optional[str] = None
+    account: Optional[Dict[str, Any]] = None
+    positions: List[PerpPosition] = field(default_factory=list)
+    as_of_ms: Optional[int] = None
+    stale: Optional[bool] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"positions": (PerpPosition,)}
+
+
+@dataclass
+class PerpPnlMarket(Model):
+    """One market of a wallet's 30 days: realized PnL, fees, `net` (realized
+    less fees), volume, fills, closes, liquidations, and the open position's
+    unrealized PnL when there is one."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    market: Optional[str] = None
+    coin: Optional[str] = None
+    realized_pnl: Optional[float] = None
+    fees: Optional[float] = None
+    net: Optional[float] = None
+    volume_usd: Optional[float] = None
+    fills: Optional[int] = None
+    closes: Optional[int] = None
+    liquidations: Optional[int] = None
+    unrealized_pnl: Optional[float] = None
+
+
+@dataclass
+class PerpPnlSummary(PerpPnlMarket):
+    """The total. `windows` is the net realized over `d1`, `d7` and `d30`,
+    each `None` when the fills read did not reach that far; then
+    `full_window` is false and `covered_from_ms` is the oldest fill read."""
+
+    windows: Optional[Dict[str, Any]] = None
+    covered_from_ms: Optional[int] = None
+    full_window: Optional[bool] = None
+
+
+@dataclass
+class PerpWalletPnl(Model):
+    """`perp_wallet_pnl(address)`: a 0x wallet's Perpetuals PnL over 30 days
+    from its own fills on Hyperliquid. Funding is NOT in these figures
+    (`excludes`)."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    address: Optional[str] = None
+    markets: List[PerpPnlMarket] = field(default_factory=list)
+    summary: Optional[PerpPnlSummary] = None
+    excludes: List[str] = field(default_factory=list)
+    window_days: Optional[int] = None
+    fills_read: Optional[int] = None
+    read_at: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"markets": (PerpPnlMarket,), "summary": PerpPnlSummary}
+
+
+@dataclass
+class PerpBookRow(Model):
+    """One wallet's open position: `wallet` (`address`, `label`, `emoji`,
+    `color`, `source`, `agentSlug`), the `position` and when it was read."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    wallet: Optional[Dict[str, Any]] = None
+    position: Optional[PerpPosition] = None
+    as_of: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"position": PerpPosition}
+
+
+@dataclass
+class PerpBookMarket(Model):
+    """Who is long and who is short on one market. `long_usd` is `None` when
+    nobody is long, `short_usd` when nobody is short."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    market: Optional[str] = None
+    coin: Optional[str] = None
+    longs: Optional[int] = None
+    shorts: Optional[int] = None
+    long_usd: Optional[float] = None
+    short_usd: Optional[float] = None
+
+
+@dataclass
+class PerpBook(Model):
+    """`perp_book()`: the curated wallets' open Perpetuals positions as each
+    wallet's last read stored them. `scope` is `curated`."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    scope: Optional[str] = None
+    market: Optional[str] = None
+    rows: List[PerpBookRow] = field(default_factory=list)
+    markets: List[PerpBookMarket] = field(default_factory=list)
+    wallets_in_scope: Optional[int] = None
+    wallets_read: Optional[int] = None
+    read_at: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"rows": (PerpBookRow,), "markets": (PerpBookMarket,)}
+
+
+@dataclass
+class PerpParse(Model):
+    """`perp_parse(text)`: what the one Perpetuals sentence parser read.
+
+    `ok` true carries `parsed`, whose `intent` is `open`, `close` or
+    `tighten_stop` (an open has `direction`, `coin`, `leverage`,
+    `capitalUsd`, `stopPct`, `takeProfitPct`, `practice`; a stop has
+    `stop_pct`). `ok` false carries `sentence`, asking for what is missing.
+    """
+
+    ok: Optional[bool] = None
+    parsed: Optional[Dict[str, Any]] = None
+    sentence: Optional[str] = None
+
+
+@dataclass
+class PerpTicket(Model):
+    """The ticket's figures from live prices: margin, notional, size in
+    coins, the liquidation price and the adverse move to it (a fraction), the
+    stop price, its fraction and the loss at the stop, and the take-profit
+    price. `sentence` is the ticket said plainly."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    sentence: Optional[str] = None
+    side: Optional[str] = None
+    coin: Optional[str] = None
+    leverage: Optional[int] = None
+    margin_usd: Optional[float] = None
+    notional_usd: Optional[float] = None
+    size: Optional[float] = None
+    liquidation_price: Optional[float] = None
+    liquidation_move: Optional[float] = None
+    stop_price: Optional[float] = None
+    stop_fraction: Optional[float] = None
+    stop_defaulted: Optional[bool] = None
+    loss_at_stop_usd: Optional[float] = None
+    take_profit_price: Optional[float] = None
+    high_leverage: Optional[bool] = None
+
+
+@dataclass
+class PerpFeeRates(Model):
+    """The rates the agent's authorization will state, in basis points.
+    Sent on the confirm step only; `None` in practice."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    activation_bps: Optional[int] = None
+    performance_bps: Optional[int] = None
+    exit_bps: Optional[int] = None
+
+
+@dataclass
+class PerpPreview(Model):
+    """`preview_perp_agent(...)`: every create gate on live prices, creating
+    nothing. `ok` true carries `ticket` and `fees`; `ok` false carries
+    `sentence`, why the gates refused the ticket. `network` is `testnet`, or
+    `mainnet` for practice (mainnet prices, nothing sent)."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    ok: Optional[bool] = None
+    sentence: Optional[str] = None
+    network: Optional[str] = None
+    practice: Optional[bool] = None
+    name: Optional[str] = None
+    ticket: Optional[PerpTicket] = None
+    fees: Optional[PerpFeeRates] = None
+    needs_confirmation: Optional[bool] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"ticket": PerpTicket, "fees": PerpFeeRates}
+
+
+@dataclass
+class PerpCreated(Model):
+    """`create_perp_agent(...)`: the new agent and its ticket.
+
+    `ticket` is the ticket's sentence and `ticket_figures` its numbers.
+    `next` says what happens next: a live agent waits for its owner to
+    authorize it in the app and fund its Hyperliquid account; a practice
+    agent starts on its next tick.
+    """
+
+    _CAMEL: ClassVar[bool] = True
+
+    id: Optional[str] = None
+    network: Optional[str] = None
+    practice: Optional[bool] = None
+    ticket: Optional[str] = None
+    liquidation_price: Optional[float] = None
+    stop_price: Optional[float] = None
+    ticket_figures: Optional[PerpTicket] = None
+    fees: Optional[PerpFeeRates] = None
+    next: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"ticket_figures": PerpTicket, "fees": PerpFeeRates}
+
+
+@dataclass
+class PerpOwnerAnswer(Model):
+    """A close or a stop tightening recorded: `request` is `close` or
+    `tighten_stop`, carried out by the agent on its next ticks."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    agent_id: Optional[str] = None
+    request: Optional[str] = None
+    sentence: Optional[str] = None
+
+
+@dataclass
+class PerpSaid(PerpCreated):
+    """`perp_say(text)`: an open answers as `create_perp_agent` does (`id`
+    set); a close or a stop tightening answers as `PerpOwnerAnswer` does
+    (`request` set)."""
+
+    agent_id: Optional[str] = None
+    request: Optional[str] = None
+    sentence: Optional[str] = None
+
+    @property
+    def created(self) -> bool:
+        """True when the sentence created an agent."""
+        return self.id is not None
+
+
+@dataclass
+class PerpAgentRow(Model):
+    """One row of `perp_agents()`. `realized_net_usd` is after Hyperliquid's
+    trading fees and funding, `None` before anything was booked;
+    `booking_pending` is true while a close (a filled stop) is not booked
+    yet, so the figure does not include it. `decision` is the newest
+    decision's `code` and `at`."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    status: Optional[str] = None
+    created_at: Optional[str] = None
+    network: Optional[str] = None
+    coin: Optional[str] = None
+    direction: Optional[str] = None
+    leverage: Optional[int] = None
+    capital_usd: Optional[str] = None
+    practice: Optional[bool] = None
+    realized_net_usd: Optional[str] = None
+    decision: Optional[Dict[str, Any]] = None
+    exiting: Optional[bool] = None
+    booking_pending: Optional[bool] = None
+
+
+@dataclass
+class PerpBalances(Model):
+    """The agent account's balances, decimal strings."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    perps_value_usd: Optional[str] = None
+    withdrawable_usd: Optional[str] = None
+    spot_usdc: Optional[str] = None
+    account_mode: Optional[str] = None
+
+
+@dataclass
+class PerpPositionNow(Model):
+    """The agent's open position. `margin_usage` is maintenance margin over
+    equity (1 is liquidation); `stop_price` is the reduce-only stop resting
+    on Hyperliquid."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    side: Optional[str] = None
+    size: Optional[str] = None
+    entry_price: Optional[str] = None
+    mark_price: Optional[str] = None
+    notional_usd: Optional[str] = None
+    unrealized_pnl_usd: Optional[str] = None
+    margin_usd: Optional[str] = None
+    margin_usage: Optional[float] = None
+    liquidation_price: Optional[float] = None
+    stop_price: Optional[str] = None
+
+
+@dataclass
+class PerpAccount(Model):
+    """The agent's Hyperliquid account, from its last tick (stale after 150
+    seconds), else one read.
+
+    `unavailable` set means the account is not read and says why; every
+    other field is then `None`. `value_unavailable` set means the balances
+    are not this read's: show them as unknown with that reason. A practice
+    agent reports its practice book on mainnet prices.
+    """
+
+    _CAMEL: ClassVar[bool] = True
+
+    unavailable: Optional[str] = None
+    network: Optional[str] = None
+    practice: Optional[bool] = None
+    coin: Optional[str] = None
+    read_at_ms: Optional[int] = None
+    age_ms: Optional[int] = None
+    stale: Optional[bool] = None
+    booking_pending: Optional[bool] = None
+    value_unavailable: Optional[str] = None
+    balances: Optional[PerpBalances] = None
+    position: Optional[PerpPositionNow] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"balances": PerpBalances, "position": PerpPositionNow}
+
+
+@dataclass
+class PerpAgentConfig(Model):
+    """The trade: market, side, leverage, capital, stop and take-profit
+    percents (decimal strings) and practice."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    network: Optional[str] = None
+    coin: Optional[str] = None
+    direction: Optional[str] = None
+    leverage: Optional[int] = None
+    capital_usd: Optional[str] = None
+    stop_loss_pct: Optional[str] = None
+    take_profit_pct: Optional[str] = None
+    practice: Optional[bool] = None
+
+
+@dataclass
+class PerpDecision(Model):
+    """One decision: its reason `codes` and `sentences`, and `sent`, the
+    Hyperliquid action types sent that tick (`order`, `batchModify`,
+    `usdSend`, `withdraw3`, ...). A day of holding is one row."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    codes: List[str] = field(default_factory=list)
+    sentences: List[str] = field(default_factory=list)
+    sent: List[str] = field(default_factory=list)
+    practice: Optional[bool] = None
+    at: Optional[str] = None
+
+
+@dataclass
+class PerpRealized(Model):
+    """Realized net against the high-water mark, after Hyperliquid's trading
+    fees and funding. The performance fee is taken only above the mark."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    net_usd: Optional[str] = None
+    high_water_usd: Optional[str] = None
+
+
+@dataclass
+class PerpExitState(Model):
+    """An exit in progress: `status` (`requested`, `pending`, `sent`,
+    `confirmed`, `refused`, `unknown`) and the amount withdrawn."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    status: Optional[str] = None
+    amount_usd: Optional[str] = None
+
+
+@dataclass
+class PerpAgent(Model):
+    """`perp_agent(id)`: the agent as it stands.
+
+    `agent_account` is the agent's own Hyperliquid address, `None` until it
+    is authorized. `decision` is the newest decision with its reason; an
+    agent that is holding is working. `realized` is `None` before anything
+    was booked. `exit` is set while an exit runs. `exit_fee_bps` is the exit
+    rate for the close and withdraw confirm, `None` in practice.
+    """
+
+    _CAMEL: ClassVar[bool] = True
+
+    id: Optional[str] = None
+    status: Optional[str] = None
+    agent_account: Optional[str] = None
+    account: Optional[PerpAccount] = None
+    exit_fee_bps: Optional[int] = None
+    config: Optional[PerpAgentConfig] = None
+    decision: Optional[PerpDecision] = None
+    realized: Optional[PerpRealized] = None
+    exit: Optional[PerpExitState] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "account": PerpAccount,
+        "config": PerpAgentConfig,
+        "decision": PerpDecision,
+        "realized": PerpRealized,
+        "exit": PerpExitState,
+    }
+
+
+@dataclass
+class PerpOrder(Model):
+    """One order the agent sent, with its `purpose` (entry, stop, take
+    profit, guard cut, close) and `status` (`pending`, `resting`, `filled`,
+    `partially_filled`, `canceled`, `rejected`, `triggered`, `unknown`,
+    `not_sent`)."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    purpose: Optional[str] = None
+    side: Optional[str] = None
+    type: Optional[str] = None
+    size: Optional[str] = None
+    reduce_only: Optional[bool] = None
+    status: Optional[str] = None
+    sentence: Optional[str] = None
+    at: Optional[str] = None
+
+
+@dataclass
+class PerpFill(Model):
+    """One fill: price, size, Hyperliquid's `closed_pnl` and trading `fee`,
+    and whether it was a liquidation. `time_ms` is ms since the epoch."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    coin: Optional[str] = None
+    side: Optional[str] = None
+    px: Optional[str] = None
+    sz: Optional[str] = None
+    dir: Optional[str] = None
+    closed_pnl: Optional[str] = None
+    fee: Optional[str] = None
+    liquidation: Optional[bool] = None
+    time_ms: Optional[int] = None
+
+
+@dataclass
+class PerpFundingPayment(Model):
+    """One hourly funding payment. `usdc` is signed: negative was paid."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    coin: Optional[str] = None
+    usdc: Optional[str] = None
+    funding_rate: Optional[str] = None
+    time_ms: Optional[int] = None
+
+
+@dataclass
+class PerpFeeLeg(Model):
+    """One Ponk fee transfer: `kind` (`activation`, `performance`, `exit`),
+    `recipient` (`treasury`, `referrer`) and `status`."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    kind: Optional[str] = None
+    recipient: Optional[str] = None
+    amount_usd: Optional[str] = None
+    status: Optional[str] = None
+    at: Optional[str] = None
+
+
+@dataclass
+class PerpWithdrawal(Model):
+    """One withdrawal to the address proven in the agent's authorization."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    status: Optional[str] = None
+    amount_usd: Optional[str] = None
+    exit_fee_usd: Optional[str] = None
+    destination: Optional[str] = None
+    sentence: Optional[str] = None
+    at: Optional[str] = None
+
+
+@dataclass
+class PerpLedger(Model):
+    """`perp_agent_ledger(id)`: everything the agent did on Hyperliquid,
+    newest first (at most 100 orders, 100 fills and 100 funding payments)."""
+
+    orders: List[PerpOrder] = field(default_factory=list)
+    fills: List[PerpFill] = field(default_factory=list)
+    funding: List[PerpFundingPayment] = field(default_factory=list)
+    fees: List[PerpFeeLeg] = field(default_factory=list)
+    withdrawals: List[PerpWithdrawal] = field(default_factory=list)
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "orders": (PerpOrder,),
+        "fills": (PerpFill,),
+        "funding": (PerpFundingPayment,),
+        "fees": (PerpFeeLeg,),
+        "withdrawals": (PerpWithdrawal,),
+    }
+
+
+@dataclass
+class PerpExitCard(Model):
+    """`perp_agent_exit_card(id)`: the closing card, computed on the server.
+
+    `pnl_usd` is the realized net after every fee (Hyperliquid's trading
+    fees and funding, every Ponk fee that moved or is owed, Hyperliquid's $1
+    on each withdrawal); `None` with `pnl_unavailable` while a transfer is
+    settling or the latest fills are not booked. `pnl_pct` is percent of
+    `capital_usd`. `note` is set in practice, which models no trading fees
+    and no funding.
+    """
+
+    kind: Optional[str] = None
+    agent_id: Optional[str] = None
+    venue: Optional[str] = None
+    venue_name: Optional[str] = None
+    market: Optional[str] = None
+    coin: Optional[str] = None
+    side: Optional[str] = None
+    leverage: Optional[int] = None
+    high_leverage: Optional[bool] = None
+    practice: Optional[bool] = None
+    network: Optional[str] = None
+    pnl_usd: Optional[float] = None
+    pnl_pct: Optional[float] = None
+    pnl_unavailable: Optional[str] = None
+    note: Optional[str] = None
+    capital_usd: Optional[float] = None
+    referral_code: Optional[str] = None
+    opened_at: Optional[str] = None
+    closed_at: Optional[str] = None
+    duration_secs: Optional[int] = None
+    position_open: Optional[bool] = None
+    realized: Optional[bool] = None
+    liquidated: Optional[bool] = None
+
+
+@dataclass
+class PerpExit(Model):
+    """`exit_perp_agent(id)`: the exit requested. `destination` is the
+    withdrawal address proven in the agent's authorization."""
+
+    _CAMEL: ClassVar[bool] = True
+
+    status: Optional[str] = None
+    destination: Optional[str] = None
+    exit_fee_bps: Optional[int] = None
+    sentence: Optional[str] = None
+
+
+@dataclass
+class PerpPlanLeg(Model):
+    """One leg of a Perpetuals plan. `*_defaulted` says a stated default was
+    taken. `ticket` is the preview's ticket from live prices. A leg with
+    `refusal` is not planned; the rest still start."""
+
+    index: Optional[int] = None
+    name: Optional[str] = None
+    coin: Optional[str] = None
+    direction: Optional[str] = None
+    leverage: Optional[int] = None
+    leverage_defaulted: Optional[bool] = None
+    capital_usd: Optional[str] = None
+    stop_pct: Optional[float] = None
+    stop_defaulted: Optional[bool] = None
+    take_profit_pct: Optional[float] = None
+    ticket: Optional[Dict[str, Any]] = None
+    high_leverage: Optional[bool] = None
+    needs_confirmation: Optional[bool] = None
+    note: Optional[str] = None
+    refusal: Optional[str] = None
+
+
+@dataclass
+class PerpPlanTotals(Model):
+    """The legs that will start: count, capital, notional and what every
+    stop together loses, before fees and slippage."""
+
+    agents: Optional[int] = None
+    capital_usd: Optional[str] = None
+    notional_usd: Optional[float] = None
+    loss_at_stops_usd: Optional[float] = None
+
+
+@dataclass
+class PerpFleetPlan(Model):
+    """A fleet of Perpetuals agents planned from one sentence.
+
+    `state` is `ready`, `refused` (`refusal` is `{code, message}`) or
+    `started`. `echo` restates the sentence with every default named.
+    `fees` is the rates each authorization states, `None` in practice, and
+    `fees_for` who they were priced for (`app` or `api`). After
+    `copilot_perp_start`, `fleet_id`, `agents` (one per leg: `agent_id`,
+    `created`, or `refusal`) and `sign_url`, the fleet page where each agent
+    is authorized and funded one after another.
+    """
+
+    id: Optional[str] = None
+    kind: Optional[str] = None
+    state: Optional[str] = None
+    text: Optional[str] = None
+    echo: Optional[str] = None
+    refusal: Optional[Dict[str, Any]] = None
+    network: Optional[str] = None
+    practice: Optional[bool] = None
+    legs: List[PerpPlanLeg] = field(default_factory=list)
+    totals: Optional[PerpPlanTotals] = None
+    fleet_stop_pct: Optional[float] = None
+    fees: Optional[Dict[str, Any]] = None
+    fees_for: Optional[str] = None
+    signatures: Optional[str] = None
+    notes: List[str] = field(default_factory=list)
+    can_start: Optional[bool] = None
+    fleet_id: Optional[str] = None
+    agents: List[Dict[str, Any]] = field(default_factory=list)
+    sign_url: Optional[str] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"legs": (PerpPlanLeg,), "totals": PerpPlanTotals}
+
+
+@dataclass
+class PerpFleetPosition(Model):
+    """A fleet agent's open position, with `liquidation_distance_pct`, how
+    far the mark is from the estimated liquidation in percent."""
+
+    side: Optional[str] = None
+    size: Optional[str] = None
+    entry_price: Optional[str] = None
+    mark_price: Optional[str] = None
+    notional_usd: Optional[float] = None
+    margin_usd: Optional[float] = None
+    unrealized_pnl_usd: Optional[float] = None
+    margin_usage: Optional[float] = None
+    liquidation_price: Optional[float] = None
+    liquidation_distance_pct: Optional[float] = None
+    stop_price: Optional[str] = None
+
+
+@dataclass
+class PerpFleetRow(Model):
+    """One Perpetuals agent of a fleet.
+
+    `pnl_usd` is realized plus unrealized less Ponk's fees, `None` with
+    `pnl_reason`. `mandate` is `active`, `expired`, `revoked` or `none`;
+    `needs` is `authorize`, `fund` or `nothing`. `close` is `{state,
+    sentence}` with `state` `open`, `closing`, `closed` or `failed`.
+    """
+
+    agent_id: Optional[str] = None
+    name: Optional[str] = None
+    status: Optional[str] = None
+    coin: Optional[str] = None
+    direction: Optional[str] = None
+    leverage: Optional[int] = None
+    capital_usd: Optional[str] = None
+    stop_pct: Optional[str] = None
+    take_profit_pct: Optional[str] = None
+    practice: Optional[bool] = None
+    network: Optional[str] = None
+    high_leverage: Optional[bool] = None
+    account_unavailable: Optional[str] = None
+    read_at_ms: Optional[int] = None
+    stale: Optional[bool] = None
+    funding_in_flight: Optional[bool] = None
+    value_usd: Optional[float] = None
+    realized_net_usd: Optional[float] = None
+    ponk_fees_usd: Optional[float] = None
+    ponk_fees_pending_usd: Optional[float] = None
+    has_account: Optional[bool] = None
+    under_withdrawal_fee: Optional[bool] = None
+    unrealized_pnl_usd: Optional[float] = None
+    pnl_usd: Optional[float] = None
+    pnl_reason: Optional[str] = None
+    booking_pending: Optional[bool] = None
+    position: Optional[PerpFleetPosition] = None
+    mandate: Optional[str] = None
+    funded: Optional[bool] = None
+    needs: Optional[str] = None
+    close: Optional[Dict[str, Any]] = None
+    decision: Optional[Dict[str, Any]] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {"position": PerpFleetPosition}
+
+
+@dataclass
+class PerpFleetTotals(Model):
+    """The fleet's totals. A total over part of the fleet is never shown:
+    the figure is `None` and `reason` says why."""
+
+    value_usd: Optional[float] = None
+    pnl_usd: Optional[float] = None
+    realized_net_usd: Optional[float] = None
+    unrealized_pnl_usd: Optional[float] = None
+    notional_usd: Optional[float] = None
+    margin_usd: Optional[float] = None
+    margin_usage: Optional[float] = None
+    max_margin_usage: Optional[float] = None
+    max_margin_usage_agent: Optional[str] = None
+    nearest_liquidation_pct: Optional[float] = None
+    nearest_liquidation_agent: Optional[str] = None
+    open_positions: Optional[int] = None
+    reason: Optional[str] = None
+
+
+@dataclass
+class PerpFleetFunding(Model):
+    """What the fleet still needs: agents to authorize, agents to fund, and
+    the fleet page on its funding step (`None` when nothing is left)."""
+
+    to_authorize: Optional[int] = None
+    to_fund: Optional[int] = None
+    sign_url: Optional[str] = None
+    sentence: Optional[str] = None
+
+
+@dataclass
+class PerpFleet(Model):
+    """`CopilotFleet.perp`: every Perpetuals agent of the fleet and the
+    totals. `exit_fee_bps` is the rate the close confirm states."""
+
+    network: Optional[str] = None
+    practice: Optional[bool] = None
+    rows: List[PerpFleetRow] = field(default_factory=list)
+    totals: Optional[PerpFleetTotals] = None
+    funding: Optional[PerpFleetFunding] = None
+    exit_fee_bps: Optional[int] = None
+
+    _NESTED: ClassVar[Mapping[str, Any]] = {
+        "rows": (PerpFleetRow,),
+        "totals": PerpFleetTotals,
+        "funding": PerpFleetFunding,
+    }
+
+
+@dataclass
+class PerpFleetStop(CopilotFleetSummary):
+    """`copilot_tighten_agent_stops(fleet_id, stop_pct)`: the fleet, and in
+    `answers` what each agent said (`agent_id`, `name`, `ok`, `sentence`).
+
+    The server sends each agent's answer under the key `agents`, the same
+    key that carries the fleet's agent count; this model reads the list
+    into `answers` and leaves `agents` as `None`.
+    """
+
+    answers: List[Dict[str, Any]] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "PerpFleetStop":  # type: ignore[override]
+        obj = super().from_dict(data)
+        listed = data.get("agents") if isinstance(data, Mapping) else None
+        if isinstance(listed, list):
+            obj.answers = list(listed)
+            obj.agents = None
+        return obj
+
+
+CopilotFleet._NESTED = dict(CopilotFleet._NESTED, perp=PerpFleet)

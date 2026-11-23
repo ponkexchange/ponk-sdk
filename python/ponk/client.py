@@ -74,6 +74,21 @@ symptom is silence, not an exception. Four consequences for your code:
 * A lapsed mandate can never trap your funds. `withdraw` and `exit` are
   user-initiated and deliberately bypass the mandate, so both keep working
   after it expires. Renewing it needs a fresh wallet signature in the app.
+
+Perpetuals on Hyperliquid
+-------------------------
+
+A Perpetuals agent is one typed trade: `create_perp_agent(coin="BTC",
+direction="long", leverage=3, capital_usd=500, stop_loss_pct=3)`. The server
+builds the ticket from live prices and refuses one its gates refuse, with a
+sentence. No agent runs above 10x (`ponk.perpetuals.AGENT_MAX_LEVERAGE`);
+this client refuses more before sending, in the server's own words. A key
+creates the agent and can preview, close, tighten the stop, pause, resume and
+exit it, but the agent trades nothing until its owner authorizes it in the
+app with their wallet and funds its Hyperliquid account: that authorization
+and that funding are wallet signatures, which a key never makes. Practice
+mode (`practice=True`) runs on live mainnet prices with a practice balance
+and sends nothing.
 """
 
 from __future__ import annotations
@@ -88,6 +103,30 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 from ._version import __version__
 from .errors import PonkError, PonkTransportError, error_from_response
 from . import evm as _evm
+from . import perpetuals as _perp
+from .models import (  # 0.18.0, Perpetuals
+    PerpAccount,
+    PerpAgent,
+    PerpAgentRow,
+    PerpBoard,
+    PerpBook,
+    PerpCandles,
+    PerpCreated,
+    PerpDecision,
+    PerpExit,
+    PerpExitCard,
+    PerpFleetPlan,
+    PerpFleetStop,
+    PerpFundingHistory,
+    PerpLedger,
+    PerpMarketRead,
+    PerpOwnerAnswer,
+    PerpParse,
+    PerpPreview,
+    PerpSaid,
+    PerpWallet,
+    PerpWalletPnl,
+)
 from .models import (  # 0.17.0
     AgentPositions,
     Registry,
@@ -1349,6 +1388,8 @@ class PonkClient:
         """`POST /v1/agents/{id}/pause`. Stop the loop.
 
         The position stays open and keeps earning. Nothing is closed or swept.
+        On a Perpetuals agent the same call pauses it: it opens nothing new,
+        and its resting stop and Liquidation Guard keep running.
         """
         return Agent.from_dict(
             self._request("POST", "/v1/agents/{0}/pause".format(_seg(agent_id)))
@@ -2512,7 +2553,8 @@ class PonkClient:
         """`GET /copilot/fleets/{id}`. The fleet live: totals, the stop now, every agent.
 
         USD figures the server could not price are `None`, never zero, and
-        `totals["unvalued"]` counts the agents left out of the totals.
+        `totals["unvalued"]` counts the agents left out of the totals. A
+        Perpetuals fleet (`kind` `perp`) carries its agents in `perp`.
         """
         return CopilotFleet.from_dict(
             self._request("GET", "/copilot/fleets/{0}".format(_seg(fleet_id)), session_only=True)
@@ -2529,6 +2571,11 @@ class PonkClient:
         every agent whose exit failed. On a fleet that is `stopping` with
         failed exits, calling this again retries ONLY those exits; on a
         stopped fleet it answers 409. Takes the fund timeout.
+
+        On a Perpetuals fleet each agent closes its position, settles and
+        withdraws the rest to the address proven in its own authorization,
+        over its next ticks (`running` items); a practice agent closes its
+        practice position and pauses.
         """
         return FleetBatch.from_dict(
             self._request(
@@ -2551,6 +2598,397 @@ class PonkClient:
                 "POST",
                 "/copilot/fleets/{0}/stop-rule".format(_seg(fleet_id)),
                 body={"drawdown_pct": drawdown_pct},
+                session_only=True,
+            )
+        )
+
+    def copilot_tighten_agent_stops(self, fleet_id: str, stop_pct: float) -> PerpFleetStop:
+        """`POST /copilot/fleets/{id}/stop-rule` with `stop_pct`. Every open
+        Perpetuals agent of the fleet moves its own stop to `stop_pct` percent
+        from the price, closer only.
+
+        Each agent says what it did in `PerpFleetStop.answers` (`ok` and a
+        sentence: a stop that is not tighter is left where it is). Only on a
+        Perpetuals fleet that is active; an LP fleet answers 422. `stop_pct`
+        is more than 0 and under 90. Needs a `trade` key or a wallet session.
+        """
+        return PerpFleetStop.from_dict(
+            self._request(
+                "POST",
+                "/copilot/fleets/{0}/stop-rule".format(_seg(fleet_id)),
+                body={"stop_pct": stop_pct},
+                session_only=True,
+            )
+        )
+
+    def copilot_pause_fleet(self, fleet_id: str) -> FleetBatch:
+        """`POST /copilot/fleets/{id}/pause`. Pause every agent of an active fleet.
+
+        One batch item per agent. A paused Perpetuals agent opens nothing new
+        and keeps its resting stop and Liquidation Guard. A fleet that is
+        closing or closed answers 409. Needs a `trade` key or a wallet session.
+        """
+        return FleetBatch.from_dict(
+            self._request(
+                "POST", "/copilot/fleets/{0}/pause".format(_seg(fleet_id)), session_only=True
+            )
+        )
+
+    def copilot_resume_fleet(self, fleet_id: str) -> FleetBatch:
+        """`POST /copilot/fleets/{id}/resume`. Resume every agent of an active fleet."""
+        return FleetBatch.from_dict(
+            self._request(
+                "POST", "/copilot/fleets/{0}/resume".format(_seg(fleet_id)), session_only=True
+            )
+        )
+
+    # -- Perpetuals on Hyperliquid (0.18.0) ----------------------------------
+
+    def perp_markets(
+        self,
+        q: Optional[str] = None,
+        *,
+        sort: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> PerpBoard:
+        """`GET /public/perp/markets`. Every Hyperliquid Perpetuals market.
+
+        No key needed. `q` keeps coins starting with that text (an exact coin
+        leads); `sort` is one of `ponk.perpetuals.MARKET_SORTS` (`volume` by
+        default), largest first, a market whose figure is unknown last. From
+        one server read of Hyperliquid refreshed every 5 seconds; `stale` and
+        `last_error` say when the read is older. A server with Perpetuals
+        reads switched off answers 503 (`perp_reads_off`).
+        """
+        return PerpBoard.from_dict(
+            self._request(
+                "GET", "/public/perp/markets", params={"q": q, "sort": sort, "limit": limit}
+            )
+        )
+
+    def perp_market(self, market: str) -> PerpMarketRead:
+        """`GET /public/perp/markets/{id}`. One market, by `perp:hyperliquid:BTC`
+        or the bare coin (`BTC`). An unlisted one raises `PonkNotFoundError`."""
+        return PerpMarketRead.from_dict(
+            self._request("GET", "/public/perp/markets/{0}".format(_seg(market)))
+        )
+
+    def perp_candles(
+        self, market: str, interval: Optional[str] = None, bars: Optional[int] = None
+    ) -> PerpCandles:
+        """`GET /public/perp/markets/{id}/candles`. Price candles, oldest first.
+
+        `interval` is one of `ponk.perpetuals.CANDLE_INTERVALS` (`1h` by
+        default), `bars` 1 to 5000 (200 by default; fewer reach back at 1w
+        and 1M, and more is a 400). No key needed.
+        """
+        return PerpCandles.from_dict(
+            self._request(
+                "GET",
+                "/public/perp/markets/{0}/candles".format(_seg(market)),
+                params={"interval": interval, "bars": bars},
+            )
+        )
+
+    def perp_funding_history(self, market: str, days: Optional[int] = None) -> PerpFundingHistory:
+        """`GET /public/perp/markets/{id}/funding`. Applied hourly funding over
+        `days` (1 to 30, 7 by default), oldest first. No key needed."""
+        return PerpFundingHistory.from_dict(
+            self._request(
+                "GET",
+                "/public/perp/markets/{0}/funding".format(_seg(market)),
+                params={"days": days},
+            )
+        )
+
+    def perp_wallet(self, address: str) -> PerpWallet:
+        """`GET /public/wallets/{address}/perp`. A 0x wallet's Hyperliquid
+        account and open positions, read now (cached 5 seconds). No key."""
+        return PerpWallet.from_dict(
+            self._request("GET", "/public/wallets/{0}/perp".format(_seg(address)))
+        )
+
+    def perp_wallet_pnl(self, address: str) -> PerpWalletPnl:
+        """`GET /public/wallets/{address}/perp/pnl`. A 0x wallet's Perpetuals
+        PnL over 30 days, per market and in total, from its own fills. Funding
+        is not in these figures. No key."""
+        return PerpWalletPnl.from_dict(
+            self._request("GET", "/public/wallets/{0}/perp/pnl".format(_seg(address)))
+        )
+
+    def perp_book(self, market: Optional[str] = None) -> PerpBook:
+        """`GET /public/wallets/perp/book`. Who is long and who is short among
+        the curated wallets, optionally on one market (a coin or a market id).
+        From stored reads only. No key."""
+        return PerpBook.from_dict(
+            self._request("GET", "/public/wallets/perp/book", params={"market": market})
+        )
+
+    def perp_parse(self, text: str) -> PerpParse:
+        """`POST /public/perp/parse`. Read one Perpetuals sentence, touching no
+        account: an open (`long btc 3x 500 stop 3 tp 10`), a close (`close my
+        sol short`) or a stop tightening (`tighten btc stop to 2%`). No key."""
+        return PerpParse.from_dict(
+            self._request("POST", "/public/perp/parse", body={"text": text})
+        )
+
+    def perp_agents(self) -> List[PerpAgentRow]:
+        """`GET /v1/perp-agents`. Your Perpetuals agents, newest first, each
+        with its market, side, leverage, capital, state, realized net and
+        newest decision code."""
+        return PerpAgentRow.from_list(self._request("GET", "/v1/perp-agents"))
+
+    def perp_agent(self, agent_id: str) -> PerpAgent:
+        """`GET /v1/perp-agents/{id}`. The agent as it stands: its trade, its
+        Hyperliquid account and position, the newest decision with its reason,
+        realized net against the high-water mark, and any exit in progress.
+        Another account's agent, or an LP agent, raises `PonkNotFoundError`."""
+        return PerpAgent.from_dict(
+            self._request("GET", "/v1/perp-agents/{0}".format(_seg(agent_id)))
+        )
+
+    def perp_agent_balances(self, agent_id: str) -> PerpAccount:
+        """`GET /v1/perp-agents/{id}/balances`. The agent's Hyperliquid account
+        now: balances and the open position (size, entry, mark, unrealized
+        PnL, margin, margin usage, liquidation price, resting stop). When it
+        is not read, `unavailable` says why."""
+        return PerpAccount.from_dict(
+            self._request("GET", "/v1/perp-agents/{0}/balances".format(_seg(agent_id)))
+        )
+
+    def perp_agent_ledger(self, agent_id: str) -> PerpLedger:
+        """`GET /v1/perp-agents/{id}/ledger`. Orders (each with its purpose),
+        fills with closed PnL and fees, funding payments, Ponk fee transfers
+        and withdrawals, newest first."""
+        return PerpLedger.from_dict(
+            self._request("GET", "/v1/perp-agents/{0}/ledger".format(_seg(agent_id)))
+        )
+
+    def perp_agent_decisions(self, agent_id: str) -> List[PerpDecision]:
+        """`GET /v1/perp-agents/{id}/decisions`. Why the agent did or did not
+        act, newest first: one row per change of decision, so a day of
+        holding is one row. At most 200."""
+        return PerpDecision.from_list(
+            self._request("GET", "/v1/perp-agents/{0}/decisions".format(_seg(agent_id)))
+        )
+
+    def perp_agent_exit_card(self, agent_id: str) -> PerpExitCard:
+        """`GET /v1/perp-agents/{id}/exit-card`. The closing card: realized
+        net after every fee, percent of capital, duration, whether it was
+        liquidated. Raises `PonkNotFoundError` until something has closed."""
+        return PerpExitCard.from_dict(
+            self._request("GET", "/v1/perp-agents/{0}/exit-card".format(_seg(agent_id)))
+        )
+
+    def preview_perp_agent(
+        self,
+        *,
+        coin: str,
+        direction: str,
+        leverage: int,
+        capital_usd: Union[str, float, int],
+        stop_loss_pct: Union[str, float, int],
+        take_profit_pct: Union[str, float, int, None] = None,
+        name: Optional[str] = None,
+        practice: bool = False,
+    ) -> PerpPreview:
+        """`POST /v1/perp-agents/preview`. Every create gate on live prices,
+        creating nothing.
+
+        Takes exactly what `create_perp_agent` takes. `ok` true carries the
+        ticket (size, liquidation price, stop price, loss at the stop) and
+        the rates the authorization will state; `ok` false carries the
+        sentence the gates refused it with. Leverage above 10 raises
+        `ValueError` here with the server's sentence, before anything is sent.
+        """
+        return PerpPreview.from_dict(
+            self._request(
+                "POST",
+                "/v1/perp-agents/preview",
+                body=_perp_body(
+                    coin, direction, leverage, capital_usd, stop_loss_pct, take_profit_pct, name, practice
+                ),
+            )
+        )
+
+    def create_perp_agent(
+        self,
+        *,
+        coin: str,
+        direction: str,
+        leverage: int,
+        capital_usd: Union[str, float, int],
+        stop_loss_pct: Union[str, float, int],
+        take_profit_pct: Union[str, float, int, None] = None,
+        name: Optional[str] = None,
+        practice: bool = False,
+    ) -> PerpCreated:
+        """`POST /v1/perp-agents`. Create a typed trade as a Perpetuals agent.
+
+        `coin` is a Hyperliquid market's coin (`BTC`), `direction` `long` or
+        `short` (the agent never reverses it), `leverage` isolated, 1 to 10,
+        `capital_usd` the USDC it trades with (at least 10, Hyperliquid's
+        smallest order), `stop_loss_pct` the stop in percent from the entry
+        (3 for 3%; required, no position runs without one) and
+        `take_profit_pct` an optional take-profit. Money figures may be
+        strings to keep them exact. `name` defaults to the coin.
+
+        The ticket is built from live prices first; a ticket the gates refuse
+        creates nothing and raises `PonkUnprocessableError` with the
+        sentence. Leverage above 10 raises `ValueError` here with the
+        server's own sentence, before anything is sent; a market whose
+        Hyperliquid maximum is lower is refused by the server with its own
+        figure. Needs a `trade` key; an agent created with a key is on the
+        API rates, which `fees` states.
+
+        NOTHING IS SIGNED OR FUNDED BY THIS CALL. The agent trades only once
+        its owner authorizes it in the app with their wallet and funds its
+        Hyperliquid account (`next` says so). `practice=True` needs neither:
+        live mainnet prices, a practice balance, nothing sent.
+        """
+        return PerpCreated.from_dict(
+            self._request(
+                "POST",
+                "/v1/perp-agents",
+                body=_perp_body(
+                    coin, direction, leverage, capital_usd, stop_loss_pct, take_profit_pct, name, practice
+                ),
+            )
+        )
+
+    def perp_say(self, text: str, *, confirm: bool = False) -> PerpSaid:
+        """`POST /v1/perp-agents/say`. One sentence, the same answer as on the
+        web, Telegram and the MCP.
+
+        An open (`long btc 3x 500 stop 3`) creates an agent exactly as
+        `create_perp_agent` does. A close (`close my sol short`, needs
+        `confirm=True`) or a stop tightening (`tighten btc stop to 2%`) goes
+        to your one running agent on that market; more than one that fits is
+        refused with a sentence naming them, never a guess. Needs a `trade`
+        key. The server parses the sentence, so leverage is checked there.
+        """
+        body: Dict[str, Any] = {"text": text}
+        if confirm:
+            body["confirm"] = True
+        return PerpSaid.from_dict(self._request("POST", "/v1/perp-agents/say", body=body))
+
+    def close_perp_agent(self, agent_id: str, *, confirm: bool) -> PerpOwnerAnswer:
+        """`POST /v1/perp-agents/{id}/close`. Close the position; the funds stay
+        on the agent's Hyperliquid account and it opens nothing new.
+
+        `confirm` must be True, or `ValueError` is raised and nothing is sent.
+        Recorded as a request the agent carries out on its next ticks; it
+        replaces a pending stop tightening. Needs a `trade` key.
+        """
+        _confirmed(confirm, "close the position")
+        return PerpOwnerAnswer.from_dict(
+            self._request(
+                "POST", "/v1/perp-agents/{0}/close".format(_seg(agent_id)), body={"confirm": True}
+            )
+        )
+
+    def tighten_perp_stop(self, agent_id: str, stop_pct: Union[str, float, int]) -> PerpOwnerAnswer:
+        """`POST /v1/perp-agents/{id}/stop`. Move the stop closer, never wider.
+
+        `stop_pct` is a percent from the mark, more than 0 and under 90 (2
+        for 2%). A stop that is not tighter than the one resting is left
+        where it is and the decision feed says so. Needs a `trade` key.
+        """
+        return PerpOwnerAnswer.from_dict(
+            self._request(
+                "POST",
+                "/v1/perp-agents/{0}/stop".format(_seg(agent_id)),
+                body={"stopPct": stop_pct},
+            )
+        )
+
+    def exit_perp_agent(self, agent_id: str, *, confirm: bool) -> PerpExit:
+        """`POST /v1/perp-agents/{id}/exit`. Close, settle and withdraw.
+
+        MOVES REAL FUNDS. `confirm` must be True, or `ValueError` is raised
+        and nothing is sent. The agent is paused first (its stop and
+        Liquidation Guard keep running), then over its next ticks it closes
+        what is open, settles, takes the exit fee only if it ever traded,
+        and withdraws the rest to the withdrawal address proven in its
+        authorization (`destination`); no other address can be named.
+        Returns at once: read `perp_agent(id).exit`. An exit already open
+        answers that exit. A practice agent holds no funds (422). Needs a
+        `trade` key.
+        """
+        _confirmed(confirm, "close and withdraw")
+        return PerpExit.from_dict(
+            self._request(
+                "POST",
+                "/v1/perp-agents/{0}/exit".format(_seg(agent_id)),
+                body={"confirm": True},
+                timeout=self.fund_timeout,
+            )
+        )
+
+    def copilot_perp_plan(self, text: str, *, practice: bool = False) -> PerpFleetPlan:
+        """`POST /copilot/perp/plans`. Plan a fleet of Perpetuals agents from
+        one sentence.
+
+            plan = ponk.copilot_perp_plan(
+                "put $2,000 across 4 Perpetuals agents, long BTC and ETH, short SOL and HYPE, 3x"
+            )
+
+        A closed deterministic grammar, no language model. Missing fields
+        take stated defaults, named in `echo`; anything ambiguous is refused
+        with one sentence in `refusal`. Every leg goes through the preview's
+        gates on live prices, and a leg that fails says why in its `refusal`
+        while the rest can still start. Leverage above 10 is asked back by
+        the server. A sentence that names pools too is refused: a fleet is
+        LP or Perpetuals. Creates nothing. Plans last 15 minutes.
+
+        Planning needs no credential, but only a plan made with one (this
+        client's `session_token` or API key) can be started.
+        """
+        body: Dict[str, Any] = {"text": text}
+        if practice:
+            body["practice"] = True
+        return PerpFleetPlan.from_dict(
+            self._request(
+                "POST",
+                "/copilot/perp/plans",
+                body=body,
+                session_only=bool(self.session_token or self.api_key),
+            )
+        )
+
+    def copilot_perp_get_plan(self, plan_id: str) -> PerpFleetPlan:
+        """`GET /copilot/perp/plans/{id}`. The same plan again (15 minutes)."""
+        return PerpFleetPlan.from_dict(
+            self._request(
+                "GET",
+                "/copilot/perp/plans/{0}".format(_seg(plan_id)),
+                session_only=bool(self.session_token or self.api_key),
+            )
+        )
+
+    def copilot_perp_start(
+        self, plan_id: str, *, confirmations: Optional[Mapping[str, str]] = None
+    ) -> PerpFleetPlan:
+        """`POST /copilot/perp/plans/{id}/start`. Start the plan as one fleet.
+
+        MOVES NO MONEY. One agent per planned leg, every gate run again on
+        fresh prices, as one copilot fleet: the plan comes back `started`
+        with `fleet_id`, `agents` and `sign_url`, the fleet page where each
+        agent is authorized with its own signature and funded with its own
+        transfer, one after another (`signatures` says so). A practice fleet
+        needs neither. A plan with a leg above 10x starts nothing and
+        answers 422 naming the leg. Starts at most once: a repeat answers
+        the fleet already made. `confirmations` is kept for compatibility
+        (leg index to the typed agent name); with leverage capped at 10
+        nothing asks for it. Needs a `trade` key or a wallet session, of the
+        same kind the plan was made with. Takes the fund timeout.
+        """
+        return PerpFleetPlan.from_dict(
+            self._request(
+                "POST",
+                "/copilot/perp/plans/{0}/start".format(_seg(plan_id)),
+                body={"confirmations": dict(confirmations)} if confirmations else {},
+                timeout=self.fund_timeout,
                 session_only=True,
             )
         )
@@ -4100,6 +4538,40 @@ def dca_order(
             raise ValueError("a band needs band_trigger_mint (the volatile leg)")
         intent["band"] = dict(bounds, trigger_mint=band_trigger_mint)
     return intent
+
+
+def _confirmed(confirm: Any, what: str) -> None:
+    if confirm is not True:
+        raise ValueError(
+            "confirm must be True to {0}. Nothing was sent.".format(what)
+        )
+
+
+def _perp_body(
+    coin: str,
+    direction: str,
+    leverage: Any,
+    capital_usd: Any,
+    stop_loss_pct: Any,
+    take_profit_pct: Any,
+    name: Optional[str],
+    practice: bool,
+) -> Dict[str, Any]:
+    # The 10x agent cap, in the server's own words, before anything is sent.
+    # Every other gate is the server's: it reads live prices.
+    body: Dict[str, Any] = {
+        "coin": coin,
+        "direction": _perp.check_direction(direction),
+        "leverage": _perp.check_leverage(leverage),
+        "capitalUsd": capital_usd,
+        "stopLossPct": stop_loss_pct,
+        "practice": bool(practice),
+    }
+    if take_profit_pct is not None:
+        body["takeProfitPct"] = take_profit_pct
+    if name is not None:
+        body["name"] = name
+    return body
 
 
 def _batch_target(agent_ids: Optional[Sequence[str]], all_agents: bool) -> Dict[str, Any]:

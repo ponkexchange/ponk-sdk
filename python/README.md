@@ -291,6 +291,57 @@ of what it sends you once it has opened a position (0.5% for a holder).
 `evm_open_cost` state the rates for you; `withdraw` and `exit_agent` list what
 the exit fee took in `exit_fees`.
 
+## Perpetuals on Hyperliquid
+
+A Perpetuals agent is one typed trade. The server builds the ticket from
+Hyperliquid's live prices and refuses one its gates refuse, as a
+`PonkUnprocessableError` carrying the sentence. Money and percents may be
+strings, to keep them exact.
+
+```python
+from ponk import PonkClient, perpetuals
+
+ponk = PonkClient(api_key="ponk_live_...")
+
+# 1. The board, no key needed. Funding is a fraction; positive means longs pay.
+board = ponk.perp_markets(sort="volume", limit=10)
+
+# 2. The ticket on live prices, creating nothing.
+p = ponk.preview_perp_agent(coin="ETH", direction="short", leverage=2,
+                            capital_usd="300", stop_loss_pct="4", take_profit_pct="8")
+if not p.ok:
+    print(p.sentence)
+
+# 3. Create. Above 10x raises ValueError here, in the server's words.
+agent = ponk.create_perp_agent(coin="ETH", direction="short", leverage=2,
+                               capital_usd="300", stop_loss_pct="4", take_profit_pct="8")
+
+# 4. Authorize and fund it in the app with your wallet. Then read it.
+now = ponk.perp_agent(agent.id)
+print(now.account.position, now.decision.sentences if now.decision else None)
+
+# Owner actions, carried out on the agent's next ticks.
+ponk.tighten_perp_stop(agent.id, "2")           # closer only
+ponk.close_perp_agent(agent.id, confirm=True)   # the funds stay on its account
+ponk.exit_perp_agent(agent.id, confirm=True)    # close, settle, withdraw
+```
+
+`perpetuals.AGENT_MAX_LEVERAGE` is 10 and `perpetuals.leverage_refusal(n)` is
+the server's sentence for more. `pause_agent` and `resume_agent` work on a
+Perpetuals agent: paused, it opens nothing new and its resting stop and
+Liquidation Guard keep running. `perp_say("long btc 3x 500 stop 3")` is the
+same one-sentence answer as the app, Telegram and the MCP.
+
+A fleet from one sentence: `copilot_perp_plan("put $2,000 across 4 Perpetuals
+agents, long BTC and ETH, short SOL and HYPE, 3x")`, then
+`copilot_perp_start(plan.id)`, which moves no money and returns `sign_url`,
+the page where each agent is authorized and funded. `copilot_fleet(id).perp`
+reads every agent live; `copilot_tighten_agent_stops`, `copilot_pause_fleet`,
+`copilot_resume_fleet` and `copilot_stop_fleet` act on all of them.
+
+What has no method here: authorizing the agent and funding its Hyperliquid
+account, both wallet signatures in the app.
+
 ## Chains on the boards and trackers
 
 The agents leaderboard, Calls, the X Tracker and the Wallet Tracker cover
@@ -416,6 +467,23 @@ if m is not None:
 | `feed_prefs()` | `GET /v1/feed-prefs` | `read` |
 | `set_feed_prefs(chains)` | `PATCH /v1/feed-prefs` | `trade` |
 | `whoami()` | `GET /v1/me` | `read` |
+| `perp_markets(q=None, sort=, limit=)` | `GET /public/perp/markets` | nothing |
+| `perp_market(market)` | `GET /public/perp/markets/{id}` | nothing |
+| `perp_candles(market, interval=None, bars=None)` | `GET /public/perp/markets/{id}/candles` | nothing |
+| `perp_funding_history(market, days=None)` | `GET /public/perp/markets/{id}/funding` | nothing |
+| `perp_wallet(address)` / `perp_wallet_pnl(address)` | `GET /public/wallets/{address}/perp`, `/perp/pnl` | nothing |
+| `perp_book(market=None)` | `GET /public/wallets/perp/book` | nothing |
+| `perp_parse(text)` | `POST /public/perp/parse` | nothing |
+| `perp_agents()` / `perp_agent(id)` | `GET /v1/perp-agents`, `/{id}` | `read` |
+| `perp_agent_balances(id)` / `perp_agent_ledger(id)` / `perp_agent_decisions(id)` / `perp_agent_exit_card(id)` | `GET /v1/perp-agents/{id}/balances`, `/ledger`, `/decisions`, `/exit-card` | `read` |
+| `preview_perp_agent(...)` | `POST /v1/perp-agents/preview` | `read` |
+| `create_perp_agent(...)` | `POST /v1/perp-agents` | `trade` |
+| `perp_say(text, confirm=False)` | `POST /v1/perp-agents/say` | `trade` |
+| `close_perp_agent(id, confirm=True)` / `tighten_perp_stop(id, stop_pct)` / `exit_perp_agent(id, confirm=True)` | `POST /v1/perp-agents/{id}/close`, `/stop`, `/exit` | `trade` |
+| `copilot_perp_plan(text, practice=False)` / `copilot_perp_get_plan(id)` | `POST /copilot/perp/plans`, `GET /copilot/perp/plans/{id}` | nothing (a key to start it later) |
+| `copilot_perp_start(id)` | `POST /copilot/perp/plans/{id}/start` | `trade` |
+| `copilot_tighten_agent_stops(fleet_id, stop_pct)` | `POST /copilot/fleets/{id}/stop-rule` | `trade` |
+| `copilot_pause_fleet(fleet_id)` / `copilot_resume_fleet(fleet_id)` | `POST /copilot/fleets/{id}/pause`, `/resume` | `trade` |
 | `list_agents()` | `GET /v1/agents` | `read` |
 | `get_agent(id)` | `GET /v1/agents/{id}` | `read` |
 | `agent_performance(id)` | `GET /v1/agents/{id}/performance` | `read` |
@@ -697,7 +765,18 @@ or approve with a fresh `sign_url`, and `.exit` names any agent whose exit
 failed; `copilot_stop_fleet` on a stopping fleet retries only those. The replay is
 one past window beside holding, not a forecast.
 
-## Changes in 0.17.0
+## Changes in 0.18.0
+
+* **Perpetuals on Hyperliquid.** The markets board, candles, funding history,
+  any 0x wallet's positions and 30 day PnL, the curated long and short book
+  and the sentence parser, with no key; a key's Perpetuals agents: create
+  and preview a typed trade (the 10x agent cap refused before sending, in the
+  server's words), one sentence (`perp_say`), close, tighten the stop, exit,
+  the agent's account, ledger, decision feed and closing card; Perpetuals
+  fleets from one sentence (`copilot_perp_plan`, `copilot_perp_start`),
+  `copilot_tighten_agent_stops`, `copilot_pause_fleet` and
+  `copilot_resume_fleet`. `CopilotFleet.kind` and `CopilotFleet.perp`.
+
 
 * **Collect all.** `claim_agents(ids)` or `claim_agents(all_agents=True)`
   (`POST /v1/agents/batch/claim`) collects every agent's fees through its own

@@ -3,6 +3,41 @@
 Both clients carry the same version from 0.4.0 on. Python lives in
 `python/ponk/_version.py`, Rust in `rust/Cargo.toml`.
 
+## 0.18.0
+
+Both clients and the `ponk-cli` crate. Perpetuals agents on Hyperliquid.
+
+- **Markets, no key.** `perp_markets` (`GET /public/perp/markets`, `q`,
+  `sort`, `limit`), `perp_market`, `perp_candles`, `perp_funding_history`,
+  any 0x wallet's account and positions (`perp_wallet`) and 30 day PnL
+  (`perp_wallet_pnl`), the curated long and short book (`perp_book`) and the
+  one sentence parser (`perp_parse`).
+- **Agents.** `perp_agents`, `perp_agent` (the trade, the account and
+  position, the newest decision, realized net against the high-water mark,
+  any exit), `perp_agent_balances`, `perp_agent_ledger` (orders, fills,
+  funding, fee transfers, withdrawals), `perp_agent_decisions` and
+  `perp_agent_exit_card`.
+- **Typed trades.** `preview_perp_agent` (every gate, creating nothing) and
+  `create_perp_agent`; Rust takes a `perpetuals::PerpTrade`. **No agent runs
+  above 10x**: both clients and the CLI refuse more before sending, with the
+  server's own sentence (`perpetuals.leverage_refusal`,
+  `AGENT_MAX_LEVERAGE`); the server stays authoritative.
+- **Owner actions.** `perp_say` (one sentence: open, close, tighten),
+  `close_perp_agent` and `exit_perp_agent` (both need confirm, refused
+  before sending without it), `tighten_perp_stop` (closer only).
+  `pause_agent` and `resume_agent` work on a Perpetuals agent.
+- **Fleets.** `copilot_perp_plan`, `copilot_perp_get_plan`,
+  `copilot_perp_start`; `copilot_tighten_agent_stops` (every agent's own
+  stop), `copilot_pause_fleet` and `copilot_resume_fleet`.
+  `CopilotFleetSummary.kind`, `CopilotFleet.kind` and `CopilotFleet.perp`
+  (every agent's side, leverage, value, PnL, margin usage, liquidation
+  distance and close state, with the totals).
+- **CLI.** `ponk perpetuals` (`markets`, `agents`, `agent`, `decisions`,
+  `ledger`, `card`, `preview`, `create`, `say`, `close`, `stop`, `exit`,
+  `plan`, `start-plan`, `fleet-stop`, `fleet-pause`, `fleet-resume`).
+- Authorizing a Perpetuals agent and funding its Hyperliquid account are
+  wallet signatures in the app; neither client nor the CLI offers them.
+
 ## 0.17.0
 
 Both clients and the `ponk-cli` crate.

@@ -4074,11 +4074,13 @@ pub struct CopilotStart {
     pub funding_state: Option<serde_json::Value>,
 }
 
-/// One fleet. `status` is `active`, `stopping` or `stopped`.
+/// One fleet. `status` is `active`, `stopping` or `stopped`. `kind` is `lp`,
+/// or `perp` for a fleet of Perpetuals agents: a fleet is one kind, never both.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CopilotFleetSummary {
     pub id: Option<String>,
+    pub kind: Option<String>,
     pub intent_text: Option<String>,
     pub status: Option<String>,
     pub agents: Option<i64>,
@@ -4112,6 +4114,10 @@ pub struct CopilotFleet {
     pub poll_after_ms: Option<i64>,
     pub exit: Option<serde_json::Value>,
     pub funding: Option<serde_json::Value>,
+    /// `lp` or `perp`.
+    pub kind: Option<String>,
+    /// A Perpetuals fleet: every agent and the totals (`rows` is then empty).
+    pub perp: Option<PerpFleet>,
 }
 
 // --------------------------------------------------------------------------
@@ -5253,4 +5259,853 @@ pub struct WalletHistory {
     pub incomplete_buckets: Option<i64>,
     pub positions: Option<i64>,
     pub first_record_at: Option<String>,
+}
+
+// --------------------------------------------------------------------------
+// Perpetuals on Hyperliquid (0.18.0)
+//
+// The market and agent routes answer in camelCase; the copilot's fleet plan,
+// the fleet body and the closing card in snake_case, as the server writes
+// them. Decimal figures the server keeps exactly arrive as strings (read here
+// from a string or a number alike), figures computed from live prices as
+// numbers. `None` is unknown, never zero.
+// --------------------------------------------------------------------------
+
+/// A decimal the server keeps exactly, kept as its string. A number is
+/// accepted too and written as it came.
+fn de_decimal_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match v {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s),
+        Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+        Some(other) => {
+            return Err(serde::de::Error::custom(format!("expected a decimal string, got {other}")))
+        }
+    })
+}
+
+/// One Hyperliquid Perpetuals market.
+///
+/// `id` is `perp:hyperliquid:<COIN>`. Rates are fractions and positive
+/// funding means longs pay shorts; `change24h_pct` is in percent.
+/// `leverage_tiers` is `[from_notional_usd, max_leverage]` pairs where
+/// leverage falls as size grows, empty when one leverage applies to every
+/// size. An agent never runs above 10x whatever `max_leverage` says
+/// ([`crate::perpetuals::AGENT_MAX_LEVERAGE`]).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpMarket {
+    pub id: Option<String>,
+    pub venue: Option<String>,
+    pub coin: Option<String>,
+    pub symbol: Option<String>,
+    pub sz_decimals: Option<i64>,
+    pub price_decimals: Option<i64>,
+    pub max_leverage: Option<i64>,
+    pub leverage_tiers: Vec<(f64, i64)>,
+    pub isolated_only: Option<bool>,
+    pub mark_px: Option<f64>,
+    pub oracle_px: Option<f64>,
+    pub mid_px: Option<f64>,
+    pub prev_day_px: Option<f64>,
+    #[serde(rename = "change24hPct")]
+    pub change24h_pct: Option<f64>,
+    #[serde(rename = "volume24hUsd")]
+    pub volume24h_usd: Option<f64>,
+    pub open_interest: Option<f64>,
+    pub open_interest_usd: Option<f64>,
+    pub funding_rate: Option<f64>,
+    pub funding_interval_hours: Option<f64>,
+    pub next_funding_time: Option<i64>,
+    pub funding_hourly: Option<f64>,
+    pub funding_annualized: Option<f64>,
+    pub premium: Option<f64>,
+    pub trade_url: Option<String>,
+}
+
+/// [`Client::perp_markets`](crate::Client::perp_markets): every listed
+/// market from one server read of Hyperliquid, refreshed every 5 seconds.
+/// `stale` is true when the read served is older than 30 seconds, with
+/// `last_error` saying why. Times are ms since the epoch.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpBoard {
+    pub venue: Option<String>,
+    pub as_of: Option<i64>,
+    pub served_at: Option<i64>,
+    pub stale: Option<bool>,
+    pub last_error: Option<String>,
+    pub funding_interval_hours: Option<i64>,
+    pub next_funding_time: Option<i64>,
+    /// Every listed market, before `q` and `limit`.
+    pub total: Option<i64>,
+    pub markets: Vec<PerpMarket>,
+}
+
+/// [`Client::perp_market`](crate::Client::perp_market): one market from the
+/// same snapshot as the board.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpMarketRead {
+    pub venue: Option<String>,
+    pub as_of: Option<i64>,
+    pub served_at: Option<i64>,
+    pub stale: Option<bool>,
+    pub last_error: Option<String>,
+    pub funding_interval_hours: Option<i64>,
+    pub next_funding_time: Option<i64>,
+    pub market: Option<PerpMarket>,
+}
+
+/// One candle: open time `t` (ms), `o h l c`, volume `v` in the coin and the
+/// trade count `n`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpCandle {
+    pub t: Option<i64>,
+    pub o: Option<f64>,
+    pub h: Option<f64>,
+    pub l: Option<f64>,
+    pub c: Option<f64>,
+    pub v: Option<f64>,
+    pub n: Option<i64>,
+}
+
+/// Price candles, oldest first.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpCandles {
+    pub id: Option<String>,
+    pub coin: Option<String>,
+    pub interval: Option<String>,
+    pub as_of: Option<i64>,
+    pub stale: Option<bool>,
+    pub history_limit: Option<i64>,
+    pub oldest_available: Option<i64>,
+    pub candles: Vec<PerpCandle>,
+}
+
+/// One applied hourly funding: `rate` (a fraction), `annualized` and
+/// `premium`, at `time` (ms).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpFundingRecord {
+    pub time: Option<i64>,
+    pub rate: Option<f64>,
+    pub annualized: Option<f64>,
+    pub premium: Option<f64>,
+}
+
+/// Applied hourly funding, oldest first. A positive rate means longs pay
+/// shorts.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpFundingHistory {
+    pub id: Option<String>,
+    pub coin: Option<String>,
+    pub days: Option<i64>,
+    pub as_of: Option<i64>,
+    pub stale: Option<bool>,
+    pub funding_interval_hours: Option<i64>,
+    pub next_funding_time: Option<i64>,
+    pub current_rate: Option<f64>,
+    pub records: Vec<PerpFundingRecord>,
+}
+
+/// One open position on Hyperliquid, as a 0x wallet holds it. `size` is in
+/// contracts. `liquidation_px` is `None` where Hyperliquid gives none.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpPosition {
+    pub market: Option<String>,
+    pub coin: Option<String>,
+    pub side: Option<String>,
+    pub size: Option<f64>,
+    pub entry_px: Option<f64>,
+    pub mark_px: Option<f64>,
+    pub position_value: Option<f64>,
+    pub unrealized_pnl: Option<f64>,
+    pub return_on_equity: Option<f64>,
+    pub liquidation_px: Option<f64>,
+    pub margin_used: Option<f64>,
+    pub margin_mode: Option<String>,
+    pub leverage: Option<i64>,
+    pub cum_funding_since_open: Option<f64>,
+}
+
+/// A 0x wallet's Hyperliquid account (`accountValue`, `totalNotional`,
+/// `marginUsed`, `withdrawable`, each `None` when not given) and its open
+/// positions, largest first.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpWallet {
+    pub address: Option<String>,
+    pub account: Option<serde_json::Value>,
+    pub positions: Vec<PerpPosition>,
+    pub as_of_ms: Option<i64>,
+    pub stale: Option<bool>,
+}
+
+/// One market of a wallet's 30 days, or (as `summary`) the total. On the
+/// total, `windows` is the net realized over `d1`, `d7` and `d30`, each
+/// `None` when the fills read did not reach that far.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpPnlLine {
+    pub market: Option<String>,
+    pub coin: Option<String>,
+    pub realized_pnl: Option<f64>,
+    pub fees: Option<f64>,
+    pub net: Option<f64>,
+    pub volume_usd: Option<f64>,
+    pub fills: Option<i64>,
+    pub closes: Option<i64>,
+    pub liquidations: Option<i64>,
+    pub unrealized_pnl: Option<f64>,
+    pub windows: Option<serde_json::Value>,
+    pub covered_from_ms: Option<i64>,
+    pub full_window: Option<bool>,
+}
+
+/// A 0x wallet's Perpetuals PnL over 30 days from its own fills. Funding is
+/// NOT in these figures (`excludes`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpWalletPnl {
+    pub address: Option<String>,
+    pub markets: Vec<PerpPnlLine>,
+    pub summary: Option<PerpPnlLine>,
+    pub excludes: Vec<String>,
+    pub window_days: Option<i64>,
+    pub fills_read: Option<i64>,
+    pub read_at: Option<String>,
+}
+
+/// One wallet's open position on the curated book.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpBookRow {
+    /// `address`, `label`, `emoji`, `color`, `source`, `agentSlug`.
+    pub wallet: Option<serde_json::Value>,
+    pub position: Option<PerpPosition>,
+    pub as_of: Option<String>,
+}
+
+/// Who is long and who is short on one market. `long_usd` is `None` when
+/// nobody is long, `short_usd` when nobody is short.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpBookMarket {
+    pub market: Option<String>,
+    pub coin: Option<String>,
+    pub longs: Option<i64>,
+    pub shorts: Option<i64>,
+    pub long_usd: Option<f64>,
+    pub short_usd: Option<f64>,
+}
+
+/// The curated wallets' open Perpetuals positions as each wallet's last read
+/// stored them.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpBook {
+    pub scope: Option<String>,
+    pub market: Option<String>,
+    pub rows: Vec<PerpBookRow>,
+    pub markets: Vec<PerpBookMarket>,
+    pub wallets_in_scope: Option<i64>,
+    pub wallets_read: Option<i64>,
+    pub read_at: Option<String>,
+}
+
+/// What the one Perpetuals sentence parser read. `ok` true carries `parsed`
+/// (`intent` `open`, `close` or `tighten_stop`); `ok` false carries
+/// `sentence`, asking for what is missing.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpParse {
+    pub ok: Option<bool>,
+    pub parsed: Option<serde_json::Value>,
+    pub sentence: Option<String>,
+}
+
+/// The ticket's figures from live prices.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpTicket {
+    pub sentence: Option<String>,
+    pub side: Option<String>,
+    pub coin: Option<String>,
+    pub leverage: Option<i64>,
+    pub margin_usd: Option<f64>,
+    pub notional_usd: Option<f64>,
+    /// Coins.
+    pub size: Option<f64>,
+    pub liquidation_price: Option<f64>,
+    /// The adverse move to liquidation, a fraction.
+    pub liquidation_move: Option<f64>,
+    pub stop_price: Option<f64>,
+    pub stop_fraction: Option<f64>,
+    pub stop_defaulted: Option<bool>,
+    pub loss_at_stop_usd: Option<f64>,
+    pub take_profit_price: Option<f64>,
+    pub high_leverage: Option<bool>,
+}
+
+/// The rates the agent's authorization will state, in basis points. Sent on
+/// the confirm step only; `None` in practice.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpFeeRates {
+    pub activation_bps: Option<i64>,
+    pub performance_bps: Option<i64>,
+    pub exit_bps: Option<i64>,
+}
+
+/// Every create gate on live prices, creating nothing. `ok` true carries
+/// `ticket` and `fees`; `ok` false carries `sentence`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpPreview {
+    pub ok: Option<bool>,
+    pub sentence: Option<String>,
+    pub network: Option<String>,
+    pub practice: Option<bool>,
+    pub name: Option<String>,
+    pub ticket: Option<PerpTicket>,
+    pub fees: Option<PerpFeeRates>,
+    pub needs_confirmation: Option<bool>,
+}
+
+/// The new agent and its ticket; or, from
+/// [`Client::perp_say`](crate::Client::perp_say), a close or a stop
+/// tightening recorded (`agent_id`, `request`, `sentence`).
+///
+/// `ticket` is the ticket's sentence and `ticket_figures` its numbers.
+/// `next` says what happens next: a live agent waits for its owner to
+/// authorize it in the app and fund its Hyperliquid account.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpCreated {
+    pub id: Option<String>,
+    pub network: Option<String>,
+    pub practice: Option<bool>,
+    pub ticket: Option<String>,
+    pub liquidation_price: Option<f64>,
+    pub stop_price: Option<f64>,
+    pub ticket_figures: Option<PerpTicket>,
+    pub fees: Option<PerpFeeRates>,
+    pub next: Option<String>,
+    pub agent_id: Option<String>,
+    pub request: Option<String>,
+    pub sentence: Option<String>,
+}
+
+impl PerpCreated {
+    /// True when an agent was created (a say that was a close or a stop
+    /// tightening created none).
+    pub fn created(&self) -> bool {
+        self.id.is_some()
+    }
+}
+
+/// A close or a stop tightening recorded: `request` is `close` or
+/// `tighten_stop`, carried out by the agent on its next ticks.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpOwnerAnswer {
+    pub agent_id: Option<String>,
+    pub request: Option<String>,
+    pub sentence: Option<String>,
+}
+
+/// The newest decision on a list row.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpDecisionCode {
+    pub code: Option<String>,
+    pub at: Option<String>,
+}
+
+/// One row of [`Client::perp_agents`](crate::Client::perp_agents).
+/// `realized_net_usd` is after Hyperliquid's trading fees and funding, `None`
+/// before anything was booked; `booking_pending` is true while a close is
+/// not booked yet.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpAgentRow {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub status: Option<String>,
+    pub created_at: Option<String>,
+    pub network: Option<String>,
+    pub coin: Option<String>,
+    pub direction: Option<String>,
+    pub leverage: Option<i64>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub capital_usd: Option<String>,
+    pub practice: Option<bool>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub realized_net_usd: Option<String>,
+    pub decision: Option<PerpDecisionCode>,
+    pub exiting: Option<bool>,
+    pub booking_pending: Option<bool>,
+}
+
+/// The agent account's balances, decimal strings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpBalances {
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub perps_value_usd: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub withdrawable_usd: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub spot_usdc: Option<String>,
+    pub account_mode: Option<String>,
+}
+
+/// The agent's open position. `margin_usage` is maintenance margin over
+/// equity (1 is liquidation); `stop_price` is the reduce-only stop resting on
+/// Hyperliquid.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpPositionNow {
+    pub side: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub size: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub entry_price: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub mark_price: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub notional_usd: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub unrealized_pnl_usd: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub margin_usd: Option<String>,
+    pub margin_usage: Option<f64>,
+    pub liquidation_price: Option<f64>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub stop_price: Option<String>,
+}
+
+/// The agent's Hyperliquid account, from its last tick (stale after 150
+/// seconds), else one read. `unavailable` set means the account is not read
+/// and says why; `value_unavailable` set means the balances are not this
+/// read's.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpAccount {
+    pub unavailable: Option<String>,
+    pub network: Option<String>,
+    pub practice: Option<bool>,
+    pub coin: Option<String>,
+    pub read_at_ms: Option<i64>,
+    pub age_ms: Option<i64>,
+    pub stale: Option<bool>,
+    pub booking_pending: Option<bool>,
+    pub value_unavailable: Option<String>,
+    pub balances: Option<PerpBalances>,
+    pub position: Option<PerpPositionNow>,
+}
+
+/// The trade.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpAgentConfig {
+    pub network: Option<String>,
+    pub coin: Option<String>,
+    pub direction: Option<String>,
+    pub leverage: Option<i64>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub capital_usd: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub stop_loss_pct: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub take_profit_pct: Option<String>,
+    pub practice: Option<bool>,
+}
+
+/// One decision: its reason `codes` and `sentences`, and `sent`, the
+/// Hyperliquid action types sent that tick. A day of holding is one row.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpDecision {
+    pub codes: Vec<String>,
+    pub sentences: Vec<String>,
+    pub sent: Vec<String>,
+    pub practice: Option<bool>,
+    pub at: Option<String>,
+}
+
+/// Realized net against the high-water mark, after Hyperliquid's trading
+/// fees and funding.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpRealized {
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub net_usd: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub high_water_usd: Option<String>,
+}
+
+/// An exit in progress.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpExitState {
+    pub status: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub amount_usd: Option<String>,
+}
+
+/// The agent as it stands. `agent_account` is its own Hyperliquid address,
+/// `None` until it is authorized.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpAgent {
+    pub id: Option<String>,
+    pub status: Option<String>,
+    pub agent_account: Option<String>,
+    pub account: Option<PerpAccount>,
+    pub exit_fee_bps: Option<i64>,
+    pub config: Option<PerpAgentConfig>,
+    pub decision: Option<PerpDecision>,
+    pub realized: Option<PerpRealized>,
+    pub exit: Option<PerpExitState>,
+}
+
+/// One order the agent sent, with its `purpose` and `status`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpOrder {
+    pub purpose: Option<String>,
+    pub side: Option<String>,
+    #[serde(rename = "type")]
+    pub order_type: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub size: Option<String>,
+    pub reduce_only: Option<bool>,
+    pub status: Option<String>,
+    pub sentence: Option<String>,
+    pub at: Option<String>,
+}
+
+/// One fill: Hyperliquid's `closed_pnl` and trading `fee`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpFill {
+    pub coin: Option<String>,
+    pub side: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub px: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub sz: Option<String>,
+    pub dir: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub closed_pnl: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub fee: Option<String>,
+    pub liquidation: Option<bool>,
+    pub time_ms: Option<i64>,
+}
+
+/// One hourly funding payment. `usdc` is signed: negative was paid.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpFundingPayment {
+    pub coin: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub usdc: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub funding_rate: Option<String>,
+    pub time_ms: Option<i64>,
+}
+
+/// One Ponk fee transfer: `kind` (`activation`, `performance`, `exit`) and
+/// `recipient` (`treasury`, `referrer`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpFeeLeg {
+    pub kind: Option<String>,
+    pub recipient: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub amount_usd: Option<String>,
+    pub status: Option<String>,
+    pub at: Option<String>,
+}
+
+/// One withdrawal to the address proven in the agent's authorization.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpWithdrawal {
+    pub status: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub amount_usd: Option<String>,
+    #[serde(deserialize_with = "de_decimal_string")]
+    pub exit_fee_usd: Option<String>,
+    pub destination: Option<String>,
+    pub sentence: Option<String>,
+    pub at: Option<String>,
+}
+
+/// Everything the agent did on Hyperliquid, newest first.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpLedger {
+    pub orders: Vec<PerpOrder>,
+    pub fills: Vec<PerpFill>,
+    pub funding: Vec<PerpFundingPayment>,
+    pub fees: Vec<PerpFeeLeg>,
+    pub withdrawals: Vec<PerpWithdrawal>,
+}
+
+/// The closing card, computed on the server. `pnl_usd` is the realized net
+/// after every fee; `None` with `pnl_unavailable` while a transfer is
+/// settling or the latest fills are not booked. `pnl_pct` is percent of
+/// `capital_usd`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpExitCard {
+    pub kind: Option<String>,
+    pub agent_id: Option<String>,
+    pub venue: Option<String>,
+    pub venue_name: Option<String>,
+    pub market: Option<String>,
+    pub coin: Option<String>,
+    pub side: Option<String>,
+    pub leverage: Option<i64>,
+    pub high_leverage: Option<bool>,
+    pub practice: Option<bool>,
+    pub network: Option<String>,
+    pub pnl_usd: Option<f64>,
+    pub pnl_pct: Option<f64>,
+    pub pnl_unavailable: Option<String>,
+    pub note: Option<String>,
+    pub capital_usd: Option<f64>,
+    pub referral_code: Option<String>,
+    pub opened_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub duration_secs: Option<i64>,
+    pub position_open: Option<bool>,
+    pub realized: Option<bool>,
+    pub liquidated: Option<bool>,
+}
+
+/// The exit requested. `destination` is the withdrawal address proven in
+/// the agent's authorization.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PerpExit {
+    pub status: Option<String>,
+    pub destination: Option<String>,
+    pub exit_fee_bps: Option<i64>,
+    pub sentence: Option<String>,
+}
+
+/// One leg of a Perpetuals plan. A leg with `refusal` is not planned; the
+/// rest still start.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpPlanLeg {
+    pub index: Option<i64>,
+    pub name: Option<String>,
+    pub coin: Option<String>,
+    pub direction: Option<String>,
+    pub leverage: Option<i64>,
+    pub leverage_defaulted: Option<bool>,
+    pub capital_usd: Option<String>,
+    pub stop_pct: Option<f64>,
+    pub stop_defaulted: Option<bool>,
+    pub take_profit_pct: Option<f64>,
+    pub ticket: Option<PerpTicket>,
+    pub high_leverage: Option<bool>,
+    pub needs_confirmation: Option<bool>,
+    pub note: Option<String>,
+    pub refusal: Option<String>,
+}
+
+/// The legs that will start: count, capital, notional and what every stop
+/// together loses, before fees and slippage.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpPlanTotals {
+    pub agents: Option<i64>,
+    pub capital_usd: Option<String>,
+    pub notional_usd: Option<f64>,
+    pub loss_at_stops_usd: Option<f64>,
+}
+
+/// A fleet of Perpetuals agents planned from one sentence. `state` is
+/// `ready`, `refused` or `started`; after a start, `fleet_id`, `agents` and
+/// `sign_url`, the fleet page where each agent is authorized and funded.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpFleetPlan {
+    pub id: Option<String>,
+    pub kind: Option<String>,
+    pub state: Option<String>,
+    pub text: Option<String>,
+    pub echo: Option<String>,
+    pub refusal: Option<serde_json::Value>,
+    pub network: Option<String>,
+    pub practice: Option<bool>,
+    pub legs: Vec<PerpPlanLeg>,
+    pub totals: Option<PerpPlanTotals>,
+    pub fleet_stop_pct: Option<f64>,
+    pub fees: Option<serde_json::Value>,
+    /// `app` or `api`: who `fees` was priced for.
+    pub fees_for: Option<String>,
+    pub signatures: Option<String>,
+    pub notes: Vec<String>,
+    pub can_start: Option<bool>,
+    pub fleet_id: Option<String>,
+    pub agents: Vec<serde_json::Value>,
+    pub sign_url: Option<String>,
+}
+
+/// A fleet agent's open position.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpFleetPosition {
+    pub side: Option<String>,
+    pub size: Option<String>,
+    pub entry_price: Option<String>,
+    pub mark_price: Option<String>,
+    pub notional_usd: Option<f64>,
+    pub margin_usd: Option<f64>,
+    pub unrealized_pnl_usd: Option<f64>,
+    pub margin_usage: Option<f64>,
+    pub liquidation_price: Option<f64>,
+    /// How far the mark is from the estimated liquidation, percent.
+    pub liquidation_distance_pct: Option<f64>,
+    pub stop_price: Option<String>,
+}
+
+/// One Perpetuals agent of a fleet. `pnl_usd` is `None` with `pnl_reason`
+/// when it cannot be read. `needs` is `authorize`, `fund` or `nothing`;
+/// `close` is `{state, sentence}`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpFleetRow {
+    pub agent_id: Option<String>,
+    pub name: Option<String>,
+    pub status: Option<String>,
+    pub coin: Option<String>,
+    pub direction: Option<String>,
+    pub leverage: Option<i64>,
+    pub capital_usd: Option<String>,
+    pub stop_pct: Option<String>,
+    pub take_profit_pct: Option<String>,
+    pub practice: Option<bool>,
+    pub network: Option<String>,
+    pub high_leverage: Option<bool>,
+    pub account_unavailable: Option<String>,
+    pub read_at_ms: Option<i64>,
+    pub stale: Option<bool>,
+    pub funding_in_flight: Option<bool>,
+    pub value_usd: Option<f64>,
+    pub realized_net_usd: Option<f64>,
+    pub ponk_fees_usd: Option<f64>,
+    pub ponk_fees_pending_usd: Option<f64>,
+    pub has_account: Option<bool>,
+    pub under_withdrawal_fee: Option<bool>,
+    pub unrealized_pnl_usd: Option<f64>,
+    pub pnl_usd: Option<f64>,
+    pub pnl_reason: Option<String>,
+    pub booking_pending: Option<bool>,
+    pub position: Option<PerpFleetPosition>,
+    pub mandate: Option<String>,
+    pub funded: Option<bool>,
+    pub needs: Option<String>,
+    pub close: Option<serde_json::Value>,
+    pub decision: Option<serde_json::Value>,
+}
+
+/// The fleet's totals. A total over part of the fleet is never shown: the
+/// figure is `None` and `reason` says why.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpFleetTotals {
+    pub value_usd: Option<f64>,
+    pub pnl_usd: Option<f64>,
+    pub realized_net_usd: Option<f64>,
+    pub unrealized_pnl_usd: Option<f64>,
+    pub notional_usd: Option<f64>,
+    pub margin_usd: Option<f64>,
+    pub margin_usage: Option<f64>,
+    pub max_margin_usage: Option<f64>,
+    pub max_margin_usage_agent: Option<String>,
+    pub nearest_liquidation_pct: Option<f64>,
+    pub nearest_liquidation_agent: Option<String>,
+    pub open_positions: Option<i64>,
+    pub reason: Option<String>,
+}
+
+/// What the fleet still needs from its owner.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpFleetFunding {
+    pub to_authorize: Option<i64>,
+    pub to_fund: Option<i64>,
+    pub sign_url: Option<String>,
+    pub sentence: Option<String>,
+}
+
+/// [`CopilotFleet::perp`]: every Perpetuals agent of the fleet and the totals.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpFleet {
+    pub network: Option<String>,
+    pub practice: Option<bool>,
+    pub rows: Vec<PerpFleetRow>,
+    pub totals: Option<PerpFleetTotals>,
+    pub funding: Option<PerpFleetFunding>,
+    pub exit_fee_bps: Option<i64>,
+}
+
+/// What one agent said when the fleet moved every agent's own stop.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PerpStopAnswer {
+    pub agent_id: Option<String>,
+    pub name: Option<String>,
+    pub ok: Option<bool>,
+    pub sentence: Option<String>,
+}
+
+/// [`Client::copilot_tighten_agent_stops`](crate::Client::copilot_tighten_agent_stops):
+/// the fleet, and what each agent said.
+///
+/// The server sends each agent's answer under the key `agents`, the same key
+/// that carries the fleet's agent count. This type is decoded from the
+/// answer's JSON object, where the list (written last) is the one kept.
+#[derive(Debug, Clone, Default)]
+pub struct PerpFleetStop {
+    pub fleet: CopilotFleetSummary,
+    pub answers: Vec<PerpStopAnswer>,
+}
+
+impl PerpFleetStop {
+    /// Read the answer from its decoded JSON.
+    pub fn from_value(mut value: serde_json::Value) -> Result<Self, serde_json::Error> {
+        let answers = match value.as_object_mut().and_then(|m| m.remove("agents")) {
+            Some(serde_json::Value::Array(items)) => items
+                .into_iter()
+                .map(serde_json::from_value)
+                .collect::<Result<Vec<PerpStopAnswer>, _>>()?,
+            Some(other) => {
+                if let Some(m) = value.as_object_mut() {
+                    m.insert("agents".into(), other);
+                }
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        Ok(Self { fleet: serde_json::from_value(value)?, answers })
+    }
 }

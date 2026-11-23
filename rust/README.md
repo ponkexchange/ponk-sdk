@@ -228,6 +228,45 @@ of what it sends you once it has opened a position (0.5% for a holder).
 and `evm_open_cost` state the rates for you; `withdraw` and `exit_agent` list
 what the exit fee took in `exit_fees`.
 
+## Perpetuals on Hyperliquid
+
+A Perpetuals agent is one typed trade, built with `ponk::perpetuals::PerpTrade`
+(money and percents as strings, so they stay exact). The server builds the
+ticket from live prices and refuses one its gates refuse with a 422 sentence.
+
+```rust,no_run
+use ponk::perpetuals::PerpTrade;
+
+#[tokio::main]
+async fn main() -> Result<(), ponk::Error> {
+    let ponk = ponk::Client::new(ponk::DEFAULT_BASE_URL, std::env::var("PONK_API_KEY").unwrap())?;
+
+    // No key needed for the board.
+    let board = ponk.perp_markets(None, Some("volume"), Some(10)).await?;
+    println!("{} markets", board.total.unwrap_or_default());
+
+    // Above 10x is Error::InvalidArgument here, in the server's words.
+    let trade = PerpTrade::new("ETH", "short", 2, "300", "4").take_profit_pct("8");
+    let preview = ponk.preview_perp_agent(&trade).await?;
+    if preview.ok != Some(true) {
+        println!("{}", preview.sentence.unwrap_or_default());
+        return Ok(());
+    }
+    let agent = ponk.create_perp_agent(&trade).await?;
+    // Authorize and fund it in the app with your wallet; then:
+    let id = agent.id.unwrap_or_default();
+    let now = ponk.perp_agent(&id).await?;
+    println!("{:?}", now.decision.map(|d| d.sentences));
+    ponk.tighten_perp_stop(&id, "2").await?;
+    Ok(())
+}
+```
+
+`pause_agent` and `resume_agent` work on a Perpetuals agent: paused, it opens
+nothing new and its resting stop and Liquidation Guard keep running.
+Authorizing the agent and funding its Hyperliquid account are wallet
+signatures in the app and have no method here.
+
 ## Chains on the boards and trackers
 
 The agents leaderboard, Calls, the X Tracker and the Wallet Tracker cover
@@ -318,6 +357,23 @@ key can move your funds home. It cannot move them anywhere else.
 | `wallets_status()` | `GET /public/wallets/status` | nothing |
 | `wallet_activity(address, &WalletFeedQuery)` | `GET /public/wallets/{address}/activity` | nothing |
 | `whoami()` | `GET /v1/me` | `read` |
+| `perp_markets(q, sort, limit)` | `GET /public/perp/markets` | nothing |
+| `perp_market(market)` | `GET /public/perp/markets/{id}` | nothing |
+| `perp_candles(market, interval, bars)` | `GET /public/perp/markets/{id}/candles` | nothing |
+| `perp_funding_history(market, days)` | `GET /public/perp/markets/{id}/funding` | nothing |
+| `perp_wallet(address)` / `perp_wallet_pnl(address)` | `GET /public/wallets/{address}/perp`, `/perp/pnl` | nothing |
+| `perp_book(market)` | `GET /public/wallets/perp/book` | nothing |
+| `perp_parse(text)` | `POST /public/perp/parse` | nothing |
+| `perp_agents()` / `perp_agent(id)` | `GET /v1/perp-agents`, `/{id}` | `read` |
+| `perp_agent_balances(id)` / `perp_agent_ledger(id)` / `perp_agent_decisions(id)` / `perp_agent_exit_card(id)` | `GET /v1/perp-agents/{id}/balances`, `/ledger`, `/decisions`, `/exit-card` | `read` |
+| `preview_perp_agent(&PerpTrade)` | `POST /v1/perp-agents/preview` | `read` |
+| `create_perp_agent(&PerpTrade)` | `POST /v1/perp-agents` | `trade` |
+| `perp_say(text, confirm)` | `POST /v1/perp-agents/say` | `trade` |
+| `close_perp_agent(id, true)` / `tighten_perp_stop(id, pct)` / `exit_perp_agent(id, true)` | `POST /v1/perp-agents/{id}/close`, `/stop`, `/exit` | `trade` |
+| `copilot_perp_plan(text, practice)` / `copilot_perp_get_plan(id)` | `POST /copilot/perp/plans`, `GET /copilot/perp/plans/{id}` | nothing (a key to start it later) |
+| `copilot_perp_start(id)` | `POST /copilot/perp/plans/{id}/start` | `trade` |
+| `copilot_tighten_agent_stops(fleet_id, pct)` | `POST /copilot/fleets/{id}/stop-rule` | `trade` |
+| `copilot_pause_fleet(fleet_id)` / `copilot_resume_fleet(fleet_id)` | `POST /copilot/fleets/{id}/pause`, `/resume` | `trade` |
 | `list_agents()` | `GET /v1/agents` | `read` |
 | `get_agent(id)` | `GET /v1/agents/{id}` | `read` |
 | `agent_performance(id)` | `GET /v1/agents/{id}/performance` | `read` |
