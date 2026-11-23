@@ -327,7 +327,7 @@ stop-room warning, because it reads the live price, so the preview is the
 authority: its `needs_confirmation` and `confirmation_warnings` say whether
 the name is needed and what it acknowledges. A stop at or past the
 liquidation price is refused, with a sentence naming a stop that would work.
-The stop the user chose is never moved for them: Liquidation Guard judges it against the real liquidation price, places a stop of its own only when the user's would fire at or past liquidation (or none rests), and if it must re-place one it moves its own. With two stops resting, the one that fires first is the position's stop.
+The user's stop is never loosened and Liquidation Guard never moves it. Once the trade is in profit the agent moves it to break-even and then trails it, only ever toward profit. Liquidation Guard judges the user's stop against the real liquidation price, places a stop of its own only when the user's would fire at or past liquidation (or none rests), and if it must re-place one it moves its own. With two stops resting, the one that fires first is the position's stop.
 
 Preview first is how a client shows the user the warnings: never send a
 typed name the user has not been shown the preview's `confirmation_warnings`

@@ -279,8 +279,10 @@ reads its `needs_confirmation`, and `preview.confirmation_warnings` is what
 to show. `perpetuals::needs_confirmation(n)` with a leverage answers only the
 above-10x half. Without the name the server answers 422 with the warnings
 and "To go ahead, type the agent's name (NAME) to confirm." A stop at or past
-the liquidation price is refused, naming a stop that would work. The stop the
-user chose is never moved for them: Liquidation Guard judges it against the
+the liquidation price is refused, naming a stop that would work. The user's
+stop is never loosened and Liquidation Guard never moves it. Once the trade is
+in profit the agent moves it to break-even and then trails it, only ever
+toward profit. Liquidation Guard judges the user's stop against the
 real liquidation price, places a stop of its own only when the user's would
 fire at or past liquidation (or none rests), and if it must re-place one it
 moves its own. With two stops resting, the one that fires first is the

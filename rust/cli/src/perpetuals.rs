@@ -160,7 +160,7 @@ pub async fn run(cli: &Cli, cmd: &PerpCmd) -> Result<()> {
         PerpCmd::Agents => agents(cli).await,
         PerpCmd::Agent { id } => agent(cli, id).await,
         PerpCmd::Decisions { id } => decisions(cli, id).await,
-        PerpCmd::Ledger { id } => raw(cli, &format!("/v1/perp-agents/{id}/ledger")).await,
+        PerpCmd::Ledger { id } => raw(cli, &agent_path(id, "/ledger")).await,
         PerpCmd::Card { id } => card(cli, id).await,
         PerpCmd::Preview(args) => preview(cli, args).await,
         PerpCmd::Create(args) => create(cli, args).await,
@@ -290,7 +290,7 @@ async fn agents(cli: &Cli) -> Result<()> {
 async fn agent(cli: &Cli, id: &str) -> Result<()> {
     let client = client(cli, true)?;
     if cli.json {
-        return print_json(&client.get_json(&format!("/v1/perp-agents/{id}")).await?);
+        return print_json(&client.get_json(&agent_path(id, "")).await?);
     }
     let a = client.perp_agent(id).await?;
     let line = |k: &str, v: String| println!("{k:<14} {v}");
@@ -362,7 +362,7 @@ async fn agent(cli: &Cli, id: &str) -> Result<()> {
 async fn decisions(cli: &Cli, id: &str) -> Result<()> {
     let client = client(cli, true)?;
     if cli.json {
-        return print_json(&client.get_json(&format!("/v1/perp-agents/{id}/decisions")).await?);
+        return print_json(&client.get_json(&agent_path(id, "/decisions")).await?);
     }
     let rows = client.perp_agent_decisions(id).await?;
     if rows.is_empty() {
@@ -377,7 +377,7 @@ async fn decisions(cli: &Cli, id: &str) -> Result<()> {
 async fn card(cli: &Cli, id: &str) -> Result<()> {
     let client = client(cli, true)?;
     if cli.json {
-        return print_json(&client.get_json(&format!("/v1/perp-agents/{id}/exit-card")).await?);
+        return print_json(&client.get_json(&agent_path(id, "/exit-card")).await?);
     }
     let c = client.perp_agent_exit_card(id).await?;
     println!("{} {} {}x", dash(c.side.as_deref()), dash(c.market.as_deref()), opt(c.leverage));
@@ -573,7 +573,7 @@ async fn close(cli: &Cli, id: &str, confirm: bool) -> Result<()> {
     let client = client(cli, true)?;
     if cli.json {
         let body = serde_json::json!({ "confirm": true });
-        return print_json(&client.post_json(&format!("/v1/perp-agents/{id}/close"), Some(&body), None).await?);
+        return print_json(&client.post_json(&agent_path(id, "/close"), Some(&body), None).await?);
     }
     println!("{}", dash(client.close_perp_agent(id, true).await?.sentence.as_deref()));
     Ok(())
@@ -583,7 +583,7 @@ async fn stop(cli: &Cli, id: &str, pct: &str) -> Result<()> {
     let client = client(cli, true)?;
     if cli.json {
         let body = serde_json::json!({ "stopPct": pct });
-        return print_json(&client.post_json(&format!("/v1/perp-agents/{id}/stop"), Some(&body), None).await?);
+        return print_json(&client.post_json(&agent_path(id, "/stop"), Some(&body), None).await?);
     }
     println!("{}", dash(client.tighten_perp_stop(id, pct).await?.sentence.as_deref()));
     Ok(())
@@ -617,7 +617,7 @@ async fn acknowledge(cli: &Cli, id: &str, confirm_name: Option<&str>) -> Result<
             Some(n) => serde_json::json!({ "confirmationText": n }),
             None => serde_json::json!({}),
         };
-        return print_json(&client.post_json(&format!("/v1/perp-agents/{id}/acknowledge"), Some(&body), None).await?);
+        return print_json(&client.post_json(&agent_path(id, "/acknowledge"), Some(&body), None).await?);
     }
     let a = client.perp_acknowledge(id, confirm_name).await?;
     for l in acknowledge_lines(&a, id, confirm_name.is_some()) {
@@ -638,7 +638,7 @@ async fn exit(cli: &Cli, id: &str, confirm: bool) -> Result<()> {
         let body = serde_json::json!({ "confirm": true });
         return print_json(
             &client
-                .post_json(&format!("/v1/perp-agents/{id}/exit"), Some(&body), Some(client.fund_timeout()))
+                .post_json(&agent_path(id, "/exit"), Some(&body), Some(client.fund_timeout()))
                 .await?,
         );
     }
@@ -761,7 +761,7 @@ async fn start_plan(cli: &Cli, id: &str, confirm_names: &[String]) -> Result<()>
         });
         return print_json(
             &client
-                .post_json(&format!("/copilot/perp/plans/{id}/start"), body.as_ref(), Some(client.fund_timeout()))
+                .post_json(&format!("/copilot/perp/plans/{}/start", crate::urlencode(id)), body.as_ref(), Some(client.fund_timeout()))
                 .await?,
         );
     }
@@ -773,7 +773,7 @@ async fn fleet_stop(cli: &Cli, fleet_id: &str, pct: f64) -> Result<()> {
     let client = client(cli, true)?;
     if cli.json {
         let body = serde_json::json!({ "stop_pct": pct });
-        return print_json(&client.post_json(&format!("/copilot/fleets/{fleet_id}/stop-rule"), Some(&body), None).await?);
+        return print_json(&client.post_json(&format!("/copilot/fleets/{}/stop-rule", crate::urlencode(fleet_id)), Some(&body), None).await?);
     }
     let s = client.copilot_tighten_agent_stops(fleet_id, pct).await?;
     for a in &s.answers {
@@ -786,7 +786,7 @@ async fn fleet_batch(cli: &Cli, fleet_id: &str, pause: bool) -> Result<()> {
     let client = client(cli, true)?;
     let action = if pause { "pause" } else { "resume" };
     if cli.json {
-        return print_json(&client.post_json(&format!("/copilot/fleets/{fleet_id}/{action}"), None, None).await?);
+        return print_json(&client.post_json(&format!("/copilot/fleets/{}/{action}", crate::urlencode(fleet_id)), None, None).await?);
     }
     let b = if pause { client.copilot_pause_fleet(fleet_id).await? } else { client.copilot_resume_fleet(fleet_id).await? };
     println!("{action}: {} done, {} failed of {}", b.done, b.failed, b.total);
@@ -796,9 +796,23 @@ async fn fleet_batch(cli: &Cli, fleet_id: &str, pause: bool) -> Result<()> {
     Ok(())
 }
 
+/// `/v1/perp-agents/<id><tail>`, the id percent-encoded as one path
+/// segment, so an id with `/`, `?` or `#` in it can never reach another
+/// route than the one the command names.
+fn agent_path(id: &str, tail: &str) -> String {
+    format!("/v1/perp-agents/{}{tail}", crate::urlencode(id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_id_is_one_encoded_path_segment() {
+        assert_eq!(agent_path("6f1c2d3e-0000-4000-8000-000000000001", "/acknowledge"), "/v1/perp-agents/6f1c2d3e-0000-4000-8000-000000000001/acknowledge");
+        assert_eq!(agent_path("../me/x?y#z", "/acknowledge"), "/v1/perp-agents/..%2Fme%2Fx%3Fy%23z/acknowledge");
+        assert_eq!(agent_path("a b", ""), "/v1/perp-agents/a%20b");
+    }
 
     const STOP_ROOM: &str = "Liquidation is about 8.9% away (7.1% with the safety margin Liquidation Guard keeps), less than twice your 4% stop.";
 

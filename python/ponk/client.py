@@ -89,9 +89,11 @@ both. The preview is the authority on whether it is needed
 (`needs_confirmation`, `confirmation_warnings`), and the preview and the new
 agent carry everything the confirm step warns about in `warnings`. A stop
 at or past the liquidation price is refused, naming a stop that would work;
-the stop the user chose is never moved for them (Liquidation Guard places a
-stop of its own only when the user's would fire at or past liquidation, and
-moves only its own). An entry held by `perp_entry_needs_acknowledgement` is
+the user's stop is never loosened and Liquidation Guard never moves it
+(the guard places a stop of its own only when the user's would fire at or
+past liquidation, and moves only its own); once the trade is in profit the
+agent moves the stop to break-even and then trails it, only ever toward
+profit. An entry held by `perp_entry_needs_acknowledgement` is
 acknowledged with `perp_acknowledge`, the name typed by the user. A key
 creates the agent and can preview, close, tighten the stop, pause, resume and
 exit it, but the agent trades nothing until its owner authorizes it in the
@@ -2879,10 +2881,12 @@ class PonkClient:
         send a `confirmation_text` the user typed without having shown them
         that preview's `confirmation_warnings`. The name acknowledges only
         the warnings this ticket raises (`config.acknowledged`); one raised
-        later is acknowledged with `perp_acknowledge`. The stop the user
-        chose is never moved for them: Liquidation Guard adds a stop of its
-        own only when that stop would fire at or past liquidation, and moves
-        only its own. `warnings` says what the
+        later is acknowledged with `perp_acknowledge`. The user's stop is
+        never loosened and Liquidation Guard never moves it: the guard adds
+        a stop of its own only when that stop would fire at or past
+        liquidation, and moves only its own. Once the trade is in profit the
+        agent moves the stop to break-even and then trails it, only ever
+        toward profit. `warnings` says what the
         agent opens with a warning about. Needs a `trade` key; an
         agent created with a key is on the API rates, which `fees` states.
 

@@ -3142,9 +3142,11 @@ impl Client {
     /// warnings: never set a typed name the user has not been shown the
     /// preview's `confirmation_warnings` for. The name acknowledges only the
     /// warnings this ticket raises; one raised later is acknowledged with
-    /// [`Client::perp_acknowledge`]. The stop the user chose is never moved
-    /// for them: Liquidation Guard places a stop of its own only when the
-    /// user's would fire at or past liquidation, and moves only its own.
+    /// [`Client::perp_acknowledge`]. The user's stop is never loosened and
+    /// Liquidation Guard never moves it: the guard places a stop of its own
+    /// only when the user's would fire at or past liquidation, and moves only
+    /// its own. Once the trade is in profit the agent moves the stop to
+    /// break-even and then trails it, only ever toward profit.
     /// `warnings` says
     /// what the agent opens with a warning about. Needs a `trade` key;
     /// an agent created with a key is on the API rates, which `fees` states.

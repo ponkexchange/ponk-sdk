@@ -15,10 +15,12 @@ stop's distance, where a fast move can pass liquidation before the stop
 fills). One acknowledgement covers both: the agent's name, typed by the
 user after reading the warnings, sent as `confirmation_text`. A stop at or
 past the liquidation price (with the safety margin Liquidation Guard keeps)
-is still refused, with a sentence naming a stop that would work. The stop
-the user chose is never moved for them: Liquidation Guard places a stop of
-its own only when the user's would fire at or past the real liquidation
-price (or none rests), and moves only its own.
+is still refused, with a sentence naming a stop that would work. The
+user's stop is never loosened and Liquidation Guard never moves it. Once
+the trade is in profit the agent moves it to break-even and then trails
+it, only ever toward profit. Liquidation Guard places a stop of its own
+only when the user's would fire at or past the real liquidation price (or
+none rests), and moves only its own.
 
 Only the server knows the stop-room warning, because it reads the live
 price, so the preview is the authority: `needs_confirmation(preview)` reads

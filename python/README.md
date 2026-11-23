@@ -361,7 +361,7 @@ trimming, except its market ticker, which compares in any case (`btc`
 matches the default name `BTC`; `KPEPE Long 20x` matches `kPEPE Long 20x`).
 A stop at or past the liquidation price (with the safety margin Liquidation
 Guard keeps) is refused, with a sentence naming a stop that would work.
-The stop the user chose is never moved for them: Liquidation Guard judges it against the real liquidation price, places a stop of its own only when the user's would fire at or past liquidation (or none rests), and if it must re-place one it moves its own. With two stops resting, the one that fires first is the position's stop. The ticket (`p.ticket`,
+The user's stop is never loosened and Liquidation Guard never moves it. Once the trade is in profit the agent moves it to break-even and then trails it, only ever toward profit. Liquidation Guard judges the user's stop against the real liquidation price, places a stop of its own only when the user's would fire at or past liquidation (or none rests), and if it must re-place one it moves its own. With two stops resting, the one that fires first is the position's stop. The ticket (`p.ticket`,
 `agent.ticket_figures`) carries `needs_confirmation`, `stop_room_warning`
 and `atr_warning`, and `perp_agent(id).config.warnings` is what the agent
 was warned about when it was created.

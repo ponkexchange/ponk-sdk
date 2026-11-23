@@ -69,8 +69,10 @@ Both clients and the `ponk-cli` crate. Perpetuals agents on Hyperliquid.
   twice the stop's distance is no longer a refusal: it is the stop-room
   warning, which, like leverage above 10x, needs the agent's name typed by
   the user. ONE typed name (`confirmation_text`, `--confirm-name`)
-  acknowledges every warning that needs it. Stops are never adjusted
-  automatically. The server compares the name exactly after trimming,
+  acknowledges every warning that needs it. The user's stop is never
+  loosened and Liquidation Guard never moves it; once the trade is in
+  profit the agent moves it to break-even and then trails it, only ever
+  toward profit. The server compares the name exactly after trimming,
   except the market ticker, in any case (`btc` matches `BTC`).
   - Only the server knows the stop-room warning, so the preview is the
     authority. `PerpPreview.needs_confirmation` is true above 10x OR with the

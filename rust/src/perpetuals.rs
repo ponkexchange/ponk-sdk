@@ -16,8 +16,10 @@
 //! user after reading the warnings, goes in [`PerpTrade::confirmation_text`].
 //! A stop at or past the liquidation price (with the safety margin
 //! Liquidation Guard keeps) is still refused, with a sentence naming a stop
-//! that would work. The stop the user chose is never moved for them:
-//! Liquidation Guard places a stop of its own only when the user's would fire
+//! that would work. The user's stop is never loosened and Liquidation Guard
+//! never moves it. Once the trade is in profit the agent moves it to
+//! break-even and then trails it, only ever toward profit. Liquidation Guard
+//! places a stop of its own only when the user's would fire
 //! at or past the real liquidation price (or none rests), and moves only its
 //! own.
 //!
