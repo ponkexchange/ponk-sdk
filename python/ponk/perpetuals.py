@@ -19,8 +19,9 @@ is still refused, with a sentence naming a stop that would work. The
 user's stop is never loosened and Liquidation Guard never moves it. Once
 the trade is in profit the agent moves it to break-even and then trails
 it, only ever toward profit. Liquidation Guard places a stop of its own
-only when the user's would fire at or past the real liquidation price (or
-none rests), and moves only its own.
+only when the user's would fire too close to the real liquidation price or
+past it (or none rests), keeps one, moves only its own, and cancels it once
+the user's stop fires first with room again.
 
 Only the server knows the stop-room warning, because it reads the live
 price, so the preview is the authority: `needs_confirmation(preview)` reads

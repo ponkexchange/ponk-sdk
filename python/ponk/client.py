@@ -90,8 +90,9 @@ both. The preview is the authority on whether it is needed
 agent carry everything the confirm step warns about in `warnings`. A stop
 at or past the liquidation price is refused, naming a stop that would work;
 the user's stop is never loosened and Liquidation Guard never moves it
-(the guard places a stop of its own only when the user's would fire at or
-past liquidation, and moves only its own); once the trade is in profit the
+(the guard places a stop of its own only when the user's would fire too
+close to liquidation or past it, keeps one, moves only its own, and cancels
+it once the user's stop fires first with room again); once the trade is in profit the
 agent moves the stop to break-even and then trails it, only ever toward
 profit. An entry held by `perp_entry_needs_acknowledgement` is
 acknowledged with `perp_acknowledge`, the name typed by the user. A key
@@ -2883,8 +2884,9 @@ class PonkClient:
         the warnings this ticket raises (`config.acknowledged`); one raised
         later is acknowledged with `perp_acknowledge`. The user's stop is
         never loosened and Liquidation Guard never moves it: the guard adds
-        a stop of its own only when that stop would fire at or past
-        liquidation, and moves only its own. Once the trade is in profit the
+        a stop of its own only when that stop would fire too close to
+        liquidation or past it, keeps one, moves only its own, and cancels it
+        once the user's stop fires first with room again. Once the trade is in profit the
         agent moves the stop to break-even and then trails it, only ever
         toward profit. `warnings` says what the
         agent opens with a warning about. Needs a `trade` key; an

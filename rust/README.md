@@ -284,8 +284,9 @@ stop is never loosened and Liquidation Guard never moves it. Once the trade is
 in profit the agent moves it to break-even and then trails it, only ever
 toward profit. Liquidation Guard judges the user's stop against the
 real liquidation price, places a stop of its own only when the user's would
-fire at or past liquidation (or none rests), and if it must re-place one it
-moves its own. With two stops resting, the one that fires first is the
+fire too close to liquidation or past it (or none rests), keeps one, moves
+only its own if it must re-place it, and cancels it once the user's stop
+fires first with room again. With two stops resting, the one that fires first is the
 position's stop. Preview first is how a client shows the user the warnings:
 never set a typed name the user has not been shown the preview's
 `confirmation_warnings` for.

@@ -3144,8 +3144,9 @@ impl Client {
     /// warnings this ticket raises; one raised later is acknowledged with
     /// [`Client::perp_acknowledge`]. The user's stop is never loosened and
     /// Liquidation Guard never moves it: the guard places a stop of its own
-    /// only when the user's would fire at or past liquidation, and moves only
-    /// its own. Once the trade is in profit the agent moves the stop to
+    /// only when the user's would fire too close to liquidation or past it,
+    /// keeps one, moves only its own, and cancels it once the user's stop
+    /// fires first with room again. Once the trade is in profit the agent moves the stop to
     /// break-even and then trails it, only ever toward profit.
     /// `warnings` says
     /// what the agent opens with a warning about. Needs a `trade` key;
